@@ -1,0 +1,10 @@
+[package]
+name = "migrant"
+version = "0.1.0"
+authors = ["James Kominick <james.kominick@gmail.com>"]
+
+[dependencies]
+clap = "2.19.*"
+rpassword = "0.3"
+rustc-serialize = "0.3"
+
