@@ -1,5 +1,7 @@
 extern crate rpassword;
 extern crate rustc_serialize;
+extern crate chrono;
+extern crate walkdir;
 
 use std::io::{self, Write, Read};
 use std::path::PathBuf;
@@ -7,9 +9,11 @@ use std::fs;
 
 use rpassword::read_password;
 use rustc_serialize::json;
+use walkdir::WalkDir;
 
 
 static META_FILE: &'static str = ".migrant";
+static DT_FORMAT: &'static str = "%Y%m%d-%H%M%S";
 
 
 #[derive(RustcEncodable, RustcDecodable, Debug)]
@@ -29,6 +33,23 @@ impl Settings {
         }
     }
 }
+
+
+struct Migration {
+    stamp: chrono::DateTime<chrono::UTC>,
+    up: PathBuf,
+    down: PathBuf,
+}
+impl Migration {
+    fn new(up: &str, down: &str, stamp: chrono::DateTime<chrono::UTC>) -> Migration {
+        Migration {
+            stamp: stamp,
+            up: PathBuf::from(up),
+            down: PathBuf::from(down),
+        }
+    }
+}
+
 
 pub fn enter() {
     let stdin = io::stdin();
@@ -69,10 +90,37 @@ fn search_for_meta(dir: &PathBuf, parents: u32) -> Option<PathBuf> {
         } else {
             return None;
         }
-        count += 1;
         if count == parents { break; }
+        count += 1;
     }
     None
+}
+
+
+/// Search for available migrations
+fn search_for_migrations(dir: &str) -> Vec<Migration> {
+    // collect .ups & .downs
+    let root = PathBuf::from(dir);
+    let mut ups = vec![];
+    let mut downs = vec![];
+    for entry in WalkDir::new(root).into_iter() {
+        let e = entry.unwrap();
+        let path = e.path();
+        if let Some(ext) = path.extension() {
+            if ext.is_empty() || ext != "sql" { continue; }
+            println!("{:?}", ext);
+            let filename = path.file_name().unwrap();
+            if filename.to_str().unwrap().split(".").nth(1).unwrap() == "up" {
+                ups.push(PathBuf::from(path));
+            } else {
+                downs.push(PathBuf::from(path));
+            }
+        }
+    }
+    println!("ups: {:?}", ups);
+    println!("downs: {:?}", downs);
+    // pair the ups & downs
+    vec![Migration::new("", "", chrono::UTC::now())]
 }
 
 
@@ -117,11 +165,16 @@ pub fn init(dir: &PathBuf) {
 
 /// List the currently applied and available migrations under settings.migration_folder
 pub fn list(dir: &PathBuf) {
-    if let Some(meta) = search_for_meta(dir, 2) {
-        let mut file = fs::File::open(meta).unwrap();
-        let mut json = String::new();
-        file.read_to_string(&mut json).unwrap();
-        let settings = json::decode::<Settings>(&json);
-        println!("settings: {:?}", settings);
-    }
+    let meta = match search_for_meta(dir, 2) {
+        Some(m) => m,
+        _ => {
+            println!("No `.migrant` file found. Try migrant --init");
+            return;
+        }
+    };
+    let mut file = fs::File::open(meta).unwrap();
+    let mut json = String::new();
+    file.read_to_string(&mut json).unwrap();
+    let settings = json::decode::<Settings>(&json).unwrap();
+    let available = search_for_migrations(&settings.migration_folder);
 }

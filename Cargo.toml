@@ -7,4 +7,6 @@ authors = ["James Kominick <james.kominick@gmail.com>"]
 clap = "2.19.*"
 rpassword = "0.3"
 rustc-serialize = "0.3"
+chrono = "0.2"
+walkdir = "1"
 
