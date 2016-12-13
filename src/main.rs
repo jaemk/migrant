@@ -47,8 +47,8 @@ fn main() {
         migrant::list(&dir);
     }
 
-    if let Some(new_tag) = matches.value_of("new") {
-        println!("new tag! {}", new_tag);
+    if let Some(tag) = matches.value_of("new") {
+        migrant::new(&dir, tag);
     }
 }
 
