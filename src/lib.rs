@@ -4,6 +4,7 @@ extern crate chrono;
 extern crate walkdir;
 
 use std::collections::HashMap;
+use std::process::Command;
 use std::io::{self, Write, Read};
 use std::path::PathBuf;
 use std::fs;
@@ -11,6 +12,7 @@ use std::fs;
 use rpassword::read_password;
 use rustc_serialize::json;
 use walkdir::WalkDir;
+use chrono::TimeZone;
 
 
 static META_FILE: &'static str = ".migrant";
@@ -46,7 +48,7 @@ macro_rules! try_base_dir {
     }
 }
 
-#[derive(RustcEncodable, RustcDecodable, Debug)]
+#[derive(RustcEncodable, RustcDecodable, Debug, Clone)]
 struct Settings {
     username: String,
     password: String,
@@ -64,18 +66,18 @@ impl Settings {
     }
 }
 
-
+#[derive(Debug)]
 struct Migration {
     stamp: chrono::DateTime<chrono::UTC>,
     up: PathBuf,
     down: PathBuf,
 }
 impl Migration {
-    fn new(up: &str, down: &str, stamp: chrono::DateTime<chrono::UTC>) -> Migration {
+    fn new(up: PathBuf, down: PathBuf, stamp: chrono::DateTime<chrono::UTC>) -> Migration {
         Migration {
             stamp: stamp,
-            up: PathBuf::from(up),
-            down: PathBuf::from(down),
+            up: up,
+            down: down,
         }
     }
 }
@@ -105,7 +107,7 @@ fn prompt(msg: &str, secure: bool) -> String {
 
 /// Search for a .migrant file in the current directory,
 /// looking up the parent path until it finds one.
-fn search_for_meta(dir: &PathBuf, parents: u32) -> Option<PathBuf> {
+pub fn search_for_meta(dir: &PathBuf, parents: u32) -> Option<PathBuf> {
     let mut dir = dir.clone();
     let mut count = 0;
     loop {
@@ -131,7 +133,7 @@ fn search_for_meta(dir: &PathBuf, parents: u32) -> Option<PathBuf> {
 fn search_for_migrations(dir: &str) -> Vec<Migration> {
     // collect .ups & .downs
     let root = PathBuf::from(dir);
-    let mut migs = HashMap::new();
+    let mut files = HashMap::new();
     for dir in WalkDir::new(root).into_iter() {
         let e = dir.unwrap();
         let path = e.path();
@@ -139,12 +141,32 @@ fn search_for_migrations(dir: &str) -> Vec<Migration> {
             if ext.is_empty() || ext != "sql" { continue; }
             let parent = path.parent().unwrap();
             let key = format!("{}", parent.display());
-            let entry = migs.entry(key).or_insert(vec![]);
+            let entry = files.entry(key).or_insert(vec![]);
             entry.push(path.to_path_buf());
         }
     }
-    println!("{:#?}", migs);
-    vec![Migration::new("", "", chrono::UTC::now())]
+    let mut migrations = vec![];
+    for (path, migs) in files.iter() {
+        let mut up = PathBuf::from(path);
+        let mut down = PathBuf::from(path);
+        let stamp_string = chrono::UTC.ymd(2000, 1, 1).and_hms(0, 0, 0).format(DT_FORMAT).to_string();
+        //let stamp_string = chrono::UTC::now().format(DT_FORMAT).to_string();
+        let mut stamp = stamp_string.as_str();
+        for mig in migs.iter() {
+            stamp = mig.file_name().unwrap().to_str().unwrap().split('.').nth(0).unwrap();
+            let up_down = mig.file_name().unwrap().to_str().unwrap().split('.').nth(2).unwrap();
+            match up_down {
+                "up" => up = mig.clone(),
+                "down" => down = mig.clone(),
+                _ => (),
+            };
+        }
+        let migration = Migration::new(up, down,
+                                       chrono::UTC.datetime_from_str(stamp, DT_FORMAT).unwrap());
+        migrations.push(migration);
+    }
+    migrations.sort_by(|a, b| a.stamp.cmp(&b.stamp));
+    migrations
 }
 
 
@@ -190,10 +212,64 @@ pub fn init(dir: &PathBuf) {
 /// List the currently applied and available migrations under settings.migration_folder
 pub fn list(dir: &PathBuf) {
     let settings = try_get_settings!(dir, 2);
-    let _available = search_for_migrations(&settings.migration_folder);
+    //println!("settings:\n{:#?}", &settings);
+    let available = search_for_migrations(&settings.migration_folder);
+    //println!("Available:\n{:#?}", available);
+    println!("Current Migration Status:");
+    for mig in available.iter() {
+        let file = mig.up.file_name().unwrap();
+        let x = settings.applied.contains(&mig.up.to_str().unwrap().to_string());
+        println!(" -> [{x}] {name}", x=if x { 'x' } else { ' ' }, name=file.to_str().unwrap());
+    }
 }
 
 
+/// Return the next available and unapplied migration
+fn next_available(settings: &Settings) -> Option<PathBuf> {
+    let available = search_for_migrations(settings.migration_folder.as_str());
+    for mig in available.iter() {
+        if !settings.applied.contains(&mig.up.to_str().unwrap().to_string()) {
+            return Some(mig.up.clone());
+        }
+    }
+    None
+}
+
+
+/// Move up one migration. If `force`, record the migration
+/// as a success regardless of the outcome.
+pub fn up(dir: &PathBuf, force: bool) {
+    let settings = try_get_settings!(dir, 2);
+    if let Some(next_available) = next_available(&settings) {
+        let out = Command::new("psql")
+                          .arg("-U").arg(&settings.username)
+                          .arg("-d").arg(&settings.username)
+                          .arg("-h").arg("localhost")
+                          .arg("-f").arg(next_available.to_str().unwrap())
+                          .output()
+                          .expect("failed to apply 'up' migration");
+        println!("{:#?}", out);
+        let success = out.stderr.is_empty();
+        if success || force {
+            let mut settings = settings.clone();
+            settings.applied.push(next_available.to_str().unwrap().to_string());
+            let meta_path = search_for_meta(dir, 2).unwrap();
+            let json = format!("{}", json::as_pretty_json(&settings));
+            let mut file = fs::File::create(meta_path).unwrap();
+            file.write_all(json.as_bytes()).unwrap();
+        }
+    }
+}
+
+
+/// Move down one migration. If `force`, record the migration
+/// as a success regardless of the outcome
+pub fn down(dir: &PathBuf, force: bool) {
+    unimplemented!()
+}
+
+
+/// Create a new migration with the given tag
 pub fn new(dir: &PathBuf, tag: &str) {
     let settings = try_get_settings!(dir, 2);
     let mut migration_dir = try_base_dir!(dir, 2);
@@ -214,4 +290,16 @@ pub fn new(dir: &PathBuf, tag: &str) {
         let _ = fs::File::create(&p).unwrap();
         println!("Created: {:?}", p);
     }
+}
+
+
+/// Open a repl connection to the specified database connection
+pub fn shell(dir: &PathBuf) {
+    let settings = try_get_settings!(dir, 2);
+    let out = Command::new("psql")
+                      .arg("-U").arg(&settings.username)
+                      .arg("-d").arg(&settings.username)
+                      .arg("-h").arg("localhost")
+                      .spawn();
+    out.unwrap().wait().expect("failed to execute shell");
 }

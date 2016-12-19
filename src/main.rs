@@ -35,20 +35,44 @@ fn main() {
             .help("Creates a new migrations folder with up&down templates")
             .takes_value(true)
             .value_name("MIGRATION_TAG"))
+        .arg(Arg::with_name("shell")
+            .short("s")
+            .long("shell")
+            .help("Open a repl connection"))
         .get_matches();
 
     let dir = env::current_dir().unwrap();
-    if matches.occurrences_of("init") > 0 {
+    let meta = migrant::search_for_meta(&dir, 3);
+    let force = matches.occurrences_of("force") > 0;
+
+    if matches.occurrences_of("init") > 0 || meta.is_none() {
         migrant::init(&dir);
         return;
     }
 
     if matches.occurrences_of("list") > 0 {
         migrant::list(&dir);
+        return;
     }
 
     if let Some(tag) = matches.value_of("new") {
         migrant::new(&dir, tag);
+        return;
+    }
+
+    if matches.occurrences_of("up") > 0 {
+        migrant::up(&dir, force);
+        return;
+    }
+
+    if matches.occurrences_of("down") > 0 {
+        migrant::down(&dir, force);
+        return;
+    }
+
+    if matches.occurrences_of("shell") > 0 {
+        migrant::shell(&dir);
+        return;
     }
 }
 
