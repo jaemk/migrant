@@ -1,8 +1,16 @@
+#![recursion_limit = "1024"]
+#[macro_use]
+extern crate error_chain;
 extern crate rpassword;
 extern crate rustc_serialize;
 extern crate chrono;
 extern crate walkdir;
 
+pub mod errors {
+    error_chain! { }
+}
+
+use errors::*;
 use std::collections::HashMap;
 use std::process::Command;
 use std::io::{self, Write, Read};
@@ -29,8 +37,7 @@ macro_rules! try_get_settings {
                 json::decode::<Settings>(&json).unwrap()
             }
             _ => {
-                println!("No `.migrant` file found. Try migrant --init");
-                return;
+                bail!("No `.migrant` file found. Try migrant --init");
             }
         }
      }
@@ -43,10 +50,11 @@ macro_rules! try_base_dir {
                 m.pop();
                 m
             }
-            _ => return,
+            _ => bail!("unable to determine project base directory"),
         }
     }
 }
+
 
 #[derive(RustcEncodable, RustcDecodable, Debug, Clone)]
 struct Settings {
@@ -54,6 +62,7 @@ struct Settings {
     password: String,
     migration_folder: String,
     applied: Vec<String>,
+    down: Vec<String>,
 }
 impl Settings {
     fn new(username: String, password: String) -> Settings {
@@ -62,9 +71,11 @@ impl Settings {
             password: password,
             migration_folder: "resources/migrations".to_string(),
             applied: vec![],
+            down: vec![],
         }
     }
 }
+
 
 #[derive(Debug)]
 struct Migration {
@@ -82,12 +93,6 @@ impl Migration {
     }
 }
 
-
-pub fn enter() {
-    let stdin = io::stdin();
-    let mut resp = String::new();
-    let _ = stdin.read_line(&mut resp);
-}
 
 /// Display a prompt and return the entered response
 fn prompt(msg: &str, secure: bool) -> String {
@@ -131,7 +136,6 @@ pub fn search_for_meta(dir: &PathBuf, parents: u32) -> Option<PathBuf> {
 
 /// Search for available migrations
 fn search_for_migrations(dir: &str) -> Vec<Migration> {
-    // collect .ups & .downs
     let root = PathBuf::from(dir);
     let mut files = HashMap::new();
     for dir in WalkDir::new(root).into_iter() {
@@ -150,7 +154,6 @@ fn search_for_migrations(dir: &str) -> Vec<Migration> {
         let mut up = PathBuf::from(path);
         let mut down = PathBuf::from(path);
         let stamp_string = chrono::UTC.ymd(2000, 1, 1).and_hms(0, 0, 0).format(DT_FORMAT).to_string();
-        //let stamp_string = chrono::UTC::now().format(DT_FORMAT).to_string();
         let mut stamp = stamp_string.as_str();
         for mig in migs.iter() {
             stamp = mig.file_name().unwrap().to_str().unwrap().split('.').nth(0).unwrap();
@@ -170,9 +173,9 @@ fn search_for_migrations(dir: &str) -> Vec<Migration> {
 }
 
 
-/// Creates a new .migrant file in the given directory or
-/// asks for a specific location to put it
-fn create_meta(mut dir: PathBuf) -> Result<PathBuf, String> {
+/// Determines whether new .migrant file location should be in
+/// the given directory or a user specified path
+fn new_meta_location(mut dir: PathBuf) -> Result<PathBuf> {
     dir.push(".migrant");
     println!(" $ --- No `.migrant` file found in parent path ---");
     println!(" $ A new `.migrant` file will be created at the following location: ");
@@ -183,53 +186,54 @@ fn create_meta(mut dir: PathBuf) -> Result<PathBuf, String> {
     }
     println!(" $ You can specify the absolute location now, or nothing to exit");
     let ans = prompt(" $ >> ", false);
-    if ans.trim().is_empty() { return Err("No `.migrant` path provided".to_string()); }
+    if ans.trim().is_empty() { bail!("No `.migrant` path provided"); }
     let path = PathBuf::from(ans);
     if !path.is_absolute() || path.file_name().unwrap() != ".migrant" {
-        return Err(format!("Invalid absolute path: {:?}", path.display()));
+        return bail!(format!("Invalid absolute path: {:?}", path.display()));
     }
     Ok(path)
 }
 
 
 /// Initialize the current directory
-pub fn init(dir: &PathBuf) {
-    // check if meta-file already exists
-    let meta = create_meta(dir.clone());
-    if meta.is_err() {
-        println!(" >> Err: {}", meta.err().unwrap());
-        return;
-    }
+pub fn init(dir: &PathBuf) -> Result<()> {
+    let meta = new_meta_location(dir.clone())
+                    .chain_err(|| "unable to create a .migrant file")?;
     let username = prompt(" $ pg-login/project-name >> ", false);
     let password = prompt(" $ pg-password >> ", true);
+
     let settings = Settings::new(username, password);
     let json = format!("{}", json::as_pretty_json(&settings));
-    let mut file = fs::File::create(meta.unwrap()).unwrap();
-    file.write_all(json.as_bytes()).unwrap();
+    let mut file = fs::File::create(meta)
+                    .chain_err(|| "unable to create new file")?;
+    file.write_all(json.as_bytes())
+        .chain_err(|| "unable to write file contents")?;
+    Ok(())
 }
 
 
 /// List the currently applied and available migrations under settings.migration_folder
-pub fn list(dir: &PathBuf) {
+pub fn list(dir: &PathBuf) -> Result<()> {
     let settings = try_get_settings!(dir, 2);
-    //println!("settings:\n{:#?}", &settings);
     let available = search_for_migrations(&settings.migration_folder);
-    //println!("Available:\n{:#?}", available);
     println!("Current Migration Status:");
     for mig in available.iter() {
         let file = mig.up.file_name().unwrap();
         let x = settings.applied.contains(&mig.up.to_str().unwrap().to_string());
         println!(" -> [{x}] {name}", x=if x { 'x' } else { ' ' }, name=file.to_str().unwrap());
     }
+    Ok(())
 }
 
 
 /// Return the next available and unapplied migration
-fn next_available(settings: &Settings) -> Option<PathBuf> {
+fn next_available(settings: &Settings) -> Option<(PathBuf, PathBuf)> {
     let available = search_for_migrations(settings.migration_folder.as_str());
     for mig in available.iter() {
         if !settings.applied.contains(&mig.up.to_str().unwrap().to_string()) {
-            return Some(mig.up.clone());
+            return Some(
+                (mig.up.clone(), mig.down.clone())
+                );
         }
     }
     None
@@ -238,39 +242,78 @@ fn next_available(settings: &Settings) -> Option<PathBuf> {
 
 /// Move up one migration. If `force`, record the migration
 /// as a success regardless of the outcome.
-pub fn up(dir: &PathBuf, force: bool) {
+pub fn up(dir: &PathBuf, force: bool) -> Result<()> {
     let settings = try_get_settings!(dir, 2);
-    if let Some(next_available) = next_available(&settings) {
+    if let Some((next_available, down)) = next_available(&settings) {
+        println!("Applying: {:?}", next_available);
         let out = Command::new("psql")
                           .arg("-U").arg(&settings.username)
                           .arg("-d").arg(&settings.username)
                           .arg("-h").arg("localhost")
                           .arg("-f").arg(next_available.to_str().unwrap())
                           .output()
-                          .expect("failed to apply 'up' migration");
-        println!("{:#?}", out);
+                          .chain_err(|| "failed to run 'up' migration command")?;
         let success = out.stderr.is_empty();
         if success || force {
+            println!("psql --up stdout: {}",
+                     String::from_utf8(out.stdout)
+                            .chain_err(|| "Error getting stdout string")?);
             let mut settings = settings.clone();
             settings.applied.push(next_available.to_str().unwrap().to_string());
+            settings.down.push(down.to_str().unwrap().to_string());
             let meta_path = search_for_meta(dir, 2).unwrap();
             let json = format!("{}", json::as_pretty_json(&settings));
-            let mut file = fs::File::create(meta_path).unwrap();
-            file.write_all(json.as_bytes()).unwrap();
+            let mut file = fs::File::create(meta_path)
+                            .chain_err(|| "unable to create file")?;
+            file.write_all(json.as_bytes())
+                .chain_err(|| "unable to write settings file")?;
+        } else if !success && !force {
+            println!("psql --up stderr: {}",
+                     String::from_utf8(out.stderr)
+                            .chain_err(|| "Error getting stderr string")?);
         }
     }
+    Ok(())
 }
 
 
 /// Move down one migration. If `force`, record the migration
 /// as a success regardless of the outcome
-pub fn down(dir: &PathBuf, force: bool) {
-    unimplemented!()
+pub fn down(dir: &PathBuf, force: bool) -> Result<()> {
+    let mut settings = try_get_settings!(dir, 2);
+    if let Some(last) = settings.down.pop() {
+        println!("Applying: {}", last);
+        let out = Command::new("psql")
+                          .arg("-U").arg(&settings.username)
+                          .arg("-d").arg(&settings.username)
+                          .arg("-h").arg("localhost")
+                          .arg("-f").arg(last)
+                          .output()
+                          .chain_err(|| "failed to run 'down' migration command")?;
+        let success = out.stderr.is_empty();
+        if success || force {
+            println!("psql --down stdout: {}",
+                     String::from_utf8(out.stdout)
+                            .chain_err(|| "Error getting stdout string")?);
+            let meta_path = search_for_meta(dir, 2).unwrap();
+            settings.applied.pop();
+            let json = format!("{}", json::as_pretty_json(&settings));
+            let mut file = fs::File::create(meta_path)
+                             .chain_err(|| "unable to create file")?;
+            file.write_all(json.as_bytes())
+                .chain_err(|| "unable to write settings file")?;
+        } else if !success && !force {
+            println!("psql --down stderr: {}",
+                     String::from_utf8(out.stderr)
+                            .chain_err(|| "Error getting stderr string")?);
+        }
+    }
+    Ok(())
 }
 
 
 /// Create a new migration with the given tag
-pub fn new(dir: &PathBuf, tag: &str) {
+pub fn new(dir: &PathBuf, tag: &str) -> Result<()> {
     let settings = try_get_settings!(dir, 2);
     let mut migration_dir = try_base_dir!(dir, 2);
     migration_dir.push(settings.migration_folder);
@@ -287,19 +330,21 @@ pub fn new(dir: &PathBuf, tag: &str) {
     for mig in migs.iter() {
         let mut p = migration_dir.clone();
         p.push(mig);
-        let _ = fs::File::create(&p).unwrap();
+        let _ = fs::File::create(&p).chain_err(|| "Failed to create file")?;
         println!("Created: {:?}", p);
     }
+    Ok(())
 }
 
 
 /// Open a repl connection to the specified database connection
-pub fn shell(dir: &PathBuf) {
+pub fn shell(dir: &PathBuf) -> Result<()> {
     let settings = try_get_settings!(dir, 2);
     let out = Command::new("psql")
                       .arg("-U").arg(&settings.username)
                       .arg("-d").arg(&settings.username)
                       .arg("-h").arg("localhost")
                       .spawn();
-    out.unwrap().wait().expect("failed to execute shell");
+    out.unwrap().wait().chain_err(|| "Failed to execute shell")?;
+    Ok(())
 }

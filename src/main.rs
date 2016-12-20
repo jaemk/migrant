@@ -1,9 +1,11 @@
-extern crate migrant;
 extern crate clap;
+extern crate migrant;
 
 use std::env;
-
+use std::path::PathBuf;
 use clap::{Arg, App};
+use migrant::errors::*;
+
 
 fn main() {
     let matches = App::new("Migrant")
@@ -41,39 +43,44 @@ fn main() {
             .help("Open a repl connection"))
         .get_matches();
 
-    let dir = env::current_dir().unwrap();
-    let meta = migrant::search_for_meta(&dir, 3);
-    let force = matches.occurrences_of("force") > 0;
+    let dir = env::current_dir().expect("Unable to retrieve current directory");
 
-    if matches.occurrences_of("init") > 0 || meta.is_none() {
-        migrant::init(&dir);
-        return;
-    }
-
-    if matches.occurrences_of("list") > 0 {
-        migrant::list(&dir);
-        return;
-    }
-
-    if let Some(tag) = matches.value_of("new") {
-        migrant::new(&dir, tag);
-        return;
-    }
-
-    if matches.occurrences_of("up") > 0 {
-        migrant::up(&dir, force);
-        return;
-    }
-
-    if matches.occurrences_of("down") > 0 {
-        migrant::down(&dir, force);
-        return;
-    }
-
-    if matches.occurrences_of("shell") > 0 {
-        migrant::shell(&dir);
-        return;
+    if let Err(ref e) = run(dir, matches) {
+        println!("error: {}", e);
+        for e in e.iter().skip(1) {
+            println!("caused by: {}", e);
+        }
+        // if RUST_BACKTRACE=1
+        if let Some(backtrace) = e.backtrace() {
+            println!("backtrace: {:?}", backtrace);
+        }
+        ::std::process::exit(1);
     }
 }
 
 
+fn run(dir: PathBuf, matches: clap::ArgMatches) -> Result<()> {
+    let meta: Option<_> = migrant::search_for_meta(&dir, 3);
+
+    let force = matches.occurrences_of("force") > 0;
+
+    if matches.occurrences_of("init") > 0 || meta.is_none() {
+        migrant::init(&dir)?;
+    }
+    else if matches.occurrences_of("list") > 0 {
+        migrant::list(&dir)?;
+    }
+    else if let Some(tag) = matches.value_of("new") {
+        migrant::new(&dir, tag)?;
+    }
+    else if matches.occurrences_of("up") > 0 {
+        migrant::up(&dir, force)?;
+    }
+    else if matches.occurrences_of("down") > 0 {
+        migrant::down(&dir, force)?;
+    }
+    else if matches.occurrences_of("shell") > 0 {
+        migrant::shell(&dir)?;
+    }
+    Ok(())
+}

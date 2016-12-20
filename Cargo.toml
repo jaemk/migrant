@@ -9,4 +9,5 @@ rpassword = "0.3"
 rustc-serialize = "0.3"
 chrono = "0.2"
 walkdir = "1"
+error-chain = "0.7"
 
