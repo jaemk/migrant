@@ -1,10 +1,19 @@
 extern crate clap;
 extern crate migrant;
+extern crate rustc_serialize;
 
 use std::env;
+use std::fs;
+use std::io::Read;
 use std::path::PathBuf;
 use clap::{Arg, App};
+use rustc_serialize::json;
 use migrant::errors::*;
+use migrant::Settings;
+
+
+// number of parent directories to look back through for a .migrant file
+const N_PARENTS: u32 = 3;
 
 
 fn main() {
@@ -28,9 +37,11 @@ fn main() {
             .long("down")
             .help("Moves down (applies .down.sql) one migration"))
         .arg(Arg::with_name("force")
-            .short("f")
             .long("force")
             .help("Applies the migration and treats it as if it were successful"))
+        .arg(Arg::with_name("fake")
+            .long("fake")
+            .help("Updates the .meta file as if the specified migration was applied"))
         .arg(Arg::with_name("new")
             .short("n")
             .long("new")
@@ -60,27 +71,39 @@ fn main() {
 
 
 fn run(dir: PathBuf, matches: clap::ArgMatches) -> Result<()> {
-    let meta: Option<_> = migrant::search_for_meta(&dir, 3);
+    let meta: Option<_> = migrant::search_for_meta(&dir, N_PARENTS);
 
     let force = matches.occurrences_of("force") > 0;
+    let fake = matches.occurrences_of("fake") > 0;
 
     if matches.occurrences_of("init") > 0 || meta.is_none() {
         migrant::init(&dir)?;
+        return Ok(())
     }
-    else if matches.occurrences_of("list") > 0 {
-        migrant::list(&dir)?;
+
+    let meta = meta.unwrap();           // absolute path of `.migrant` file
+    let mut base_dir = meta.clone();    //
+    base_dir.pop();                     // project base-directory
+
+    let mut file = fs::File::open(&meta).chain_err(|| "unable to open settings file")?;
+    let mut json = String::new();
+    file.read_to_string(&mut json).chain_err(|| "unable to read settings file")?;
+    let settings = json::decode::<Settings>(&json).chain_err(|| "unable to decode settings")?;
+
+    if matches.occurrences_of("list") > 0 {
+        migrant::list(base_dir, settings)?;
     }
     else if let Some(tag) = matches.value_of("new") {
-        migrant::new(&dir, tag)?;
+        migrant::new(base_dir, settings, tag)?;
     }
     else if matches.occurrences_of("up") > 0 {
-        migrant::up(&dir, force)?;
+        migrant::up(base_dir, meta, settings, force, fake)?;
     }
     else if matches.occurrences_of("down") > 0 {
-        migrant::down(&dir, force)?;
+        migrant::down(meta, settings, force, fake)?;
     }
     else if matches.occurrences_of("shell") > 0 {
-        migrant::shell(&dir)?;
+        migrant::shell(settings)?;
     }
     Ok(())
 }

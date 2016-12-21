@@ -2,6 +2,11 @@
 name = "migrant"
 version = "0.1.0"
 authors = ["James Kominick <james.kominick@gmail.com>"]
+description = "Simple Postgres migration manager"
+repository = "https://github.com/jaemk/migrant"
+readme = "README.md"
+keywords = ["sql", "migration", "postgres"]
+license = "MIT"
 
 [dependencies]
 clap = "2.19.*"
