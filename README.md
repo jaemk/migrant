@@ -6,7 +6,7 @@ Currently supports:
  - postgres
 
 ----
-Migrations created using `migrant --new new-tag` creates up & down files under `resources/migrations`
+Running `migrant --new new-tag` creates up & down files under `resources/migrations` with the tag `new-tag`
 
 Migrant expects a `.migrant` file at the base of your project (be sure to `.gitignore` it). Run `migrant --init` to generate a fresh `.migrant` settings file.
 
