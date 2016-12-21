@@ -70,6 +70,15 @@ fn main() {
 }
 
 
+/// Load json `.migrant` settings file
+fn load_settings(dir: &PathBuf) -> Result<Settings> {
+    let mut file = fs::File::open(dir).chain_err(|| "unable to open settings file")?;
+    let mut json = String::new();
+    file.read_to_string(&mut json).chain_err(|| "unable to read settings file")?;
+    json::decode::<Settings>(&json).chain_err(|| "unable to load settings")
+}
+
+
 fn run(dir: PathBuf, matches: clap::ArgMatches) -> Result<()> {
     let meta: Option<_> = migrant::search_for_meta(&dir, N_PARENTS);
 
@@ -85,22 +94,25 @@ fn run(dir: PathBuf, matches: clap::ArgMatches) -> Result<()> {
     let mut base_dir = meta.clone();    //
     base_dir.pop();                     // project base-directory
 
-    let mut file = fs::File::open(&meta).chain_err(|| "unable to open settings file")?;
-    let mut json = String::new();
-    file.read_to_string(&mut json).chain_err(|| "unable to read settings file")?;
-    let settings = json::decode::<Settings>(&json).chain_err(|| "unable to decode settings")?;
+    let mut settings = load_settings(&meta)?;
 
     if matches.occurrences_of("list") > 0 {
-        migrant::list(base_dir, settings)?;
+        migrant::list(&base_dir, &settings)?;
     }
     else if let Some(tag) = matches.value_of("new") {
-        migrant::new(base_dir, settings, tag)?;
+        migrant::new(&mut base_dir, &mut settings, tag)?;
+        let new_settings = load_settings(&meta)?;
+        migrant::list(&base_dir, &new_settings)?;
     }
     else if matches.occurrences_of("up") > 0 {
-        migrant::up(base_dir, meta, settings, force, fake)?;
+        migrant::up(&base_dir, &meta, &mut settings, force, fake)?;
+        let new_settings = load_settings(&meta)?;
+        migrant::list(&base_dir, &new_settings)?;
     }
     else if matches.occurrences_of("down") > 0 {
-        migrant::down(meta, settings, force, fake)?;
+        migrant::down(&meta, &mut settings, force, fake)?;
+        let new_settings = load_settings(&meta)?;
+        migrant::list(&base_dir, &new_settings)?;
     }
     else if matches.occurrences_of("shell") > 0 {
         migrant::shell(settings)?;

@@ -189,8 +189,8 @@ pub fn init(dir: &PathBuf) -> Result<()> {
 
 
 /// List the currently applied and available migrations under settings.migration_folder
-pub fn list(mig_dir: PathBuf, settings: Settings) -> Result<()> {
-    let available = search_for_migrations(&mig_dir);
+pub fn list(mig_dir: &PathBuf, settings: &Settings) -> Result<()> {
+    let available = search_for_migrations(mig_dir);
     println!("Current Migration Status:");
     for mig in available.iter() {
         let file = mig.up.file_name().unwrap();
@@ -219,8 +219,8 @@ fn next_available(mig_dir: &PathBuf, applied: &[String]) -> Option<(PathBuf, Pat
 /// Move up one migration.
 /// If `force`, record the migration as a success regardless of the outcome.
 /// If `fake`, only update the settings file as if the migration was successful.
-pub fn up(mig_dir: PathBuf, meta_path: PathBuf, mut settings: Settings, force: bool, fake: bool) -> Result<()> {
-    if let Some((next_available, down)) = next_available(&mig_dir, settings.applied.as_slice()) {
+pub fn up(mig_dir: &PathBuf, meta_path: &PathBuf, settings: &mut Settings, force: bool, fake: bool) -> Result<()> {
+    if let Some((next_available, down)) = next_available(mig_dir, settings.applied.as_slice()) {
         println!("Applying: {:?}", next_available);
 
         let mut stdout = String::new();
@@ -233,10 +233,15 @@ pub fn up(mig_dir: PathBuf, meta_path: PathBuf, mut settings: Settings, force: b
                               .output()
                               .chain_err(|| "failed to run 'up' migration command")?;
             let success = out.stderr.is_empty();
-            if !success && !force {
-                bail!("psql --up stderr: {}",
+            if !success {
+                let info = format!("psql --up stderr: {}",
                       String::from_utf8(out.stderr)
                              .chain_err(|| "Error getting stderr string")?);
+                if force {
+                    println!("{}", info);
+                } else {
+                    bail!("{}", info);
+                }
             }
             stdout = String::from_utf8(out.stdout).chain_err(|| "Error getting stdout string")?;
         }
@@ -244,7 +249,7 @@ pub fn up(mig_dir: PathBuf, meta_path: PathBuf, mut settings: Settings, force: b
         println!("psql --up stdout: {}", stdout);
         settings.applied.push(next_available.to_str().unwrap().to_string());
         settings.down.push(down.to_str().unwrap().to_string());
-        let json = format!("{}", json::as_pretty_json(&settings));
+        let json = format!("{}", json::as_pretty_json(settings));
         let mut file = fs::File::create(meta_path)
                         .chain_err(|| "unable to create file")?;
         file.write_all(json.as_bytes())
@@ -257,7 +262,7 @@ pub fn up(mig_dir: PathBuf, meta_path: PathBuf, mut settings: Settings, force: b
 /// Move down one migration.
 /// If `force`, record the migration as a success regardless of the outcome.
 /// If `fake`, only update the settings file as if the migration was successful.
-pub fn down(meta_path: PathBuf, mut settings: Settings, force: bool, fake: bool) -> Result<()> {
+pub fn down(meta_path: &PathBuf, settings: &mut Settings, force: bool, fake: bool) -> Result<()> {
     if let Some(last) = settings.down.pop() {
         println!("Applying: {}", last);
 
@@ -271,17 +276,22 @@ pub fn down(meta_path: PathBuf, mut settings: Settings, force: bool, fake: bool)
                               .output()
                               .chain_err(|| "failed to run 'down' migration command")?;
             let success = out.stderr.is_empty();
-            if !success && !force {
-                bail!("psql --down stderr: {}",
-                     String::from_utf8(out.stderr)
-                            .chain_err(|| "Error getting stderr string")?);
+            if !success {
+                let info = format!("psql --down stderr: {}",
+                      String::from_utf8(out.stderr)
+                             .chain_err(|| "Error getting stderr string")?);
+                if force {
+                    println!("{}", info);
+                } else {
+                    bail!("{}", info);
+                }
             }
             stdout = String::from_utf8(out.stdout).chain_err(|| "Error getting stdout string")?;
         }
 
         println!("psql --down stdout: {}", stdout);
         settings.applied.pop();
-        let json = format!("{}", json::as_pretty_json(&settings));
+        let json = format!("{}", json::as_pretty_json(settings));
         let mut file = fs::File::create(meta_path)
                          .chain_err(|| "unable to create file")?;
         file.write_all(json.as_bytes())
@@ -292,7 +302,7 @@ pub fn down(meta_path: PathBuf, mut settings: Settings, force: bool, fake: bool)
 
 
 /// Create a new migration with the given tag
-pub fn new(mut mig_dir: PathBuf, settings: Settings, tag: &str) -> Result<()> {
+pub fn new(mig_dir: &mut PathBuf, settings: &mut Settings, tag: &str) -> Result<()> {
     let now = chrono::UTC::now();
     let dt_string = now.format(DT_FORMAT).to_string();
     let folder = format!("{}.{}", dt_string, tag);
