@@ -1,10 +1,9 @@
-# Migrant [![Build Status](https://travis-ci.org/jaemk/migrant.svg?branch=master)](https://travis-ci.org/jaemk/migrant)
-[![crates.io](https://img.shields.io/crates/v/migrant.svg)](https://crates.io/crates/migrant)
+# Migrant [![Build Status](https://travis-ci.org/jaemk/migrant.svg?branch=master)](https://travis-ci.org/jaemk/migrant) [![crates.io](https://img.shields.io/crates/v/migrant.svg)](https://crates.io/crates/migrant)
 
 > Basic migration manager
 
 Currently supports:
- - postgres
+ * postgres
 
 
 ### Installation
