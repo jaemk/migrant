@@ -30,16 +30,20 @@ static DT_FORMAT: &'static str = "%Y%m%d-%H%M%S";
 #[derive(RustcEncodable, RustcDecodable, Debug, Clone)]
 /// Settings that are serialized and saved in a project `.migrant` file
 pub struct Settings {
-    username: String,
+    database_type: String,
+    database_name: String,
+    db_user: String,
     password: String,
     migration_folder: String,
     applied: Vec<String>,
     down: Vec<String>,
 }
 impl Settings {
-    fn new(username: String, password: String) -> Settings {
+    fn new(db_type: String, db_name: String, db_user: String, password: String) -> Settings {
         Settings {
-            username: username,
+            database_type: db_type,
+            database_name: db_name,
+            db_user: db_user,
             password: password,
             migration_folder: "resources/migrations".to_string(),
             applied: vec![],
@@ -64,6 +68,30 @@ impl Migration {
             down: down,
         }
     }
+}
+
+
+fn runner(settings: &Settings, filename: &str) -> Result<std::process::Output> {
+    Ok(match settings.database_type.as_ref() {
+        "sqlite" => {
+            // TODO: database name should be path relative to our meta file
+            Command::new("sqlite3")
+                    .arg(&settings.database_name)
+                    .arg(&format!(".read {}", filename))
+                    .output()
+                    .chain_err(|| "failed to run migration command")?
+        }
+        "pg" => {
+            Command::new("psql")
+                    .arg("-U").arg(&settings.db_user)
+                    .arg("-d").arg(&settings.db_user)
+                    .arg("-h").arg("localhost")
+                    .arg("-f").arg(&filename)
+                    .output()
+                    .chain_err(|| "failed to run migration command")?
+        }
+        _ => unreachable!(),
+    })
 }
 
 
@@ -175,10 +203,21 @@ fn new_meta_location(mut dir: PathBuf) -> Result<PathBuf> {
 pub fn init(dir: &PathBuf) -> Result<()> {
     let meta = new_meta_location(dir.clone())
                     .chain_err(|| "unable to create a .migrant file")?;
-    let username = prompt(" $ pg-login/project-name >> ", false);
-    let password = prompt(" $ pg-password >> ", true);
-
-    let settings = Settings::new(username, password);
+    let db_type = prompt(" db-type (sqlite|pg) >> ", false);
+    let mut db_user = "".into();
+    let mut password = "".into();
+    let mut db_pref = None;
+    match db_type.as_ref() {
+        "pg" => db_pref = Some("postgres"),
+        "sqlite" => (),
+        _ => bail!("unsupported database type"),
+    }
+    let db_name = prompt(" $ database name >> ", false);
+    if let Some(pref) = db_pref {
+        db_user = prompt(&format!(" $ {} database user >> ", pref), false);
+        password = prompt(&format!(" $ {} user password >> ", pref), true);
+    }
+    let settings = Settings::new(db_type, db_name, db_user, password);
     let json = format!("{}", json::as_pretty_json(&settings));
     let mut file = fs::File::create(meta)
                     .chain_err(|| "unable to create new file")?;
@@ -225,13 +264,7 @@ pub fn up(mig_dir: &PathBuf, meta_path: &PathBuf, settings: &mut Settings, force
 
         let mut stdout = String::new();
         if !fake {
-            let out = Command::new("psql")
-                              .arg("-U").arg(&settings.username)
-                              .arg("-d").arg(&settings.username)
-                              .arg("-h").arg("localhost")
-                              .arg("-f").arg(next_available.to_str().unwrap())
-                              .output()
-                              .chain_err(|| "failed to run 'up' migration command")?;
+            let out = runner(&settings, next_available.to_str().unwrap()).chain_err(|| "failed 'up'")?;
             let success = out.stderr.is_empty();
             if !success {
                 let info = format!("psql --up stderr: {}",
@@ -264,20 +297,15 @@ pub fn up(mig_dir: &PathBuf, meta_path: &PathBuf, settings: &mut Settings, force
 /// If `fake`, only update the settings file as if the migration was successful.
 pub fn down(meta_path: &PathBuf, settings: &mut Settings, force: bool, fake: bool) -> Result<()> {
     if let Some(last) = settings.down.pop() {
+        println!("Onto database: {}", settings.database_name);
         println!("Applying: {}", last);
 
         let mut stdout = String::new();
         if !fake {
-            let out = Command::new("psql")
-                              .arg("-U").arg(&settings.username)
-                              .arg("-d").arg(&settings.username)
-                              .arg("-h").arg("localhost")
-                              .arg("-f").arg(last)
-                              .output()
-                              .chain_err(|| "failed to run 'down' migration command")?;
+            let out = runner(&settings, &last).chain_err(|| "failed 'down'")?;
             let success = out.stderr.is_empty();
             if !success {
-                let info = format!("psql --down stderr: {}",
+                let info = format!("--down stderr: {}",
                       String::from_utf8(out.stderr)
                              .chain_err(|| "Error getting stderr string")?);
                 if force {
@@ -326,8 +354,8 @@ pub fn new(mig_dir: &mut PathBuf, settings: &mut Settings, tag: &str) -> Result<
 /// Open a repl connection to the specified database connection
 pub fn shell(settings: Settings) -> Result<()> {
     let out = Command::new("psql")
-                      .arg("-U").arg(&settings.username)
-                      .arg("-d").arg(&settings.username)
+                      .arg("-U").arg(&settings.db_user)
+                      .arg("-d").arg(&settings.db_user)
                       .arg("-h").arg("localhost")
                       .spawn();
     out.unwrap().wait().chain_err(|| "Failed to execute shell")?;
