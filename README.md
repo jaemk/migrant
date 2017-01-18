@@ -4,6 +4,7 @@
 
 Currently supports:
  * postgres
+ * sqlite
 
 
 ### Installation
