@@ -24,6 +24,8 @@ cargo install migrant
 
 `migrant --down [--force, --fake]` - apply the down file of the most recent migration.
 
+`migrant --shell` - open a repl
+
 ```
 $ migrant --help
 
