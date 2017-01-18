@@ -115,7 +115,7 @@ fn run(dir: PathBuf, matches: clap::ArgMatches) -> Result<()> {
         migrant::list(&base_dir, &new_settings)?;
     }
     else if matches.occurrences_of("shell") > 0 {
-        migrant::shell(settings)?;
+        migrant::shell(&meta, settings)?;
     }
     Ok(())
 }

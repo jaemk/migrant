@@ -71,12 +71,14 @@ impl Migration {
 }
 
 
-fn runner(settings: &Settings, filename: &str) -> Result<std::process::Output> {
+fn runner(settings: &Settings, meta_path: &PathBuf, filename: &str) -> Result<std::process::Output> {
     Ok(match settings.database_type.as_ref() {
         "sqlite" => {
-            // TODO: database name should be path relative to our meta file
+            let mut db_path = meta_path.clone();
+            db_path.pop();
+            db_path.push(&settings.database_name);
             Command::new("sqlite3")
-                    .arg(&settings.database_name)
+                    .arg(db_path.to_str().unwrap())
                     .arg(&format!(".read {}", filename))
                     .output()
                     .chain_err(|| "failed to run migration command")?
@@ -84,7 +86,7 @@ fn runner(settings: &Settings, filename: &str) -> Result<std::process::Output> {
         "pg" => {
             Command::new("psql")
                     .arg("-U").arg(&settings.db_user)
-                    .arg("-d").arg(&settings.db_user)
+                    .arg("-d").arg(&settings.database_name)
                     .arg("-h").arg("localhost")
                     .arg("-f").arg(&filename)
                     .output()
@@ -204,6 +206,7 @@ pub fn init(dir: &PathBuf) -> Result<()> {
     let meta = new_meta_location(dir.clone())
                     .chain_err(|| "unable to create a .migrant file")?;
     let db_type = prompt(" db-type (sqlite|pg) >> ", false);
+    let db_name;
     let mut db_user = "".into();
     let mut password = "".into();
     let mut db_pref = None;
@@ -212,10 +215,12 @@ pub fn init(dir: &PathBuf) -> Result<()> {
         "sqlite" => (),
         _ => bail!("unsupported database type"),
     }
-    let db_name = prompt(" $ database name >> ", false);
     if let Some(pref) = db_pref {
+        db_name = prompt(" $ database name >> ", false);
         db_user = prompt(&format!(" $ {} database user >> ", pref), false);
         password = prompt(&format!(" $ {} user password >> ", pref), true);
+    } else {
+        db_name = prompt(" $ relative path to database (from .migrant file) >> ", false);
     }
     let settings = Settings::new(db_type, db_name, db_user, password);
     let json = format!("{}", json::as_pretty_json(&settings));
@@ -264,7 +269,7 @@ pub fn up(mig_dir: &PathBuf, meta_path: &PathBuf, settings: &mut Settings, force
 
         let mut stdout = String::new();
         if !fake {
-            let out = runner(&settings, next_available.to_str().unwrap()).chain_err(|| "failed 'up'")?;
+            let out = runner(&settings, &meta_path, next_available.to_str().unwrap()).chain_err(|| "failed 'up'")?;
             let success = out.stderr.is_empty();
             if !success {
                 let info = format!("psql --up stderr: {}",
@@ -302,7 +307,7 @@ pub fn down(meta_path: &PathBuf, settings: &mut Settings, force: bool, fake: boo
 
         let mut stdout = String::new();
         if !fake {
-            let out = runner(&settings, &last).chain_err(|| "failed 'down'")?;
+            let out = runner(&settings, &meta_path, &last).chain_err(|| "failed 'down'")?;
             let success = out.stderr.is_empty();
             if !success {
                 let info = format!("--down stderr: {}",
@@ -352,12 +357,25 @@ pub fn new(mig_dir: &mut PathBuf, settings: &mut Settings, tag: &str) -> Result<
 
 
 /// Open a repl connection to the specified database connection
-pub fn shell(settings: Settings) -> Result<()> {
-    let out = Command::new("psql")
-                      .arg("-U").arg(&settings.db_user)
-                      .arg("-d").arg(&settings.db_user)
-                      .arg("-h").arg("localhost")
-                      .spawn();
-    out.unwrap().wait().chain_err(|| "Failed to execute shell")?;
-    Ok(())
+pub fn shell(meta_path: &PathBuf, settings: Settings) -> Result<()> {
+    Ok(match settings.database_type.as_ref() {
+        "sqlite" => {
+            let mut db_path = meta_path.clone();
+            db_path.pop();
+            db_path.push(&settings.database_name);
+            let _ = Command::new("sqlite3")
+                    .arg(db_path.to_str().unwrap())
+                    .spawn().unwrap().wait()
+                    .chain_err(|| "failed to run migration command")?;
+        }
+        "pg" => {
+            Command::new("psql")
+                    .arg("-U").arg(&settings.db_user)
+                    .arg("-d").arg(&settings.database_name)
+                    .arg("-h").arg("localhost")
+                    .spawn().unwrap().wait()
+                    .chain_err(|| "failed to run shell")?;
+        }
+        _ => unreachable!(),
+    })
 }
