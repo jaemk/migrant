@@ -18,7 +18,7 @@ const N_PARENTS: u32 = 3;
 
 fn main() {
     let matches = App::new("Migrant")
-        .version("0.1.0")
+        .version("0.2.1")
         .author("James K. <james.kominick@gmail.com>")
         .about("Postgres migration manager")
         .arg(Arg::with_name("init")
