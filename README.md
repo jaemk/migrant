@@ -30,7 +30,7 @@ cargo install migrant
 ```
 $ migrant --help
 
-  Migrant 0.2.1
+  Migrant 0.2.2
   James K. <james.kominick@gmail.com>
   Postgres migration manager
 

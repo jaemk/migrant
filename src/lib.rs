@@ -272,7 +272,7 @@ pub fn up(mig_dir: &PathBuf, meta_path: &PathBuf, settings: &mut Settings, force
             let out = runner(&settings, &meta_path, next_available.to_str().unwrap()).chain_err(|| "failed 'up'")?;
             let success = out.stderr.is_empty();
             if !success {
-                let info = format!("psql --up stderr: {}",
+                let info = format!("migrant --up stderr: {}",
                       String::from_utf8(out.stderr)
                              .chain_err(|| "Error getting stderr string")?);
                 if force {
@@ -284,7 +284,7 @@ pub fn up(mig_dir: &PathBuf, meta_path: &PathBuf, settings: &mut Settings, force
             stdout = String::from_utf8(out.stdout).chain_err(|| "Error getting stdout string")?;
         }
 
-        println!("psql --up stdout: {}", stdout);
+        println!("migrant --up stdout: {}", stdout);
         settings.applied.push(next_available.to_str().unwrap().to_string());
         settings.down.push(down.to_str().unwrap().to_string());
         let json = format!("{}", json::as_pretty_json(settings));
@@ -310,7 +310,7 @@ pub fn down(meta_path: &PathBuf, settings: &mut Settings, force: bool, fake: boo
             let out = runner(&settings, &meta_path, &last).chain_err(|| "failed 'down'")?;
             let success = out.stderr.is_empty();
             if !success {
-                let info = format!("--down stderr: {}",
+                let info = format!("migrant --down stderr: {}",
                       String::from_utf8(out.stderr)
                              .chain_err(|| "Error getting stderr string")?);
                 if force {
@@ -322,7 +322,7 @@ pub fn down(meta_path: &PathBuf, settings: &mut Settings, force: bool, fake: boo
             stdout = String::from_utf8(out.stdout).chain_err(|| "Error getting stdout string")?;
         }
 
-        println!("psql --down stdout: {}", stdout);
+        println!("migrant --down stdout: {}", stdout);
         settings.applied.pop();
         let json = format!("{}", json::as_pretty_json(settings));
         let mut file = fs::File::create(meta_path)
