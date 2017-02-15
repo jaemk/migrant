@@ -75,9 +75,14 @@ impl Migration {
 
 /// Generate a postgres connection string
 fn connect_string(settings: &Settings) -> String {
-    format!("postgresql://{}:{}@{}/{}",
+    let pass = if settings.password.is_empty() {
+        "".into()
+    } else {
+        format!(":{}", settings.password)
+    };
+    format!("postgresql://{}{}@{}/{}",
             settings.db_user,
-            settings.password,
+            pass,
             settings.database_host,
             settings.database_name)
 }
