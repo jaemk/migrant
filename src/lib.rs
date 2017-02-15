@@ -32,6 +32,7 @@ static DT_FORMAT: &'static str = "%Y%m%d-%H%M%S";
 pub struct Settings {
     database_type: String,
     database_name: String,
+    database_host: String,
     db_user: String,
     password: String,
     migration_folder: String,
@@ -43,6 +44,7 @@ impl Settings {
         Settings {
             database_type: db_type,
             database_name: db_name,
+            database_host: "localhost".to_string(),
             db_user: db_user,
             password: password,
             migration_folder: "resources/migrations".to_string(),
@@ -71,6 +73,17 @@ impl Migration {
 }
 
 
+/// Generate a postgres connection string
+fn connect_string(settings: &Settings) -> String {
+    format!("postgresql://{}:{}@{}/{}",
+            settings.db_user,
+            settings.password,
+            settings.database_host,
+            settings.database_name)
+}
+
+
+/// Run a given migration file through either sqlite or postgres, returning the output
 fn runner(settings: &Settings, meta_path: &PathBuf, filename: &str) -> Result<std::process::Output> {
     Ok(match settings.database_type.as_ref() {
         "sqlite" => {
@@ -84,10 +97,9 @@ fn runner(settings: &Settings, meta_path: &PathBuf, filename: &str) -> Result<st
                     .chain_err(|| "failed to run migration command")?
         }
         "pg" => {
+            let conn_str = connect_string(settings);
             Command::new("psql")
-                    .arg("-U").arg(&settings.db_user)
-                    .arg("-d").arg(&settings.database_name)
-                    .arg("-h").arg("localhost")
+                    .arg(&conn_str)
                     .arg("-f").arg(&filename)
                     .output()
                     .chain_err(|| "failed to run migration command")?
@@ -114,7 +126,7 @@ fn prompt(msg: &str, secure: bool) -> String {
 
 
 /// Search for a .migrant file in the current directory,
-/// looking up the parent path until it finds one.
+/// looking up the parent path (limited by 'parents') until it finds one.
 pub fn search_for_meta(dir: &PathBuf, parents: u32) -> Option<PathBuf> {
     let mut dir = dir.clone();
     let mut count = 0;
@@ -141,7 +153,7 @@ pub fn search_for_meta(dir: &PathBuf, parents: u32) -> Option<PathBuf> {
 fn search_for_migrations(mig_root: &PathBuf) -> Vec<Migration> {
     // collect any .sql files into a Map<`stamp-tag`, Vec<up&down files>>
     let mut files = HashMap::new();
-    for dir in WalkDir::new(mig_root).into_iter() {
+    for dir in WalkDir::new(mig_root) {
         let e = dir.unwrap();
         let path = e.path();
         if let Some(ext) = path.extension() {
@@ -195,7 +207,7 @@ fn new_meta_location(mut dir: PathBuf) -> Result<PathBuf> {
     if ans.trim().is_empty() { bail!("No `.migrant` path provided"); }
     let path = PathBuf::from(ans);
     if !path.is_absolute() || path.file_name().unwrap() != ".migrant" {
-        return bail!(format!("Invalid absolute path: {:?}", path.display()));
+        bail!("Invalid absolute path: {:?}", path.display());
     }
     Ok(path)
 }
@@ -232,7 +244,7 @@ pub fn init(dir: &PathBuf) -> Result<()> {
 }
 
 
-/// List the currently applied and available migrations under settings.migration_folder
+/// List the currently applied and available migrations under `settings.migration_folder`
 pub fn list(mig_dir: &PathBuf, settings: &Settings) -> Result<()> {
     let available = search_for_migrations(mig_dir);
     println!("Current Migration Status:");
@@ -272,19 +284,19 @@ pub fn up(mig_dir: &PathBuf, meta_path: &PathBuf, settings: &mut Settings, force
             let out = runner(&settings, &meta_path, next_available.to_str().unwrap()).chain_err(|| "failed 'up'")?;
             let success = out.stderr.is_empty();
             if !success {
-                let info = format!("migrant --up stderr: {}",
+                let info = format!("migrant --up stderr: \n{}",
                       String::from_utf8(out.stderr)
                              .chain_err(|| "Error getting stderr string")?);
                 if force {
                     println!("{}", info);
                 } else {
-                    bail!("{}", info);
+                    bail!(info);
                 }
             }
             stdout = String::from_utf8(out.stdout).chain_err(|| "Error getting stdout string")?;
         }
 
-        println!("migrant --up stdout: {}", stdout);
+        println!("migrant --up stdout: \n{}", stdout);
         settings.applied.push(next_available.to_str().unwrap().to_string());
         settings.down.push(down.to_str().unwrap().to_string());
         let json = format!("{}", json::as_pretty_json(settings));
@@ -310,19 +322,19 @@ pub fn down(meta_path: &PathBuf, settings: &mut Settings, force: bool, fake: boo
             let out = runner(&settings, &meta_path, &last).chain_err(|| "failed 'down'")?;
             let success = out.stderr.is_empty();
             if !success {
-                let info = format!("migrant --down stderr: {}",
+                let info = format!("migrant --down stderr: \n{}",
                       String::from_utf8(out.stderr)
                              .chain_err(|| "Error getting stderr string")?);
                 if force {
                     println!("{}", info);
                 } else {
-                    bail!("{}", info);
+                    bail!(info);
                 }
             }
             stdout = String::from_utf8(out.stdout).chain_err(|| "Error getting stdout string")?;
         }
 
-        println!("migrant --down stdout: {}", stdout);
+        println!("migrant --down stdout: \n{}", stdout);
         settings.applied.pop();
         let json = format!("{}", json::as_pretty_json(settings));
         let mut file = fs::File::create(meta_path)
@@ -369,10 +381,9 @@ pub fn shell(meta_path: &PathBuf, settings: Settings) -> Result<()> {
                     .chain_err(|| "failed to run migration command")?;
         }
         "pg" => {
+            let conn_str = connect_string(&settings);
             Command::new("psql")
-                    .arg("-U").arg(&settings.db_user)
-                    .arg("-d").arg(&settings.database_name)
-                    .arg("-h").arg("localhost")
+                    .arg(&conn_str)
                     .spawn().unwrap().wait()
                     .chain_err(|| "failed to run shell")?;
         }
