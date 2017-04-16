@@ -11,8 +11,9 @@ license = "MIT"
 [dependencies]
 clap = "2.19.*"
 rpassword = "0.3"
-rustc-serialize = "0.3"
 chrono = "0.2"
 walkdir = "1"
 error-chain = "0.7"
-
+toml = "0.3"
+serde = "0.9"
+serde_derive = "0.9"
