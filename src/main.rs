@@ -1,19 +1,11 @@
 extern crate clap;
 extern crate migrant;
-extern crate rustc_serialize;
 
 use std::env;
-use std::fs;
-use std::io::Read;
 use std::path::PathBuf;
 use clap::{Arg, App};
-use rustc_serialize::json;
 use migrant::errors::*;
-use migrant::Settings;
-
-
-// number of parent directories to look back through for a .migrant file
-const N_PARENTS: u32 = 3;
+use migrant::Config;
 
 
 fn main() {
@@ -70,52 +62,41 @@ fn main() {
 }
 
 
-/// Load json `.migrant` settings file
-fn load_settings(dir: &PathBuf) -> Result<Settings> {
-    let mut file = fs::File::open(dir).chain_err(|| "unable to open settings file")?;
-    let mut json = String::new();
-    file.read_to_string(&mut json).chain_err(|| "unable to read settings file")?;
-    json::decode::<Settings>(&json).chain_err(|| "unable to load settings")
-}
-
-
 fn run(dir: PathBuf, matches: clap::ArgMatches) -> Result<()> {
-    let meta: Option<_> = migrant::search_for_meta(&dir, N_PARENTS);
+    let config_path = migrant::search_for_config(&dir);
 
-    let force = matches.occurrences_of("force") > 0;
-    let fake = matches.occurrences_of("fake") > 0;
+    let force = matches.is_present("force");
+    let fake = matches.is_present("fake");
 
-    if matches.occurrences_of("init") > 0 || meta.is_none() {
-        migrant::init(&dir)?;
+    if matches.is_present("init") || config_path.is_none() {
+        let _ = migrant::Config::init(&dir)?;
         return Ok(())
     }
 
-    let meta = meta.unwrap();           // absolute path of `.migrant` file
-    let mut base_dir = meta.clone();    //
-    base_dir.pop();                     // project base-directory
+    let config_path = config_path.unwrap();    // absolute path of `.migrant` file
+    let mut base_dir = config_path.clone();    //
+    base_dir.pop();                            // project base-directory
 
-    let mut settings = load_settings(&meta)?;
+    let mut config = Config::load(&config_path)?;
 
-    if matches.occurrences_of("list") > 0 {
-        migrant::list(&base_dir, &settings)?;
+    if matches.is_present("list") {
+        migrant::list(&config, &base_dir)?;
+    } else if let Some(tag) = matches.value_of("new") {
+        migrant::new(&base_dir, &config, tag)?;
+        migrant::list(&config, &base_dir)?;
     }
-    else if let Some(tag) = matches.value_of("new") {
-        migrant::new(&mut base_dir, &mut settings, tag)?;
-        let new_settings = load_settings(&meta)?;
-        migrant::list(&base_dir, &new_settings)?;
-    }
-    else if matches.occurrences_of("up") > 0 {
-        migrant::up(&base_dir, &meta, &mut settings, force, fake)?;
-        let new_settings = load_settings(&meta)?;
-        migrant::list(&base_dir, &new_settings)?;
-    }
-    else if matches.occurrences_of("down") > 0 {
-        migrant::down(&meta, &mut settings, force, fake)?;
-        let new_settings = load_settings(&meta)?;
-        migrant::list(&base_dir, &new_settings)?;
-    }
-    else if matches.occurrences_of("shell") > 0 {
-        migrant::shell(&meta, settings)?;
-    }
+    //else if matches.is_present("up") {
+    //    migrant::up(&base_dir, &config_path, & settings, force, fake)?;
+    //    let new_settings = load_settings(&meta)?;
+    //    migrant::list(&base_dir, &new_settings)?;
+    //}
+    //else if matches.occurrences_of("down") > 0 {
+    //    migrant::down(&meta, &mut settings, force, fake)?;
+    //    let new_settings = load_settings(&meta)?;
+    //    migrant::list(&base_dir, &new_settings)?;
+    //}
+    //else if matches.occurrences_of("shell") > 0 {
+    //    migrant::shell(&meta, settings)?;
+    //}
     Ok(())
 }
