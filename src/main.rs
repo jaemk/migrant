@@ -1,72 +1,61 @@
-extern crate clap;
+#[macro_use] extern crate clap;
 extern crate migrant;
 
 use std::env;
 use std::path::PathBuf;
-use clap::{Arg, App};
-use migrant::errors::*;
+use clap::{Arg, App, SubCommand};
+use migrant::Error;
 use migrant::Config;
+use migrant::Direction;
 
 
 fn main() {
     let matches = App::new("Migrant")
-        .version("0.2.3")
+        .version(crate_version!())
         .author("James K. <james.kominick@gmail.com>")
         .about("Postgres migration manager")
-        .arg(Arg::with_name("init")
-            .long("init")
-            .help("Initialize project"))
-        .arg(Arg::with_name("list")
-            .short("l")
-            .long("list")
-            .help("List status of applied and available migrations"))
-        .arg(Arg::with_name("up")
-            .short("u")
-            .long("up")
-            .help("Moves up (applies .up.sql) one migration"))
-        .arg(Arg::with_name("down")
-            .short("d")
-            .long("down")
-            .help("Moves down (applies .down.sql) one migration"))
-        .arg(Arg::with_name("force")
-            .long("force")
-            .help("Applies the migration and treats it as if it were successful"))
-        .arg(Arg::with_name("fake")
-            .long("fake")
-            .help("Updates the .meta file as if the specified migration was applied"))
-        .arg(Arg::with_name("new")
-            .short("n")
-            .long("new")
-            .help("Creates a new migrations folder with up&down templates")
-            .takes_value(true)
-            .value_name("MIGRATION_TAG"))
-        .arg(Arg::with_name("shell")
-            .short("s")
-            .long("shell")
-            .help("Open a repl connection"))
+        .subcommand(SubCommand::with_name("init")
+            .about("Initialize project"))
+        .subcommand(SubCommand::with_name("list")
+            .about("List status of applied and available migrations"))
+        .subcommand(SubCommand::with_name("apply")
+            .about("Moves up or down (applies up/down.sql) one migration. Default direction is up unless specified with `-d/--down`.")
+            .arg(Arg::with_name("down")
+                .long("down")
+                .short("d")
+                .help("Applies `down.sql` migrations"))
+            .arg(Arg::with_name("all")
+                .long("all")
+                .short("a")
+                .help("Applies all available migrations"))
+            .arg(Arg::with_name("force")
+                .long("force")
+                .help("Applies the migration and treats it as if it were successful"))
+            .arg(Arg::with_name("fake")
+                .long("fake")
+                .help("Updates the `.migrant.toml` file as if the specified migration was applied")))
+        .subcommand(SubCommand::with_name("new")
+            .about("Create new migration up/down files")
+            .arg(Arg::with_name("TAG")
+                 .required(true)
+                 .help("tag to use for new migration")))
+        .subcommand(SubCommand::with_name("shell")
+            .about("Open a repl connection"))
+        .subcommand(SubCommand::with_name("which-config")
+            .about("Display the path to the configuration file being used"))
         .get_matches();
 
     let dir = env::current_dir().expect("Unable to retrieve current directory");
 
     if let Err(ref e) = run(dir, matches) {
         println!("error: {}", e);
-        for e in e.iter().skip(1) {
-            println!("caused by: {}", e);
-        }
-        // if RUST_BACKTRACE=1
-        if let Some(backtrace) = e.backtrace() {
-            println!("backtrace: {:?}", backtrace);
-        }
         ::std::process::exit(1);
     }
 }
 
 
-fn run(dir: PathBuf, matches: clap::ArgMatches) -> Result<()> {
+fn run(dir: PathBuf, matches: clap::ArgMatches) -> Result<(), Error> {
     let config_path = migrant::search_for_config(&dir);
-
-    let force = matches.is_present("force");
-    let fake = matches.is_present("fake");
 
     if matches.is_present("init") || config_path.is_none() {
         let _ = migrant::Config::init(&dir)?;
@@ -77,26 +66,36 @@ fn run(dir: PathBuf, matches: clap::ArgMatches) -> Result<()> {
     let mut base_dir = config_path.clone();    //
     base_dir.pop();                            // project base-directory
 
-    let mut config = Config::load(&config_path)?;
+    let config = Config::load(&config_path)?;
 
-    if matches.is_present("list") {
-        migrant::list(&config, &base_dir)?;
-    } else if let Some(tag) = matches.value_of("new") {
-        migrant::new(&base_dir, &config, tag)?;
-        migrant::list(&config, &base_dir)?;
-    }
-    //else if matches.is_present("up") {
-    //    migrant::up(&base_dir, &config_path, & settings, force, fake)?;
-    //    let new_settings = load_settings(&meta)?;
-    //    migrant::list(&base_dir, &new_settings)?;
-    //}
-    //else if matches.occurrences_of("down") > 0 {
-    //    migrant::down(&meta, &mut settings, force, fake)?;
-    //    let new_settings = load_settings(&meta)?;
-    //    migrant::list(&base_dir, &new_settings)?;
-    //}
-    //else if matches.occurrences_of("shell") > 0 {
-    //    migrant::shell(&meta, settings)?;
-    //}
+    match matches.subcommand() {
+        ("list", _) => {
+            migrant::list(&config, &base_dir)?;
+        }
+        ("new", Some(matches)) => {
+            let tag = matches.value_of("TAG").unwrap();
+            migrant::new(&base_dir, &config, tag)?;
+            migrant::list(&config, &base_dir)?;
+        }
+        ("apply", Some(matches)) => {
+            let force = matches.is_present("force");
+            let fake = matches.is_present("fake");
+            let all = matches.is_present("all");
+            let direction = if matches.is_present("down") { Direction::Down } else { Direction::Up };
+
+            migrant::apply_migration(&base_dir, &config_path, &config, direction, force, fake, all)?;
+            let config = Config::load(&config_path)?;
+            migrant::list(&config, &base_dir)?;
+        }
+        ("shell", _) => {
+            migrant::shell(&base_dir, &config)?;
+        }
+        ("which-config", _) => {
+            println!("{}", config_path.to_str().unwrap());
+        }
+        _ => {
+            println!("migrant: see `--help`");
+        }
+    };
     Ok(())
 }
