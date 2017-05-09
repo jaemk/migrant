@@ -1,6 +1,6 @@
 [package]
 name = "migrant"
-version = "0.2.3"
+version = "0.3.0"
 authors = ["James Kominick <james.kominick@gmail.com>"]
 description = "Simple migration manager for postgres, sqlite"
 repository = "https://github.com/jaemk/migrant"
@@ -9,11 +9,12 @@ keywords = ["database", "migration", "sql", "postgres", "sqlite"]
 license = "MIT"
 
 [dependencies]
+lazy_static = "0.2"
+regex = "0.2"
 clap = "2.19.*"
 rpassword = "0.3"
 chrono = "0.2"
 walkdir = "1"
-error-chain = "0.7"
 toml = "0.3"
 serde = "0.9"
 serde_derive = "0.9"
