@@ -225,7 +225,7 @@ struct Migration {
 #[derive(Debug, Clone)]
 /// Migrator to configure how to run available migrations
 pub struct Migrator {
-    base_dir: PathBuf,
+    project_dir: PathBuf,
     config_path: PathBuf,
     config: Config,
     direction: Direction,
@@ -235,16 +235,24 @@ pub struct Migrator {
 }
 
 impl Migrator {
-    pub fn with_config(config: &Config, config_path: &PathBuf, base_dir: &PathBuf) -> Self {
+    /// Initialize a new `Migrator` with a given config and file path of the config
+    pub fn with_config(config: &Config, config_path: &PathBuf) -> Self {
+        let project_dir = config_path.parent()
+            .map(Path::to_path_buf)
+            .expect(&format!("Error extracting parent file-path from: {:?}", config_path));
         Self {
             config: config.clone(),
             config_path: config_path.clone(),
-            base_dir: base_dir.clone(),
+            project_dir: project_dir,
             direction: Direction::Up,
             force: false,
             fake: false,
             all: false,
         }
+    }
+    pub fn project_dir(mut self, proj_dir: &PathBuf) -> Self {
+        self.project_dir = proj_dir.clone();
+        self
     }
     pub fn direction(mut self, dir: Direction) -> Self {
         self.direction = dir;
@@ -264,7 +272,7 @@ impl Migrator {
     }
     pub fn apply(self) -> Result<()> {
         apply_migration(
-            &self.base_dir, &self.config_path, &self.config,
+            &self.project_dir, &self.config_path, &self.config,
             self.direction, self.force, self.fake, self.all,
             )
     }
@@ -439,9 +447,9 @@ fn next_available(direction: &Direction, mig_dir: &PathBuf, applied: &[String]) 
 
 
 /// Try applying the next available migration in the specified `Direction`
-fn apply_migration(base_dir: &PathBuf, config_path: &PathBuf, config: &Config, direction: Direction,
+fn apply_migration(project_dir: &PathBuf, config_path: &PathBuf, config: &Config, direction: Direction,
                        force: bool, fake: bool, all: bool) -> Result<()> {
-    let mut mig_dir = base_dir.clone();
+    let mut mig_dir = project_dir.clone();
     mig_dir.push(PathBuf::from(&config.migration_location));
 
     let new_config = match next_available(&direction, &mig_dir, config.applied.as_slice()) {
@@ -492,7 +500,7 @@ fn apply_migration(base_dir: &PathBuf, config_path: &PathBuf, config: &Config, d
     };
 
     if all {
-        let res = apply_migration(base_dir, config_path, &new_config, direction, force, fake, all);
+        let res = apply_migration(project_dir, config_path, &new_config, direction, force, fake, all);
         match res {
             Ok(_) => (),
             Err(error) => match error {
@@ -506,8 +514,8 @@ fn apply_migration(base_dir: &PathBuf, config_path: &PathBuf, config: &Config, d
 
 
 /// List the currently applied and available migrations under `config.migration_location`
-pub fn list(config: &Config, base_dir: &PathBuf) -> Result<()> {
-    let mut mig_dir = base_dir.clone();
+pub fn list(config: &Config, project_dir: &PathBuf) -> Result<()> {
+    let mut mig_dir = project_dir.clone();
     mig_dir.push(PathBuf::from(&config.migration_location));
     let available = search_for_migrations(&mig_dir);
     if available.is_empty() {
@@ -529,14 +537,14 @@ pub fn list(config: &Config, base_dir: &PathBuf) -> Result<()> {
 
 
 /// Create a new migration with the given tag
-pub fn new(base_dir: &PathBuf, config: &Config, tag: &str) -> Result<()> {
+pub fn new(project_dir: &PathBuf, config: &Config, tag: &str) -> Result<()> {
     if TAG_RE.is_match(&tag) {
         bail!(Migration <- format!("Invalid tag `{}`. Tags can contain [a-z0-9-]", tag));
     }
     let now = chrono::UTC::now();
     let dt_string = now.format(DT_FORMAT).to_string();
     let folder = format!("{stamp}_{tag}", stamp=dt_string, tag=tag);
-    let mut mig_dir = base_dir.clone();
+    let mut mig_dir = project_dir.clone();
     mig_dir.push(&config.migration_location);
     mig_dir.push(folder);
     let _ = fs::create_dir_all(&mig_dir);
@@ -554,10 +562,10 @@ pub fn new(base_dir: &PathBuf, config: &Config, tag: &str) -> Result<()> {
 
 
 /// Open a repl connection to the specified database connection
-pub fn shell(base_dir: &PathBuf, config: &Config) -> Result<()> {
+pub fn shell(project_dir: &PathBuf, config: &Config) -> Result<()> {
     Ok(match config.database_type.as_ref() {
         "sqlite" => {
-            let mut db_path = base_dir.clone();
+            let mut db_path = project_dir.clone();
             db_path.push(&config.database_name);
             let _ = Command::new("sqlite3")
                     .arg(db_path.to_str().unwrap())

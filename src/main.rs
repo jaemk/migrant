@@ -2,7 +2,7 @@
 extern crate migrant;
 
 use std::env;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use clap::{Arg, App, SubCommand};
 use migrant::Error;
 use migrant::Config;
@@ -63,8 +63,9 @@ fn run(dir: PathBuf, matches: clap::ArgMatches) -> Result<(), Error> {
     }
 
     let config_path = config_path.unwrap();    // absolute path of `.migrant` file
-    let mut base_dir = config_path.clone();    //
-    base_dir.pop();                            // project base-directory
+    let base_dir = config_path.parent()        // project base directory
+        .map(Path::to_path_buf)
+        .expect(&format!("failed to get parent path from: {:?}", config_path));
 
     let config = Config::load(&config_path)?;
 
@@ -83,7 +84,7 @@ fn run(dir: PathBuf, matches: clap::ArgMatches) -> Result<(), Error> {
             let all = matches.is_present("all");
             let direction = if matches.is_present("down") { Direction::Down } else { Direction::Up };
 
-            migrant::Migrator::with_config(&config, &config_path, &base_dir)
+            migrant::Migrator::with_config(&config, &config_path)
                 .direction(direction)
                 .force(force)
                 .fake(fake)
