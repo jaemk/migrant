@@ -55,7 +55,9 @@ impl fmt::Display for Error {
     }
 }
 
+
 type Result<T> = std::result::Result<T, Error>;
+
 
 macro_rules! bail {
     (Config <- $msg:expr) => {
@@ -190,6 +192,7 @@ impl Config {
 }
 
 
+#[derive(Debug, Clone)]
 /// Represents direction to apply migrations.
 /// `Up`   -> up.sql
 /// `Down` -> down.sql
@@ -216,6 +219,55 @@ struct Migration {
     dir: PathBuf,
     up: PathBuf,
     down: PathBuf,
+}
+
+
+#[derive(Debug, Clone)]
+/// Migrator to configure how to run available migrations
+pub struct Migrator {
+    base_dir: PathBuf,
+    config_path: PathBuf,
+    config: Config,
+    direction: Direction,
+    force: bool,
+    fake: bool,
+    all: bool,
+}
+
+impl Migrator {
+    pub fn with_config(config: &Config, config_path: &PathBuf, base_dir: &PathBuf) -> Self {
+        Self {
+            config: config.clone(),
+            config_path: config_path.clone(),
+            base_dir: base_dir.clone(),
+            direction: Direction::Up,
+            force: false,
+            fake: false,
+            all: false,
+        }
+    }
+    pub fn direction(mut self, dir: Direction) -> Self {
+        self.direction = dir;
+        self
+    }
+    pub fn force(mut self, force: bool) -> Self {
+        self.force = force;
+        self
+    }
+    pub fn fake(mut self, fake: bool) -> Self {
+        self.fake = fake;
+        self
+    }
+    pub fn all(mut self, all: bool) -> Self {
+        self.all = all;
+        self
+    }
+    pub fn apply(self) -> Result<()> {
+        apply_migration(
+            &self.base_dir, &self.config_path, &self.config,
+            self.direction, self.force, self.fake, self.all,
+            )
+    }
 }
 
 
@@ -356,55 +408,6 @@ fn search_for_migrations(mig_root: &PathBuf) -> Vec<Migration> {
 }
 
 
-
-/// List the currently applied and available migrations under `config.migration_location`
-pub fn list(config: &Config, base_dir: &PathBuf) -> Result<()> {
-    let mut mig_dir = base_dir.clone();
-    mig_dir.push(PathBuf::from(&config.migration_location));
-    let available = search_for_migrations(&mig_dir);
-    if available.is_empty() {
-        println!("No migrations found under {:?}", &mig_dir);
-        return Ok(())
-    }
-    println!("Current Migration Status:");
-    for mig in available.iter() {
-        let tagname = mig.up.parent()
-            .and_then(Path::file_name)
-            .and_then(OsStr::to_str)
-            .map(str::to_string)
-            .expect(&format!("Error extracting parent dir-name from: {:?}", mig.up));
-        let x = config.applied.contains(&tagname);
-        println!(" -> [{x}] {name}", x=if x { 'x' } else { ' ' }, name=tagname);
-    }
-    Ok(())
-}
-
-
-/// Create a new migration with the given tag
-pub fn new(base_dir: &PathBuf, config: &Config, tag: &str) -> Result<()> {
-    if TAG_RE.is_match(&tag) {
-        bail!(Migration <- format!("Invalid tag `{}`. Tags can contain [a-z0-9-]", tag));
-    }
-    let now = chrono::UTC::now();
-    let dt_string = now.format(DT_FORMAT).to_string();
-    let folder = format!("{stamp}_{tag}", stamp=dt_string, tag=tag);
-    let mut mig_dir = base_dir.clone();
-    mig_dir.push(&config.migration_location);
-    mig_dir.push(folder);
-    let _ = fs::create_dir_all(&mig_dir);
-
-    let up = format!("up.sql");
-    let down = format!("down.sql");
-    for mig in [up, down].iter() {
-        let mut p = mig_dir.clone();
-        p.push(mig);
-        let _ = fs::File::create(&p).map_err(Error::IoCreate)?;
-        println!("Created: {:?}", p);
-    }
-    Ok(())
-}
-
-
 /// Return the next available up or down migration
 fn next_available(direction: &Direction, mig_dir: &PathBuf, applied: &[String]) -> Option<PathBuf> {
     match direction {
@@ -436,7 +439,7 @@ fn next_available(direction: &Direction, mig_dir: &PathBuf, applied: &[String]) 
 
 
 /// Try applying the next available migration in the specified `Direction`
-pub fn apply_migration(base_dir: &PathBuf, config_path: &PathBuf, config: &Config, direction: Direction,
+fn apply_migration(base_dir: &PathBuf, config_path: &PathBuf, config: &Config, direction: Direction,
                        force: bool, fake: bool, all: bool) -> Result<()> {
     let mut mig_dir = base_dir.clone();
     mig_dir.push(PathBuf::from(&config.migration_location));
@@ -497,6 +500,54 @@ pub fn apply_migration(base_dir: &PathBuf, config_path: &PathBuf, config: &Confi
                 e @ _ => return Err(e),
             }
         }
+    }
+    Ok(())
+}
+
+
+/// List the currently applied and available migrations under `config.migration_location`
+pub fn list(config: &Config, base_dir: &PathBuf) -> Result<()> {
+    let mut mig_dir = base_dir.clone();
+    mig_dir.push(PathBuf::from(&config.migration_location));
+    let available = search_for_migrations(&mig_dir);
+    if available.is_empty() {
+        println!("No migrations found under {:?}", &mig_dir);
+        return Ok(())
+    }
+    println!("Current Migration Status:");
+    for mig in available.iter() {
+        let tagname = mig.up.parent()
+            .and_then(Path::file_name)
+            .and_then(OsStr::to_str)
+            .map(str::to_string)
+            .expect(&format!("Error extracting parent dir-name from: {:?}", mig.up));
+        let x = config.applied.contains(&tagname);
+        println!(" -> [{x}] {name}", x=if x { 'x' } else { ' ' }, name=tagname);
+    }
+    Ok(())
+}
+
+
+/// Create a new migration with the given tag
+pub fn new(base_dir: &PathBuf, config: &Config, tag: &str) -> Result<()> {
+    if TAG_RE.is_match(&tag) {
+        bail!(Migration <- format!("Invalid tag `{}`. Tags can contain [a-z0-9-]", tag));
+    }
+    let now = chrono::UTC::now();
+    let dt_string = now.format(DT_FORMAT).to_string();
+    let folder = format!("{stamp}_{tag}", stamp=dt_string, tag=tag);
+    let mut mig_dir = base_dir.clone();
+    mig_dir.push(&config.migration_location);
+    mig_dir.push(folder);
+    let _ = fs::create_dir_all(&mig_dir);
+
+    let up = format!("up.sql");
+    let down = format!("down.sql");
+    for mig in [up, down].iter() {
+        let mut p = mig_dir.clone();
+        p.push(mig);
+        let _ = fs::File::create(&p).map_err(Error::IoCreate)?;
+        println!("Created: {:?}", p);
     }
     Ok(())
 }

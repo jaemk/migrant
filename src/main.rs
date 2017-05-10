@@ -83,7 +83,13 @@ fn run(dir: PathBuf, matches: clap::ArgMatches) -> Result<(), Error> {
             let all = matches.is_present("all");
             let direction = if matches.is_present("down") { Direction::Down } else { Direction::Up };
 
-            migrant::apply_migration(&base_dir, &config_path, &config, direction, force, fake, all)?;
+            migrant::Migrator::with_config(&config, &config_path, &base_dir)
+                .direction(direction)
+                .force(force)
+                .fake(fake)
+                .all(all)
+                .apply()?;
+
             let config = Config::load(&config_path)?;
             migrant::list(&config, &base_dir)?;
         }
