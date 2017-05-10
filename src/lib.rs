@@ -10,7 +10,8 @@ extern crate regex;
 use std::collections::HashMap;
 use std::process::Command;
 use std::io::{self, Read, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::ffi::OsStr;
 use std::fs;
 use std::fmt;
 
@@ -74,7 +75,10 @@ static DT_FORMAT: &'static str = "%Y%m%d%H%M%S";
 
 
 lazy_static! {
+    // For verifying new `tag` names
     static ref TAG_RE: Regex = Regex::new(r"[^a-z0-9-]+").unwrap();
+
+    // For pulling out `tag` names from `toml::to_string`
     static ref MIG_RE: Regex = Regex::new(r##"(?P<mig>"[\d]+_[a-z0-9-]+")"##).unwrap();
 }
 
@@ -318,15 +322,19 @@ fn search_for_migrations(mig_root: &PathBuf) -> Vec<Migration> {
     let mut migrations = vec![];
     for (path, migs) in files.iter() {
         let stamp = PathBuf::from(path);
-        let mut stamp = stamp.file_name().and_then(|p| p.to_str()).unwrap().split('_');
+        let mut stamp = stamp.file_name()
+            .and_then(OsStr::to_str)
+            .expect(&format!("Error extracting file-name from: {:?}", stamp))
+            .split('_');
         let stamp = stamp.next().unwrap();
 
         let mut up = PathBuf::from(path);
         let mut down = PathBuf::from(path);
 
         for mig in migs.iter() {
-            let mut file_name = mig.file_name().and_then(|p| p.to_str()).unwrap().split('.');
-            let up_down = file_name.next().unwrap();
+            let up_down = mig.file_stem()
+                .and_then(OsStr::to_str)
+                .expect(&format!("Error extracting file-stem from {:?}", mig));
             match up_down {
                 "up" => up = mig.clone(),
                 "down" => down = mig.clone(),
@@ -360,7 +368,11 @@ pub fn list(config: &Config, base_dir: &PathBuf) -> Result<()> {
     }
     println!("Current Migration Status:");
     for mig in available.iter() {
-        let tagname = mig.up.parent().unwrap().file_name().unwrap().to_str().unwrap().to_string();
+        let tagname = mig.up.parent()
+            .and_then(Path::file_name)
+            .and_then(OsStr::to_str)
+            .map(str::to_string)
+            .expect(&format!("Error extracting parent dir-name from: {:?}", mig.up));
         let x = config.applied.contains(&tagname);
         println!(" -> [{x}] {name}", x=if x { 'x' } else { ' ' }, name=tagname);
     }
@@ -371,7 +383,7 @@ pub fn list(config: &Config, base_dir: &PathBuf) -> Result<()> {
 /// Create a new migration with the given tag
 pub fn new(base_dir: &PathBuf, config: &Config, tag: &str) -> Result<()> {
     if TAG_RE.is_match(&tag) {
-        bail!(Migration <- format!("Invalid tag format. Tags can contain [a-z0-9-]"));
+        bail!(Migration <- format!("Invalid tag `{}`. Tags can contain [a-z0-9-]", tag));
     }
     let now = chrono::UTC::now();
     let dt_string = now.format(DT_FORMAT).to_string();
@@ -399,7 +411,10 @@ fn next_available(direction: &Direction, mig_dir: &PathBuf, applied: &[String]) 
         &Direction::Up => {
             let available = search_for_migrations(mig_dir);
             for mig in available.iter() {
-                let tag = mig.dir.file_name().unwrap().to_str().unwrap().to_string();
+                let tag = mig.dir.file_name()
+                    .and_then(OsStr::to_str)
+                    .map(str::to_string)
+                    .expect(&format!("Error extracting dir-name from: {:?}", mig.dir));
                 if !applied.contains(&tag) {
                     return Some(mig.up.clone())
                 }
@@ -438,9 +453,8 @@ pub fn apply_migration(base_dir: &PathBuf, config_path: &PathBuf, config: &Confi
 
                 let success = out.status.success();
                 if !success {
-                    let info = format!(" ** Error **\n{}",
-                          String::from_utf8(out.stderr)
-                                 .map_err(Error::Utf8Error)?);
+                    let info = String::from_utf8(out.stderr).map_err(Error::Utf8Error)?;
+                    let info = format!(" ** Error **\n{}", info);
                     if force {
                         println!("{}", info);
                     } else {
@@ -457,7 +471,12 @@ pub fn apply_migration(base_dir: &PathBuf, config_path: &PathBuf, config: &Confi
             let mut config = config.clone();
             match direction {
                 Direction::Up => {
-                    config.applied.push(next.parent().unwrap().file_name().unwrap().to_str().unwrap().to_string());
+                    let mig_tag = next.parent()
+                        .and_then(Path::file_name)
+                        .and_then(OsStr::to_str)
+                        .map(str::to_string)
+                        .expect(&format!("Error extracting parent dir-name from: {:?}", next));
+                    config.applied.push(mig_tag);
                     config.write_to_path(&config_path)?;
                 }
                 Direction::Down => {
