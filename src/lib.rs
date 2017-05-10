@@ -75,7 +75,7 @@ static DT_FORMAT: &'static str = "%Y%m%d%H%M%S";
 
 lazy_static! {
     static ref TAG_RE: Regex = Regex::new(r"[^a-z0-9-]+").unwrap();
-    static ref MIG_RE: Regex = Regex::new(r##"(?P<mig>".*")"##).unwrap();
+    static ref MIG_RE: Regex = Regex::new(r##"(?P<mig>"[\d]+_[a-z0-9-]+")"##).unwrap();
 }
 
 
@@ -175,7 +175,7 @@ impl Config {
                 let migs = MIG_RE.captures_iter(line)
                     .map(|cap| format!("    {}", &cap["mig"]))
                     .collect::<Vec<_>>()
-                    .join("\n");
+                    .join(",\n");
                 format!("applied = [\n{}\n]", migs)
             }
         }).collect::<Vec<_>>().join("\n");
@@ -350,10 +350,9 @@ pub fn list(config: &Config, base_dir: &PathBuf) -> Result<()> {
     }
     println!("Current Migration Status:");
     for mig in available.iter() {
-        let file = mig.up.parent().unwrap().iter().rev().next().unwrap();
-        let mig_path = mig.up.parent().and_then(|p| p.to_str()).map(String::from).unwrap();
-        let x = config.applied.contains(&mig_path);
-        println!(" -> [{x}] {name}", x=if x { 'x' } else { ' ' }, name=file.to_str().unwrap());
+        let tagname = mig.up.parent().unwrap().file_name().unwrap().to_str().unwrap().to_string();
+        let x = config.applied.contains(&tagname);
+        println!(" -> [{x}] {name}", x=if x { 'x' } else { ' ' }, name=tagname);
     }
     Ok(())
 }
@@ -390,7 +389,8 @@ fn next_available(direction: &Direction, mig_dir: &PathBuf, applied: &[String]) 
         &Direction::Up => {
             let available = search_for_migrations(mig_dir);
             for mig in available.iter() {
-                if !applied.contains(&mig.dir.to_str().map(String::from).unwrap()) {
+                let tag = mig.dir.file_name().unwrap().to_str().unwrap().to_string();
+                if !applied.contains(&tag) {
                     return Some(mig.up.clone())
                 }
             }
@@ -399,8 +399,10 @@ fn next_available(direction: &Direction, mig_dir: &PathBuf, applied: &[String]) 
         &Direction::Down => {
             applied.last()
                 .map(PathBuf::from)
-                .map(|mut pb| {
-                    pb.push("down.sql");
+                .map(|mut tag| {
+                    tag.push("down.sql");
+                    let mut pb = mig_dir.clone();
+                    pb.push(tag);
                     pb
                 })
         }
@@ -445,7 +447,7 @@ pub fn apply_migration(base_dir: &PathBuf, config_path: &PathBuf, config: &Confi
             let mut config = config.clone();
             match direction {
                 Direction::Up => {
-                    config.applied.push(next.parent().unwrap().to_str().unwrap().to_string());
+                    config.applied.push(next.parent().unwrap().file_name().unwrap().to_str().unwrap().to_string());
                     config.write_to_path(&config_path)?;
                 }
                 Direction::Down => {
