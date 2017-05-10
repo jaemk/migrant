@@ -28,7 +28,7 @@ pub fn main() {
 
     // This will fail if no migration files are present!
     // Run all available `up` migrations
-    // migrant::Migrator::with_config(&config, &config_path, &base_dir)
+    // migrant::Migrator::with_config(&config, &config_path)
     //     .direction(migrant::Direction::Up)
     //     .all(true)
     //     .apply()
