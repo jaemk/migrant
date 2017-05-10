@@ -27,3 +27,8 @@ cargo install migrant
 `migrant shell` - open a repl
 
 `migrant which-config` - display the full path of the .migrant.toml file being used
+
+
+### Usage as a library
+
+See [examples](https://github.com/jaemk/migrant/tree/master/examples)
