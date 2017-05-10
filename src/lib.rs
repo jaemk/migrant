@@ -38,20 +38,19 @@ pub enum Error {
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         use Error::*;
-        let e: Box<fmt::Display> = match *self {
-            Config(ref s)             => Box::new(s),
-            Migration(ref s)          => Box::new(s),
-            MigrationNotFound(ref s)  => Box::new(s),
-            IoOpen(ref e)             => Box::new(e),
-            IoCreate(ref e)           => Box::new(e),
-            IoRead(ref e)             => Box::new(e),
-            IoWrite(ref e)            => Box::new(e),
-            IoProc(ref e)             => Box::new(e),
-            Utf8Error(ref e)          => Box::new(e),
-            TomlDe(ref e)             => Box::new(e),
-            TomlSe(ref e)             => Box::new(e),
-        };
-        write!(f, "{}", e)
+        match *self {
+            Config(ref s)             => write!(f, "Config Error: {}", s),
+            Migration(ref s)          => write!(f, "Migration Error: {}", s),
+            MigrationNotFound(ref s)  => write!(f, "MigrationNotFound: {}", s),
+            IoOpen(ref e)             => write!(f, "IoOpen Error: {}", e),
+            IoCreate(ref e)           => write!(f, "IoCreate Error: {}", e),
+            IoRead(ref e)             => write!(f, "IoRead Error: {}", e),
+            IoWrite(ref e)            => write!(f, "IoWrite Error: {}", e),
+            IoProc(ref e)             => write!(f, "IoProcess Error: {}", e),
+            Utf8Error(ref e)          => write!(f, "Utf8 Error: {}", e),
+            TomlDe(ref e)             => write!(f, "Toml Deserialization Error: {}", e),
+            TomlSe(ref e)             => write!(f, "Toml Serialization Error: {}", e),
+        }
     }
 }
 
