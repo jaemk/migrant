@@ -9,6 +9,7 @@ Currently supports:
 
 ### Installation
 
+See [releases](https://github.com/jaemk/migrant/releases) for binaries, or
 ```shell
 cargo install migrant
 ```
@@ -21,7 +22,7 @@ cargo install migrant
 
 `migrant list` - display all available .sql files and mark those applied.
 
-`migrant apply [--down, --all, --force, --fake]` - apply the next available migration.
+`migrant apply [--down, --all, --force, --fake]` - apply the next available migration[s].
 
 `migrant shell` - open a repl
 
