@@ -26,9 +26,13 @@ pub fn main() {
     let config = Config::load(&config_path)
         .expect("failed to load config");
 
-    // This will fail if no migration files are present
-    //migrant::apply_migration(&base_dir, &config_path, &config, migrant::Direction::Up, false, false, true)
-    //    .expect("failed to apply migrations")
+    // This will fail if no migration files are present!
+    // Run all available `up` migrations
+    // migrant::Migrator::with_config(&config, &config_path, &base_dir)
+    //     .direction(migrant::Direction::Up)
+    //     .all(true)
+    //     .apply()
+    //     .expect("failed to apply migrations")
 
     migrant::list(&config, &base_dir)
         .expect("failed to list migrations");
