@@ -194,6 +194,16 @@ pub enum Direction {
     Down,
 }
 
+impl fmt::Display for Direction {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        use Direction::*;
+        match *self {
+            Up   => write!(f, "Up"),
+            Down => write!(f, "Down"),
+        }
+    }
+}
+
 
 #[derive(Debug)]
 /// Migration meta data
@@ -417,7 +427,7 @@ pub fn apply_migration(base_dir: &PathBuf, config_path: &PathBuf, config: &Confi
     mig_dir.push(PathBuf::from(&config.migration_location));
 
     let new_config = match next_available(&direction, &mig_dir, config.applied.as_slice()) {
-        None => bail!(MigrationNotFound <- format!("No un-applied migration found in {}", config.migration_location)),
+        None => bail!(MigrationNotFound <- format!("No un-applied `{}` migration found in `{}/`", direction, config.migration_location)),
         Some(next) => {
             println!("Applying: {:?}", next);
 
