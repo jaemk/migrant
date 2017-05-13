@@ -2,7 +2,7 @@
 extern crate migrant;
 
 use std::env;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use clap::{Arg, App, SubCommand};
 use migrant::Error;
 use migrant::Config;
@@ -47,36 +47,33 @@ fn main() {
 
     let dir = env::current_dir().expect("Unable to retrieve current directory");
 
-    if let Err(ref e) = run(dir, matches) {
+    if let Err(ref e) = run(&dir, &matches) {
         println!("error: {}", e);
         ::std::process::exit(1);
     }
 }
 
 
-fn run(dir: PathBuf, matches: clap::ArgMatches) -> Result<(), Error> {
-    let config_path = migrant::search_for_config(&dir);
+fn run(dir: &PathBuf, matches: &clap::ArgMatches) -> Result<(), Error> {
+    let config_path = migrant::search_for_config(dir);
 
     if matches.is_present("init") || config_path.is_none() {
-        let _ = migrant::Config::init(&dir)?;
+        let _ = migrant::Config::init(dir)?;
         return Ok(())
     }
 
     let config_path = config_path.unwrap();    // absolute path of `.migrant` file
-    let base_dir = config_path.parent()        // project base directory
-        .map(Path::to_path_buf)
-        .expect(&format!("failed to get parent path from: {:?}", config_path));
 
     let config = Config::load(&config_path)?;
 
     match matches.subcommand() {
         ("list", _) => {
-            migrant::list(&config, &base_dir)?;
+            migrant::list(&config)?;
         }
         ("new", Some(matches)) => {
             let tag = matches.value_of("TAG").unwrap();
-            migrant::new(&base_dir, &config, tag)?;
-            migrant::list(&config, &base_dir)?;
+            migrant::new(&config, tag)?;
+            migrant::list(&config)?;
         }
         ("apply", Some(matches)) => {
             let force = matches.is_present("force");
@@ -84,7 +81,7 @@ fn run(dir: PathBuf, matches: clap::ArgMatches) -> Result<(), Error> {
             let all = matches.is_present("all");
             let direction = if matches.is_present("down") { Direction::Down } else { Direction::Up };
 
-            migrant::Migrator::with_config(&config, &config_path)
+            migrant::Migrator::with_config(&config)
                 .direction(direction)
                 .force(force)
                 .fake(fake)
@@ -92,10 +89,10 @@ fn run(dir: PathBuf, matches: clap::ArgMatches) -> Result<(), Error> {
                 .apply()?;
 
             let config = Config::load(&config_path)?;
-            migrant::list(&config, &base_dir)?;
+            migrant::list(&config)?;
         }
         ("shell", _) => {
-            migrant::shell(&base_dir, &config)?;
+            migrant::shell(&config)?;
         }
         ("which-config", _) => {
             println!("{}", config_path.to_str().unwrap());

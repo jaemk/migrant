@@ -7,7 +7,6 @@ The majority of `src/main.rs` could be copied, or just select functionality.
 extern crate migrant;
 
 use std::env;
-use std::path::PathBuf;
 use migrant::Config;
 
 
@@ -20,20 +19,17 @@ pub fn main() {
         }
         Some(p) => p,
     };
-    let base_dir = config_path.parent()
-        .map(PathBuf::from)
-        .expect("failed to get parent dir");
     let config = Config::load(&config_path)
         .expect("failed to load config");
 
     // This will fail if no migration files are present!
     // Run all available `up` migrations
-    // migrant::Migrator::with_config(&config, &config_path)
+    // migrant::Migrator::with_config(&config)
     //     .direction(migrant::Direction::Up)
     //     .all(true)
     //     .apply()
     //     .expect("failed to apply migrations")
 
-    migrant::list(&config, &base_dir)
+    migrant::list(&config)
         .expect("failed to list migrations");
 }

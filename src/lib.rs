@@ -26,6 +26,7 @@ pub enum Error {
     Config(String),
     Migration(String),
     MigrationNotFound(String),
+    PathError(String),
     IoOpen(std::io::Error),
     IoCreate(std::io::Error),
     IoRead(std::io::Error),
@@ -43,6 +44,7 @@ impl fmt::Display for Error {
             Config(ref s)             => write!(f, "Config Error: {}", s),
             Migration(ref s)          => write!(f, "Migration Error: {}", s),
             MigrationNotFound(ref s)  => write!(f, "MigrationNotFound: {}", s),
+            PathError(ref s)          => write!(f, "PathError: {}", s),
             IoOpen(ref e)             => write!(f, "IoOpen Error: {}", e),
             IoCreate(ref e)           => write!(f, "IoCreate Error: {}", e),
             IoRead(ref e)             => write!(f, "IoRead Error: {}", e),
@@ -87,7 +89,7 @@ lazy_static! {
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 /// Settings that are serialized and saved in a project `.migrant.toml` file
-pub struct Config {
+pub struct Settings {
     database_type: String,
     database_name: String,
     database_host: Option<String>,
@@ -96,10 +98,9 @@ pub struct Config {
     migration_location: String,
     applied: Vec<String>,
 }
-impl Config {
-    /// Create a new config
-    fn new(db_type: String, db_name: String, db_user: Option<String>, password: Option<String>) -> Config {
-        Config {
+impl Settings {
+    fn new(db_type: String, db_name: String, db_user: Option<String>, password: Option<String>) -> Settings {
+        Settings {
             database_type: db_type,
             database_name: db_name,
             database_host: Some("localhost".to_string()),
@@ -109,18 +110,38 @@ impl Config {
             applied: vec![],
         }
     }
+}
+
+
+#[derive(Debug, Clone)]
+pub struct Config {
+    pub path: PathBuf,
+    pub settings: Settings,
+}
+impl Config {
+    /// Create a new config
+    fn new(settings: Settings, path: &PathBuf) -> Config {
+        Config {
+            path: path.clone(),
+            settings: settings,
+        }
+    }
 
     /// Load toml `.migrant.toml` config file
-    pub fn load(dir: &PathBuf) -> Result<Config> {
-        let mut file = fs::File::open(dir).map_err(Error::IoOpen)?;
+    pub fn load(path: &PathBuf) -> Result<Config> {
+        let mut file = fs::File::open(path).map_err(Error::IoOpen)?;
         let mut content = String::new();
         file.read_to_string(&mut content).map_err(Error::IoRead)?;
-        toml::from_str::<Config>(&content).map_err(Error::TomlDe)
+        let settings = toml::from_str::<Settings>(&content).map_err(Error::TomlDe)?;
+        Ok(Config {
+            path: path.clone(),
+            settings: settings,
+        })
     }
 
     /// Determines whether new .migrant file location should be in
     /// the given directory or a user specified path
-    fn confirm_config_location(mut dir: PathBuf) -> Result<PathBuf> {
+    fn confirm_new_config_location(mut dir: PathBuf) -> Result<PathBuf> {
         dir.push(".migrant.toml");
         println!(" $ A new `.migrant.toml` config file will be created at the following location: ");
         println!(" $  {:?}", dir.display());
@@ -144,36 +165,34 @@ impl Config {
 
     /// Initialize project in the current directory
     pub fn init(dir: &PathBuf) -> Result<Config> {
-        let config_path = Config::confirm_config_location(dir.clone())
+        let config_path = Config::confirm_new_config_location(dir.clone())
             .map_err(|e| Error::Config(format!("unable to create a .migrant.toml config -> {}", e)))?;
 
         let db_type = prompt(" db-type (sqlite|postgres) >> ", false);
         match db_type.as_ref() {
             "postgres" | "sqlite" => (),
-            e @ _ => bail!(Config <- format!("unsupported database type: {}", e)),
+            e => bail!(Config <- format!("unsupported database type: {}", e)),
         }
 
-        let db_name;
-        let mut db_user = None;
-        let mut password = None;
-        if db_type != "sqlite" {
-            db_name = prompt(" $ database name >> ", false);
-            db_user = Some(prompt(&format!(" $ {} database user >> ", &db_type), false));
-            password = Some(prompt(&format!(" $ {} user password >> ", &db_type), true));
+        let (db_name, db_user, db_pass) = if db_type != "sqlite" {
+            (prompt(" $ database name >> ", false),
+             Some(prompt(&format!(" $ {} database user >> ", &db_type), false)),
+             Some(prompt(&format!(" $ {} user password >> ", &db_type), true)))
         } else {
-            db_name = prompt(" $ relative path to database (from .migrant.toml config file) >> ", false);
-        }
+            (prompt(" $ relative path to database (from .migrant.toml config file) >> ", false), None, None)
+        };
 
-        let config = Config::new(db_type, db_name, db_user, password);
-        config.write_to_path(&config_path)?;
+        let settings = Settings::new(db_type, db_name, db_user, db_pass);
+        let config = Config::new(settings, &config_path);
+        config.save()?;
         Ok(config)
     }
 
-    /// Write the current config to the given file path
-    fn write_to_path(&self, path: &PathBuf) -> Result<()> {
-        let mut file = fs::File::create(path)
+    /// Write the current config to its file path
+    fn save(&self) -> Result<()> {
+        let mut file = fs::File::create(self.path.clone())
                         .map_err(Error::IoCreate)?;
-        let content = toml::to_string(self).map_err(Error::TomlSe)?;
+        let content = toml::to_string(&self.settings).map_err(Error::TomlSe)?;
         let content = content.lines().map(|line| {
             if !line.starts_with("applied") { line.to_string() }
             else {
@@ -236,13 +255,13 @@ pub struct Migrator {
 
 impl Migrator {
     /// Initialize a new `Migrator` with a given config and file path of the config
-    pub fn with_config(config: &Config, config_path: &PathBuf) -> Self {
-        let project_dir = config_path.parent()
+    pub fn with_config(config: &Config) -> Self {
+        let project_dir = config.path.parent()
             .map(Path::to_path_buf)
-            .expect(&format!("Error extracting parent file-path from: {:?}", config_path));
+            .expect(&format!("Error extracting parent file-path from: {:?}", config.path));
         Self {
             config: config.clone(),
-            config_path: config_path.clone(),
+            config_path: config.path.clone(),
             project_dir: project_dir,
             direction: Direction::Up,
             force: false,
@@ -280,31 +299,32 @@ impl Migrator {
 
 
 /// Generate a database connection string
-fn connect_string(config: &Config) -> Result<String> {
-    let pass = match config.database_password {
+fn connect_string(settings: &Settings) -> Result<String> {
+    let pass = match settings.database_password {
         Some(ref pass) => format!(":{}", pass),
         None => "".into(),
     };
-    let user = match config.database_user {
+    let user = match settings.database_user {
         Some(ref user) => user.to_string(),
         None => bail!(Config <- "config-err: 'database_user' not specified".into()),
     };
     Ok(format!("{db_type}://{user}{pass}@{host}/{db_name}",
-            db_type=config.database_type,
+            db_type=settings.database_type,
             user=user,
             pass=pass,
-            host=config.database_host.as_ref().unwrap_or(&"localhost".to_string()),
-            db_name=config.database_name))
+            host=settings.database_host.as_ref().unwrap_or(&"localhost".to_string()),
+            db_name=settings.database_name))
 }
 
 
 /// Run a given migration file through either sqlite or postgres, returning the output
-fn runner(config: &Config, config_path: &PathBuf, filename: &str) -> Result<std::process::Output> {
-    Ok(match config.database_type.as_ref() {
+fn runner(config: &Config, filename: &str) -> Result<std::process::Output> {
+    let settings = &config.settings;
+    Ok(match settings.database_type.as_ref() {
         "sqlite" => {
-            let mut db_path = config_path.clone();
+            let mut db_path = config.path.clone();
             db_path.pop();
-            db_path.push(&config.database_name);
+            db_path.push(&settings.database_name);
             Command::new("sqlite3")
                     .arg(db_path.to_str().unwrap())
                     .arg(&format!(".read {}", filename))
@@ -312,7 +332,7 @@ fn runner(config: &Config, config_path: &PathBuf, filename: &str) -> Result<std:
                     .map_err(Error::IoProc)?
         }
         "postgres" => {
-            let conn_str = connect_string(config)?;
+            let conn_str = connect_string(&settings)?;
             Command::new("psql")
                     .arg(&conn_str)
                     .arg("-f").arg(&filename)
@@ -373,14 +393,14 @@ fn search_for_migrations(mig_root: &PathBuf) -> Vec<Migration> {
             if ext.is_empty() || ext != "sql" { continue; }
             let parent = path.parent().unwrap();
             let key = format!("{}", parent.display());
-            let entry = files.entry(key).or_insert(vec![]);
+            let entry = files.entry(key).or_insert_with(Vec::new);
             entry.push(path.to_path_buf());
         }
     }
 
     // transform up&down files into a Vec<Migration>
     let mut migrations = vec![];
-    for (path, migs) in files.iter() {
+    for (path, migs) in &files {
         let stamp = PathBuf::from(path);
         let mut stamp = stamp.file_name()
             .and_then(OsStr::to_str)
@@ -418,10 +438,10 @@ fn search_for_migrations(mig_root: &PathBuf) -> Vec<Migration> {
 
 /// Return the next available up or down migration
 fn next_available(direction: &Direction, mig_dir: &PathBuf, applied: &[String]) -> Option<PathBuf> {
-    match direction {
-        &Direction::Up => {
+    match *direction {
+        Direction::Up => {
             let available = search_for_migrations(mig_dir);
-            for mig in available.iter() {
+            for mig in &available {
                 let tag = mig.dir.file_name()
                     .and_then(OsStr::to_str)
                     .map(str::to_string)
@@ -432,7 +452,7 @@ fn next_available(direction: &Direction, mig_dir: &PathBuf, applied: &[String]) 
             }
             None
         }
-        &Direction::Down => {
+        Direction::Down => {
             applied.last()
                 .map(PathBuf::from)
                 .map(|mut tag| {
@@ -450,16 +470,17 @@ fn next_available(direction: &Direction, mig_dir: &PathBuf, applied: &[String]) 
 fn apply_migration(project_dir: &PathBuf, config_path: &PathBuf, config: &Config, direction: Direction,
                        force: bool, fake: bool, all: bool) -> Result<()> {
     let mut mig_dir = project_dir.clone();
-    mig_dir.push(PathBuf::from(&config.migration_location));
+    mig_dir.push(PathBuf::from(&config.settings.migration_location));
 
-    let new_config = match next_available(&direction, &mig_dir, config.applied.as_slice()) {
-        None => bail!(MigrationNotFound <- format!("No un-applied `{}` migration found in `{}/`", direction, config.migration_location)),
+    let new_config = match next_available(&direction, &mig_dir, config.settings.applied.as_slice()) {
+        None => bail!(MigrationNotFound <- format!("No un-applied `{}` migration found in `{}/`", direction, config.settings.migration_location)),
         Some(next) => {
             println!("Applying: {:?}", next);
 
-            let mut stdout = String::new();
-            if !fake {
-                let out = runner(config, config_path, next.to_str().unwrap())
+            let stdout = if fake {
+                String::new()
+            } else {
+                let out = runner(config, next.to_str().unwrap())
                     .map_err(|e| Error::Migration(format!("Error occurred while running migration -> {}", e)))?;
 
                 let success = out.status.success();
@@ -472,8 +493,8 @@ fn apply_migration(project_dir: &PathBuf, config_path: &PathBuf, config: &Config
                         bail!(Migration <- format!("Migration was unsuccessful...\n{}", info));
                     }
                 }
-                stdout = String::from_utf8(out.stdout).map_err(Error::Utf8Error)?;
-            }
+                String::from_utf8(out.stdout).map_err(Error::Utf8Error)?
+            };
 
             if !stdout.is_empty() {
                 println!("{}", stdout);
@@ -487,12 +508,12 @@ fn apply_migration(project_dir: &PathBuf, config_path: &PathBuf, config: &Config
                         .and_then(OsStr::to_str)
                         .map(str::to_string)
                         .expect(&format!("Error extracting parent dir-name from: {:?}", next));
-                    config.applied.push(mig_tag);
-                    config.write_to_path(&config_path)?;
+                    config.settings.applied.push(mig_tag);
+                    config.save()?;
                 }
                 Direction::Down => {
-                    config.applied.pop();
-                    config.write_to_path(&config_path)?;
+                    config.settings.applied.pop();
+                    config.save()?;
                 }
             }
             config
@@ -505,7 +526,7 @@ fn apply_migration(project_dir: &PathBuf, config_path: &PathBuf, config: &Config
             Ok(_) => (),
             Err(error) => match error {
                 Error::MigrationNotFound(_) => (),
-                e @ _ => return Err(e),
+                e => return Err(e),
             }
         }
     }
@@ -513,23 +534,31 @@ fn apply_migration(project_dir: &PathBuf, config_path: &PathBuf, config: &Config
 }
 
 
+fn parent_path(path: &PathBuf) -> Result<PathBuf> {
+    path.parent()
+        .map(PathBuf::from)
+        .ok_or_else(|| format!("Error extracting parent path from: {:?}", path))
+        .map_err(Error::PathError)
+}
+
+
 /// List the currently applied and available migrations under `config.migration_location`
-pub fn list(config: &Config, project_dir: &PathBuf) -> Result<()> {
-    let mut mig_dir = project_dir.clone();
-    mig_dir.push(PathBuf::from(&config.migration_location));
+pub fn list(config: &Config) -> Result<()> {
+    let mut mig_dir = parent_path(&config.path)?;
+    mig_dir.push(PathBuf::from(&config.settings.migration_location));
     let available = search_for_migrations(&mig_dir);
     if available.is_empty() {
         println!("No migrations found under {:?}", &mig_dir);
         return Ok(())
     }
     println!("Current Migration Status:");
-    for mig in available.iter() {
+    for mig in &available {
         let tagname = mig.up.parent()
             .and_then(Path::file_name)
             .and_then(OsStr::to_str)
             .map(str::to_string)
             .expect(&format!("Error extracting parent dir-name from: {:?}", mig.up));
-        let x = config.applied.contains(&tagname);
+        let x = config.settings.applied.contains(&tagname);
         println!(" -> [{x}] {name}", x=if x { 'x' } else { ' ' }, name=tagname);
     }
     Ok(())
@@ -537,21 +566,21 @@ pub fn list(config: &Config, project_dir: &PathBuf) -> Result<()> {
 
 
 /// Create a new migration with the given tag
-pub fn new(project_dir: &PathBuf, config: &Config, tag: &str) -> Result<()> {
-    if TAG_RE.is_match(&tag) {
+pub fn new(config: &Config, tag: &str) -> Result<()> {
+    if TAG_RE.is_match(tag) {
         bail!(Migration <- format!("Invalid tag `{}`. Tags can contain [a-z0-9-]", tag));
     }
     let now = chrono::UTC::now();
     let dt_string = now.format(DT_FORMAT).to_string();
     let folder = format!("{stamp}_{tag}", stamp=dt_string, tag=tag);
-    let mut mig_dir = project_dir.clone();
-    mig_dir.push(&config.migration_location);
+    let mut mig_dir = parent_path(&config.path)?;
+    mig_dir.push(&config.settings.migration_location);
     mig_dir.push(folder);
     let _ = fs::create_dir_all(&mig_dir);
 
-    let up = format!("up.sql");
-    let down = format!("down.sql");
-    for mig in [up, down].iter() {
+    let up = "up.sql";
+    let down = "down.sql";
+    for mig in &[up, down] {
         let mut p = mig_dir.clone();
         p.push(mig);
         let _ = fs::File::create(&p).map_err(Error::IoCreate)?;
@@ -562,18 +591,18 @@ pub fn new(project_dir: &PathBuf, config: &Config, tag: &str) -> Result<()> {
 
 
 /// Open a repl connection to the specified database connection
-pub fn shell(project_dir: &PathBuf, config: &Config) -> Result<()> {
-    Ok(match config.database_type.as_ref() {
+pub fn shell(config: &Config) -> Result<()> {
+    Ok(match config.settings.database_type.as_ref() {
         "sqlite" => {
-            let mut db_path = project_dir.clone();
-            db_path.push(&config.database_name);
+            let mut db_path = parent_path(&config.path)?;
+            db_path.push(&config.settings.database_name);
             let _ = Command::new("sqlite3")
                     .arg(db_path.to_str().unwrap())
                     .spawn().unwrap().wait()
                     .map_err(Error::IoProc)?;
         }
         "postgres" => {
-            let conn_str = connect_string(&config)?;
+            let conn_str = connect_string(&config.settings)?;
             Command::new("psql")
                     .arg(&conn_str)
                     .spawn().unwrap().wait()
