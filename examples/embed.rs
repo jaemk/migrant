@@ -12,15 +12,13 @@ use migrant::Config;
 
 pub fn main() {
     let dir = env::current_dir().unwrap();
-    let config_path = match migrant::search_for_config(&dir) {
+    let config = match migrant::search_for_config(&dir) {
         None => {
             migrant::Config::init(&dir).expect("failed to initialize project");
             return;
         }
-        Some(p) => p,
+        Some(p) => Config::load(&p).expect("failed to load config"),
     };
-    let config = Config::load(&config_path)
-        .expect("failed to load config");
 
     // This will fail if no migration files are present!
     // Run all available `up` migrations
