@@ -88,7 +88,7 @@ fn run(dir: &PathBuf, matches: &clap::ArgMatches) -> Result<(), Error> {
                 .all(all)
                 .apply()?;
 
-            let config = Config::load(&config_path)?;
+            let config = config.reload()?;
             migrant::list(&config)?;
         }
         ("shell", _) => {
