@@ -1,12 +1,16 @@
 [package]
 name = "migrant"
-version = "0.5.0"
+version = "0.6.0"
 authors = ["James Kominick <james.kominick@gmail.com>"]
 description = "Simple migration manager for postgres, sqlite"
 repository = "https://github.com/jaemk/migrant"
 readme = "README.md"
 keywords = ["database", "migration", "sql", "postgres", "sqlite"]
 license = "MIT"
+
+[[bin]]
+name = "migrant"
+doc = false
 
 [dependencies]
 lazy_static = "0.2"
