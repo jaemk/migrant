@@ -57,6 +57,27 @@ impl fmt::Display for Error {
     }
 }
 
+impl std::error::Error for Error {
+    fn description(&self) -> &str {
+        "Migrant Error"
+    }
+
+    fn cause(&self) -> Option<&std::error::Error> {
+        use Error::*;
+        Some(match *self {
+            IoOpen(ref e)     => e,
+            IoCreate(ref e)   => e,
+            IoRead(ref e)     => e,
+            IoWrite(ref e)    => e,
+            IoProc(ref e)     => e,
+            Utf8Error(ref e)  => e,
+            TomlDe(ref e)     => e,
+            TomlSe(ref e)     => e,
+            _ => return None
+        })
+    }
+}
+
 
 type Result<T> = std::result::Result<T, Error>;
 
