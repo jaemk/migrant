@@ -20,79 +20,9 @@ use walkdir::WalkDir;
 use chrono::TimeZone;
 use regex::Regex;
 
-
-#[derive(Debug)]
-pub enum Error {
-    Config(String),
-    Migration(String),
-    MigrationNotFound(String),
-    PathError(String),
-    IoOpen(std::io::Error),
-    IoCreate(std::io::Error),
-    IoRead(std::io::Error),
-    IoWrite(std::io::Error),
-    IoProc(std::io::Error),
-    Utf8Error(std::string::FromUtf8Error),
-    TomlDe(toml::de::Error),
-    TomlSe(toml::ser::Error),
-}
-
-impl fmt::Display for Error {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        use Error::*;
-        match *self {
-            Config(ref s)             => write!(f, "Config Error: {}", s),
-            Migration(ref s)          => write!(f, "Migration Error: {}", s),
-            MigrationNotFound(ref s)  => write!(f, "MigrationNotFound: {}", s),
-            PathError(ref s)          => write!(f, "PathError: {}", s),
-            IoOpen(ref e)             => write!(f, "IoOpen Error: {}", e),
-            IoCreate(ref e)           => write!(f, "IoCreate Error: {}", e),
-            IoRead(ref e)             => write!(f, "IoRead Error: {}", e),
-            IoWrite(ref e)            => write!(f, "IoWrite Error: {}", e),
-            IoProc(ref e)             => write!(f, "IoProcess Error: {}", e),
-            Utf8Error(ref e)          => write!(f, "Utf8 Error: {}", e),
-            TomlDe(ref e)             => write!(f, "Toml Deserialization Error: {}", e),
-            TomlSe(ref e)             => write!(f, "Toml Serialization Error: {}", e),
-        }
-    }
-}
-
-impl std::error::Error for Error {
-    fn description(&self) -> &str {
-        "Migrant Error"
-    }
-
-    fn cause(&self) -> Option<&std::error::Error> {
-        use Error::*;
-        Some(match *self {
-            IoOpen(ref e)     => e,
-            IoCreate(ref e)   => e,
-            IoRead(ref e)     => e,
-            IoWrite(ref e)    => e,
-            IoProc(ref e)     => e,
-            Utf8Error(ref e)  => e,
-            TomlDe(ref e)     => e,
-            TomlSe(ref e)     => e,
-            _ => return None
-        })
-    }
-}
-
-
-type Result<T> = std::result::Result<T, Error>;
-
-
-macro_rules! bail {
-    (Config <- $msg:expr) => {
-        return Err(Error::Config($msg))
-    };
-    (Migration <- $msg:expr) => {
-        return Err(Error::Migration($msg))
-    };
-    (MigrationNotFound <- $msg:expr) => {
-        return Err(Error::MigrationNotFound($msg))
-    }
-}
+#[macro_use]
+mod errors;
+pub use errors::*;
 
 
 static CONFIG_FILE: &'static str = ".migrant.toml";
@@ -180,12 +110,12 @@ impl Config {
         println!(" $ You can specify the absolute location now, or nothing to exit");
         let ans = Prompt::with_msg(" $ >> ").ask()?;
         if ans.trim().is_empty() {
-            bail!(Config <- "No `.migrant.toml` path provided".into())
+            bail!(Config <- "No `.migrant.toml` path provided")
         }
 
         let path = PathBuf::from(ans);
         if !path.is_absolute() || path.file_name().unwrap() != ".migrant.toml" {
-            bail!(Config <- format!("Invalid absolute path: {}, must end in '.migrant.toml'", path.display()));
+            bail!(Config <- "Invalid absolute path: {}, must end in '.migrant.toml'", path.display());
         }
         Ok(path)
     }
@@ -193,12 +123,12 @@ impl Config {
     /// Initialize project in the given directory
     pub fn init(dir: &PathBuf) -> Result<Config> {
         let config_path = Config::confirm_new_config_location(dir.clone())
-            .map_err(|e| Error::Config(format!("unable to create a .migrant.toml config -> {}", e)))?;
+            .map_err(|e| format_err!(Error::Config, "unable to create a .migrant.toml config -> {}", e))?;
 
         let db_type = Prompt::with_msg(" db-type (sqlite|postgres) >> ").ask()?;
         match db_type.as_ref() {
             "postgres" | "sqlite" => (),
-            e => bail!(Config <- format!("unsupported database type: {}", e)),
+            e => bail!(Config <- "unsupported database type: {}", e),
         }
 
         let (db_name, db_user, db_pass) = match db_type.as_ref() {
@@ -358,7 +288,7 @@ fn connect_string(settings: &Settings) -> Result<String> {
     };
     let user = match settings.database_user {
         Some(ref user) => user.to_string(),
-        None => bail!(Config <- "config-err: 'database_user' not specified".into()),
+        None => bail!(Config <- "config-err: 'database_user' not specified"),
     };
     Ok(format!("{db_type}://{user}{pass}@{host}/{db_name}",
             db_type=settings.database_type,
@@ -544,7 +474,7 @@ fn apply_migration(project_dir: &PathBuf, config_path: &PathBuf, config: &Config
     mig_dir.push(PathBuf::from(&config.settings.migration_location));
 
     let new_config = match next_available(&direction, &mig_dir, config.settings.applied.as_slice()) {
-        None => bail!(MigrationNotFound <- format!("No un-applied `{}` migration found in `{}/`", direction, config.settings.migration_location)),
+        None => bail!(MigrationComplete <- "No un-applied `{}` migration found in `{}/`", direction, config.settings.migration_location),
         Some(next) => {
             println!("Applying: {:?}", next);
 
@@ -552,7 +482,7 @@ fn apply_migration(project_dir: &PathBuf, config_path: &PathBuf, config: &Config
                 String::new()
             } else {
                 let out = runner(config, next.to_str().unwrap())
-                    .map_err(|e| Error::Migration(format!("Error occurred while running migration -> {}", e)))?;
+                    .map_err(|e| format_err!(Error::Migration, "Error occurred while running migration -> {}", e))?;
 
                 let success = out.status.success();
                 if !success {
@@ -561,7 +491,7 @@ fn apply_migration(project_dir: &PathBuf, config_path: &PathBuf, config: &Config
                     if force {
                         println!("{}", info);
                     } else {
-                        bail!(Migration <- format!("Migration was unsuccessful...\n{}", info));
+                        bail!(Migration <- "Migration was unsuccessful...\n{}", info);
                     }
                 }
                 String::from_utf8(out.stdout).map_err(Error::Utf8Error)?
@@ -596,7 +526,9 @@ fn apply_migration(project_dir: &PathBuf, config_path: &PathBuf, config: &Config
         match res {
             Ok(_) => (),
             Err(error) => match error {
-                Error::MigrationNotFound(_) => (),
+                // No more migrations in this direction
+                Error::MigrationComplete(_) => (),
+                // Some actual error
                 e => return Err(e),
             }
         }
@@ -640,7 +572,7 @@ pub fn list(config: &Config) -> Result<()> {
 /// Create a new migration with the given tag
 pub fn new(config: &Config, tag: &str) -> Result<()> {
     if TAG_RE.is_match(tag) {
-        bail!(Migration <- format!("Invalid tag `{}`. Tags can contain [a-z0-9-]", tag));
+        bail!(Migration <- "Invalid tag `{}`. Tags can contain [a-z0-9-]", tag);
     }
     let now = chrono::UTC::now();
     let dt_string = now.format(DT_FORMAT).to_string();
