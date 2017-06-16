@@ -305,9 +305,23 @@ fn connect_string(settings: &Settings) -> Result<String> {
 }
 
 
+/// Before running any SQLite migrations make sure the database file exists
+fn create_if_missing(db_path: &PathBuf) -> Result<()> {
+    if let Err(e) = fs::File::open(&db_path) {
+        match e.kind() {
+            io::ErrorKind::NotFound => {
+                fs::File::create(db_path).map_err(Error::IoCreate)?;
+            }
+            _ => (),
+        };
+    };
+    Ok(())
+}
+
 /// Fall back to running the migration using the sqlite cli
 #[cfg(not(feature="sqlite"))]
 fn run_sqlite(db_path: &PathBuf, filename: &str) -> Result<()> {
+    create_if_missing(&db_path)?;
     Command::new("sqlite3")
             .arg(db_path.to_str().unwrap())
             .arg(&format!(".read {}", filename))
@@ -320,6 +334,7 @@ fn run_sqlite(db_path: &PathBuf, filename: &str) -> Result<()> {
 fn run_sqlite(db_path: &PathBuf, filename: &str) -> Result<()> {
     use rusqlite::Connection;
 
+    create_if_missing(&db_path)?;
     let mut file = fs::File::open(filename)
         .map_err(Error::IoOpen)?;
     let mut buf = String::new();
