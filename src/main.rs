@@ -1,19 +1,17 @@
 #[macro_use] extern crate clap;
-extern crate migrant;
+extern crate migrant_lib;
 
 use std::env;
 use std::path::PathBuf;
 use clap::{Arg, App, SubCommand};
-use migrant::Error;
-use migrant::Config;
-use migrant::Direction;
+use migrant_lib::{Error, Config, Direction, Migrator};
 
 
 fn main() {
     let matches = App::new("Migrant")
         .version(crate_version!())
         .author("James K. <james.kominick@gmail.com>")
-        .about("Postgres migration manager")
+        .about("Postgres/SQLite migration manager")
         .subcommand(SubCommand::with_name("init")
             .about("Initialize project"))
         .subcommand(SubCommand::with_name("list")
@@ -48,17 +46,22 @@ fn main() {
     let dir = env::current_dir().expect("Unable to retrieve current directory");
 
     if let Err(ref e) = run(&dir, &matches) {
-        println!("error: {}", e);
-        ::std::process::exit(1);
+        match *e {
+            Error::MigrationComplete(ref s) => println!("{}", s),
+            _ => {
+                println!("[ERROR] {}", e);
+                ::std::process::exit(1);
+            }
+        }
     }
 }
 
 
 fn run(dir: &PathBuf, matches: &clap::ArgMatches) -> Result<(), Error> {
-    let config_path = migrant::search_for_config(dir);
+    let config_path = migrant_lib::search_for_config(dir);
 
     if matches.is_present("init") || config_path.is_none() {
-        let _ = migrant::Config::init(dir)?;
+        let _ = Config::init(dir)?;
         return Ok(())
     }
 
@@ -68,12 +71,12 @@ fn run(dir: &PathBuf, matches: &clap::ArgMatches) -> Result<(), Error> {
 
     match matches.subcommand() {
         ("list", _) => {
-            migrant::list(&config)?;
+            migrant_lib::list(&config)?;
         }
         ("new", Some(matches)) => {
             let tag = matches.value_of("TAG").unwrap();
-            migrant::new(&config, tag)?;
-            migrant::list(&config)?;
+            migrant_lib::new(&config, tag)?;
+            migrant_lib::list(&config)?;
         }
         ("apply", Some(matches)) => {
             let force = matches.is_present("force");
@@ -81,7 +84,7 @@ fn run(dir: &PathBuf, matches: &clap::ArgMatches) -> Result<(), Error> {
             let all = matches.is_present("all");
             let direction = if matches.is_present("down") { Direction::Down } else { Direction::Up };
 
-            migrant::Migrator::with_config(&config)
+            Migrator::with_config(&config)
                 .direction(direction)
                 .force(force)
                 .fake(fake)
@@ -89,10 +92,10 @@ fn run(dir: &PathBuf, matches: &clap::ArgMatches) -> Result<(), Error> {
                 .apply()?;
 
             let config = config.reload()?;
-            migrant::list(&config)?;
+            migrant_lib::list(&config)?;
         }
         ("shell", _) => {
-            migrant::shell(&config)?;
+            migrant_lib::shell(&config)?;
         }
         ("which-config", _) => {
             println!("{}", config_path.to_str().unwrap());

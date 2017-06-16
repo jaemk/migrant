@@ -1,5 +1,5 @@
 # Migrant [![Build Status](https://travis-ci.org/jaemk/migrant.svg?branch=master)](https://travis-ci.org/jaemk/migrant) [![crates.io](https://img.shields.io/crates/v/migrant.svg)](https://crates.io/crates/migrant) [![docs](https://docs.rs/migrant/badge.svg)](https://docs.rs/migrant)
-> Basic migration manager
+> Basic migration manager powered by [migrant_lib](https://github.com/jaemk/migrant/tree/master)
 
 Currently supports:
  * postgres
@@ -30,4 +30,4 @@ cargo install migrant
 
 ### Usage as a library
 
-See [examples](https://github.com/jaemk/migrant/tree/master/examples)
+See [migrant_lib](https://github.com/jaemk/migrant/tree/master/migrant_lib) and [examples](https://github.com/jaemk/migrant/tree/master/migrant_lib/examples)

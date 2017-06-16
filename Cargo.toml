@@ -1,6 +1,6 @@
 [package]
 name = "migrant"
-version = "0.6.0"
+version = "0.7.0"
 authors = ["James Kominick <james.kominick@gmail.com>"]
 description = "Simple migration manager for postgres, sqlite"
 repository = "https://github.com/jaemk/migrant"
@@ -8,17 +8,11 @@ readme = "README.md"
 keywords = ["database", "migration", "sql", "postgres", "sqlite"]
 license = "MIT"
 
-[[bin]]
-name = "migrant"
-doc = false
-
 [dependencies]
-lazy_static = "0.2"
-regex = "0.2"
 clap = "2.19.*"
-rpassword = "0.3"
-chrono = "0.2"
-walkdir = "1"
-toml = "0.3"
-serde = "0.9"
-serde_derive = "0.9"
+migrant_lib = { version = "0.7", path = "migrant_lib/" }
+
+[features]
+default = ["sqlite", "postgresql"]
+sqlite = ["migrant_lib/sqlite"]
+postgresql = ["migrant_lib/postgresql"]

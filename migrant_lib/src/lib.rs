@@ -7,6 +7,12 @@ extern crate chrono;
 extern crate walkdir;
 extern crate regex;
 
+#[cfg(feature="postgresql")]
+extern crate postgres;
+
+#[cfg(feature="sqlite")]
+extern crate rusqlite;
+
 use std::collections::HashMap;
 use std::process::Command;
 use std::io::{self, Read, Write};
@@ -299,27 +305,78 @@ fn connect_string(settings: &Settings) -> Result<String> {
 }
 
 
+/// Fall back to running the migration using the sqlite cli
+#[cfg(not(feature="sqlite"))]
+fn run_sqlite(db_path: &PathBuf, filename: &str) -> Result<()> {
+    Command::new("sqlite3")
+            .arg(db_path.to_str().unwrap())
+            .arg(&format!(".read {}", filename))
+            .output()
+            .map_err(Error::IoProc)?;
+    Ok(())
+}
+
+#[cfg(feature="sqlite")]
+fn run_sqlite(db_path: &PathBuf, filename: &str) -> Result<()> {
+    use rusqlite::Connection;
+
+    let mut file = fs::File::open(filename)
+        .map_err(Error::IoOpen)?;
+    let mut buf = String::new();
+    file.read_to_string(&mut buf)
+        .map_err(Error::IoRead)?;
+    if buf.is_empty() { return Ok(()); }
+
+    let conn = Connection::open(db_path)
+        .map_err(|e| format_err!(Error::Migration, "{}", e))?;
+    conn.execute(&buf, &[])
+        .map_err(|e| format_err!(Error::Migration, "{}", e))?;
+    Ok(())
+}
+
+
+#[cfg(feature="postgresql")]
+fn run_postgres(conn_str: &str, filename: &str) -> Result<()> {
+    use postgres::{Connection, TlsMode};
+
+    let mut file = fs::File::open(filename)
+        .map_err(Error::IoOpen)?;
+    let mut buf = String::new();
+    file.read_to_string(&mut buf)
+        .map_err(Error::IoRead)?;
+
+    let conn = Connection::connect(conn_str, TlsMode::None)
+        .map_err(|e| format_err!(Error::Migration, "{}", e))?;
+    conn.execute(&buf, &[])
+        .map_err(|e| format_err!(Error::Migration, "{}", e))?;
+    Ok(())
+}
+
+/// Fall back to running the migration using the postgres cli
+#[cfg(not(feature="postgresql"))]
+fn run_postgres(conn_str: &str, filename: &str) -> Result<()> {
+    Command::new("psql")
+            .arg(&conn_str)
+            .arg("-f").arg(filename)
+            .output()
+            .map_err(Error::IoProc)?;
+    Ok(())
+}
+
+
 /// Run a given migration file through either sqlite or postgres, returning the output
-fn runner(config: &Config, filename: &str) -> Result<std::process::Output> {
+fn runner(config: &Config, filename: &str) -> Result<()> {
     let settings = &config.settings;
     Ok(match settings.database_type.as_ref() {
         "sqlite" => {
             let mut db_path = config.path.clone();
             db_path.pop();
             db_path.push(&settings.database_name);
-            Command::new("sqlite3")
-                    .arg(db_path.to_str().unwrap())
-                    .arg(&format!(".read {}", filename))
-                    .output()
-                    .map_err(Error::IoProc)?
+            run_sqlite(&db_path, filename)?;
         }
         "postgres" => {
             let conn_str = connect_string(settings)?;
-            Command::new("psql")
-                    .arg(&conn_str)
-                    .arg("-f").arg(&filename)
-                    .output()
-                    .map_err(Error::IoProc)?
+            run_postgres(&conn_str, filename)?;
         }
         _ => unreachable!(),
     })
@@ -476,29 +533,22 @@ fn apply_migration(project_dir: &PathBuf, config_path: &PathBuf, config: &Config
     let new_config = match next_available(&direction, &mig_dir, config.settings.applied.as_slice()) {
         None => bail!(MigrationComplete <- "No un-applied `{}` migration found in `{}/`", direction, config.settings.migration_location),
         Some(next) => {
-            println!("Applying: {:?}", next);
+            print!("Applying: {:?}", next);
 
-            let stdout = if fake {
-                String::new()
+            if fake {
+                println!("  ✓ (fake)");
             } else {
-                let out = runner(config, next.to_str().unwrap())
-                    .map_err(|e| format_err!(Error::Migration, "Error occurred while running migration -> {}", e))?;
-
-                let success = out.status.success();
-                if !success {
-                    let info = String::from_utf8(out.stderr).map_err(Error::Utf8Error)?;
-                    let info = format!(" ** Error **\n{}", info);
-                    if force {
-                        println!("{}", info);
-                    } else {
-                        bail!(Migration <- "Migration was unsuccessful...\n{}", info);
+                match runner(config, next.to_str().unwrap()) {
+                    Ok(_) => println!("  ✓"),
+                    Err(ref e) => {
+                        println!();
+                        if force {
+                            println!(" ** Error ** (Continuing because `--force` flag was specified)\n ** {}", e);
+                        } else {
+                            bail!(Migration <- "Migration was unsucessful...\n{}", e);
+                        }
                     }
-                }
-                String::from_utf8(out.stdout).map_err(Error::Utf8Error)?
-            };
-
-            if !stdout.is_empty() {
-                println!("{}", stdout);
+                };
             }
 
             let mut config = config.clone();
@@ -563,7 +613,7 @@ pub fn list(config: &Config) -> Result<()> {
             .map(str::to_string)
             .expect(&format!("Error extracting parent dir-name from: {:?}", mig.up));
         let x = config.settings.applied.contains(&tagname);
-        println!(" -> [{x}] {name}", x=if x { 'x' } else { ' ' }, name=tagname);
+        println!(" -> [{x}] {name}", x=if x { '✓' } else { ' ' }, name=tagname);
     }
     Ok(())
 }
