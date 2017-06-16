@@ -2,21 +2,22 @@
 name = "migrant_lib"
 version = "0.7.0"
 authors = ["James Kominick <james.kominick@gmail.com>"]
-description = "Simple migration manager library for postgres, sqlite"
-repository = "https://github.com/jaemk/migrant/migrant_lib"
+description = "Simple database migration library for postgres, sqlite"
+repository = "https://github.com/jaemk/migrant"
 readme = "README.md"
 keywords = ["database", "migration", "sql", "postgres", "sqlite"]
 license = "MIT"
+workspace = ".."
 
 [dependencies]
+chrono = "0.3"
 lazy_static = "0.2"
 regex = "0.2"
-rpassword = "0.3"
-chrono = "0.2"
+rpassword = "0.4"
 walkdir = "1"
-toml = "0.3"
-serde = "0.9"
-serde_derive = "0.9"
+serde = "1"
+serde_derive = "1"
+toml = "0.4"
 postgres = {version = "0.14", optional = true}
 rusqlite = {version = "0.12", optional = true, features = ["bundled"] }
 

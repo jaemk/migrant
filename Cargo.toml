@@ -12,6 +12,11 @@ license = "MIT"
 clap = "2.19.*"
 migrant_lib = { version = "0.7", path = "migrant_lib/" }
 
+[workspace]
+members = [
+    "migrant_lib",
+]
+
 [features]
 default = ["sqlite", "postgresql"]
 sqlite = ["migrant_lib/sqlite"]
