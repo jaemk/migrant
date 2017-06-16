@@ -2,3 +2,4 @@ target
 .migrant.toml
 migrations
 db
+db.db
