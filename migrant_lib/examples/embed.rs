@@ -23,7 +23,7 @@ pub fn main() {
     // This will fail if no migration files are present!
     // Run all available `up` migrations
     // migrant_lib::Migrator::with_config(&config)
-    //     .direction(migrant::Direction::Up)
+    //     .direction(migrant_lib::Direction::Up)
     //     .all(true)
     //     .apply()
     //     .expect("failed to apply migrations")
