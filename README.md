@@ -1,5 +1,5 @@
 # Migrant [![Build Status](https://travis-ci.org/jaemk/migrant.svg?branch=master)](https://travis-ci.org/jaemk/migrant) [![crates.io](https://img.shields.io/crates/v/migrant.svg)](https://crates.io/crates/migrant) [![docs](https://docs.rs/migrant/badge.svg)](https://docs.rs/migrant)
-> Basic migration manager powered by [migrant_lib](https://github.com/jaemk/migrant/tree/master)
+> Basic migration manager powered by [migrant_lib](https://github.com/jaemk/migrant/tree/master/migrant_lib)
 
 Currently supports:
  * postgres
@@ -8,9 +8,22 @@ Currently supports:
 
 ### Installation
 
+By default `migrant` will build with the `postgres` and `rusqlite` database driver libraries. Both of these require their dev libraries (`postgres`: `libpq-dev`, `sqlite`: `libsqlite3-dev`). The binary releases are built with these defaults. `migrant` can also function without these dependencies, falling back to utilizing each database's `cli` commands (`psql` & `sqlite3`)
+
 See [releases](https://github.com/jaemk/migrant/releases) for binaries, or
+
 ```shell
+# install with default features
 cargo install migrant
+
+# install with `postgres`
+cargo install migrant --no-default-features --features postgresql
+
+# install with `rusqlite`
+cargo install migrant --no-default-features --features sqlite
+
+# use cli commands for all db interaction
+cargo install migrant --no-default-features 
 ```
 
 ### Simple Usage
@@ -25,7 +38,7 @@ cargo install migrant
 
 `migrant shell` - open a repl
 
-`migrant which-config` - display the full path of the .migrant.toml file being used
+`migrant which-config` - display the full path of the `.migrant.toml` file being used
 
 
 ### Usage as a library
