@@ -62,7 +62,6 @@ impl std::error::Error for Error {
 }
 
 
-#[macro_export]
 macro_rules! format_err {
     ($e_type:expr, $literal:expr) => {
         $e_type(format!($literal))
@@ -72,7 +71,7 @@ macro_rules! format_err {
     };
 }
 
-#[macro_export]
+
 macro_rules! bail {
     (Config <- $msg:expr) => {
         return Err(format_err!(Error::Config, $msg))
