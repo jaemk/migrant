@@ -1,4 +1,4 @@
-# Migrant [![Build Status](https://travis-ci.org/jaemk/migrant.svg?branch=master)](https://travis-ci.org/jaemk/migrant) [![crates.io:migrant](https://img.shields.io/crates/v/migrant.svg)](https://crates.io/crates/migrant) [![crates.io:migrant_lib](https://img.shields.io/crates/v/migrant_lib.svg)](https://crates.io/crates/migrant_lib) [![docs](https://docs.rs/migrant_lib/badge.svg)](https://docs.rs/migrant_lib)
+# Migrant [![Build Status](https://travis-ci.org/jaemk/migrant.svg?branch=master)](https://travis-ci.org/jaemk/migrant) [![crates.io:migrant](https://img.shields.io/crates/v/migrant.svg?label=migrant)](https://crates.io/crates/migrant) [![crates.io:migrant_lib](https://img.shields.io/crates/v/migrant_lib.svg?label=migrant_lib)](https://crates.io/crates/migrant_lib) [![docs](https://docs.rs/migrant_lib/badge.svg)](https://docs.rs/migrant_lib)
 > Basic migration manager powered by [migrant_lib](https://github.com/jaemk/migrant/tree/master/migrant_lib)
 
 Currently supports:
