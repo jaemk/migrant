@@ -1,6 +1,6 @@
 [package]
 name = "migrant"
-version = "0.7.1"
+version = "0.8.0"
 authors = ["James Kominick <james.kominick@gmail.com>"]
 description = "Simple migration manager for postgres, sqlite"
 repository = "https://github.com/jaemk/migrant"
@@ -10,7 +10,7 @@ license = "MIT"
 
 [dependencies]
 clap = "2.19.*"
-migrant_lib = { version = "0.8", path = "migrant_lib/" }
+migrant_lib = { version = "0.9", path = "migrant_lib/" }
 
 [workspace]
 members = [
@@ -18,6 +18,6 @@ members = [
 ]
 
 [features]
-default = ["sqlite", "postgresql"]
+default = []
 sqlite = ["migrant_lib/sqlite"]
 postgresql = ["migrant_lib/postgresql"]
