@@ -8,22 +8,26 @@ Currently supports:
 
 ### Installation
 
-By default `migrant` will build with the `postgres` and `rusqlite` database driver libraries. Both of these require their dev libraries (`postgres`: `libpq-dev`, `sqlite`: `libsqlite3-dev`). The binary releases are built with these defaults. `migrant` can also function without these dependencies, falling back to utilizing each database's `cli` commands (`psql` & `sqlite3`)
+By default `migrant` will build without any features, falling back to using each database's `cli` commands (`psql` & `sqlite3`).
+The `postgres` and `rusqlite` database driver libraries can be activated with the `postgresql` and `sqlite` `features`.
+Both of these drivers require their dev libraries (`postgres`: `libpq-dev`, `sqlite`: `libsqlite3-dev`).
+The binary releases are built with these features.
 
 See [releases](https://github.com/jaemk/migrant/releases) for binaries, or
 
 ```shell
 # install with default features
+# use cli commands for all db interaction
 cargo install migrant
 
 # install with `postgres`
-cargo install migrant --no-default-features --features postgresql
+cargo install migrant --features postgresql
 
 # install with `rusqlite`
-cargo install migrant --no-default-features --features sqlite
+cargo install migrant --features sqlite
 
-# use cli commands for all db interaction
-cargo install migrant --no-default-features 
+# all
+cargo install migrant --features 'postgresql sqlite'
 ```
 
 ### Simple Usage
