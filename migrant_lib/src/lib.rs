@@ -207,7 +207,7 @@ impl fmt::Display for Direction {
 #[derive(Debug)]
 /// Migration meta data
 struct Migration {
-    stamp: chrono::DateTime<chrono::UTC>,
+    stamp: chrono::DateTime<chrono::Utc>,
     dir: PathBuf,
     up: PathBuf,
     down: PathBuf,
@@ -498,7 +498,7 @@ fn search_for_migrations(mig_root: &PathBuf) -> Vec<Migration> {
             dir: up.parent().map(PathBuf::from).unwrap(),
             up: up,
             down: down,
-            stamp: chrono::UTC.datetime_from_str(stamp, DT_FORMAT).unwrap()
+            stamp: chrono::Utc.datetime_from_str(stamp, DT_FORMAT).unwrap()
         };
         migrations.push(migration);
     }
@@ -639,7 +639,7 @@ pub fn new(config: &Config, tag: &str) -> Result<()> {
     if TAG_RE.is_match(tag) {
         bail!(Migration <- "Invalid tag `{}`. Tags can contain [a-z0-9-]", tag);
     }
-    let now = chrono::UTC::now();
+    let now = chrono::Utc::now();
     let dt_string = now.format(DT_FORMAT).to_string();
     let folder = format!("{stamp}_{tag}", stamp=dt_string, tag=tag);
     let mut mig_dir = parent_path(&config.path)?;
