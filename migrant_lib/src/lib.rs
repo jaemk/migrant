@@ -56,11 +56,11 @@ struct Settings {
     applied: Vec<String>,
 }
 impl Settings {
-    fn new(db_type: String, db_name: String, db_user: Option<String>, password: Option<String>) -> Settings {
+    fn new(db_type: String, db_name: String, db_host: Option<String>, db_user: Option<String>, password: Option<String>) -> Settings {
         Settings {
             database_type: db_type,
             database_name: db_name,
-            database_host: Some("localhost".to_string()),
+            database_host: db_host.or_else(|| Some("localhost".to_string())),
             database_user: db_user,
             database_password: password,
             migration_location: "migrations".to_string(),
@@ -137,10 +137,11 @@ impl Config {
             e => bail!(Config <- "unsupported database type: {}", e),
         }
 
-        let (db_name, db_user, db_pass) = match db_type.as_ref() {
+        let (db_name, db_host, db_user, db_pass) = match db_type.as_ref() {
             "postgres" => {
                 (
                     Prompt::with_msg(" $ database name >> ").ask()?,
+                    Some(Prompt::with_msg(&format!(" $ {} database host (leave blank to default to `localhost`) >> ", &db_type)).ask()?),
                     Some(Prompt::with_msg(&format!(" $ {} database user >> ", &db_type)).ask()?),
                     Some(Prompt::with_msg(&format!(" $ {} user password >> ", &db_type)).secure().ask()?),
                 )
@@ -150,12 +151,13 @@ impl Config {
                     Prompt::with_msg(" $ relative path to database (from .migrant.toml config file) >> ").ask()?,
                     None,
                     None,
+                    None,
                 )
             }
             _ => unreachable!(),
         };
 
-        let settings = Settings::new(db_type, db_name, db_user, db_pass);
+        let settings = Settings::new(db_type, db_name, db_host, db_user, db_pass);
         let config = Config::new(settings, &config_path);
         config.save()?;
         Ok(config)
