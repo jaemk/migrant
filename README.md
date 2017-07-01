@@ -1,5 +1,5 @@
 # Migrant [![Build Status](https://travis-ci.org/jaemk/migrant.svg?branch=master)](https://travis-ci.org/jaemk/migrant) [![crates.io:migrant](https://img.shields.io/crates/v/migrant.svg?label=migrant)](https://crates.io/crates/migrant) [![crates.io:migrant_lib](https://img.shields.io/crates/v/migrant_lib.svg?label=migrant_lib)](https://crates.io/crates/migrant_lib) [![docs](https://docs.rs/migrant_lib/badge.svg)](https://docs.rs/migrant_lib)
-> Basic migration manager powered by [migrant_lib](https://github.com/jaemk/migrant/tree/master/migrant_lib)
+> Basic migration manager powered by [`migrant_lib`](https://github.com/jaemk/migrant/tree/master/migrant_lib)
 
 Currently supports:
  * postgres
@@ -16,7 +16,7 @@ The binary releases are built with these features.
 See [releases](https://github.com/jaemk/migrant/releases) for binaries, or
 
 ```shell
-# install with default features
+# install without features
 # use cli commands for all db interaction
 cargo install migrant
 
@@ -47,4 +47,4 @@ cargo install migrant --features 'postgresql sqlite'
 
 ### Usage as a library
 
-See [migrant_lib](https://github.com/jaemk/migrant/tree/master/migrant_lib) and [examples](https://github.com/jaemk/migrant/tree/master/migrant_lib/examples)
+See [`migrant_lib`](https://github.com/jaemk/migrant/tree/master/migrant_lib) and [examples](https://github.com/jaemk/migrant/tree/master/migrant_lib/examples)
