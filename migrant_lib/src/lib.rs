@@ -6,6 +6,7 @@ extern crate rpassword;
 extern crate chrono;
 extern crate walkdir;
 extern crate regex;
+extern crate percent_encoding;
 
 #[cfg(feature="postgresql")]
 extern crate postgres;
@@ -21,6 +22,7 @@ use std::ffi::OsStr;
 use std::fs;
 use std::fmt;
 
+use percent_encoding::{percent_encode, DEFAULT_ENCODE_SET};
 use rpassword::read_password;
 use walkdir::WalkDir;
 use chrono::TimeZone;
@@ -183,6 +185,43 @@ impl Config {
             .map_err(Error::IoWrite)?;
         Ok(())
     }
+    /// Generate a database connection string.
+    /// Not intended for file-based databases (sqlite)
+    pub fn connect_string(&self) -> Result<String> {
+        match self.settings.database_type.as_ref() {
+            "postgres" => (),
+            db_t => bail!(Config <- "Cannot generate connect-string for database-type: {}", db_t),
+        };
+
+        let pass = match self.settings.database_password {
+            Some(ref pass) => {
+                let p = encode(pass);
+                format!(":{}", p)
+            },
+            None => "".into(),
+        };
+        let user = match self.settings.database_user {
+            Some(ref user) => encode(user),
+            None => bail!(Config <- "config-err: 'database_user' not specified"),
+        };
+        let host = self.settings.database_host.as_ref()
+            .map(|s| s.to_string())
+            .unwrap_or("localhost".to_string());
+        let host = encode(&host);
+        let db_name = encode(&self.settings.database_name);
+        Ok(format!("{db_type}://{user}{pass}@{host}/{db_name}",
+                db_type=self.settings.database_type,
+                user=user,
+                pass=pass,
+                host=host,
+                db_name=db_name))
+    }
+}
+
+
+/// Percent encode a string
+fn encode(s: &str) -> String {
+    percent_encode(s.as_bytes(), DEFAULT_ENCODE_SET).to_string()
 }
 
 
@@ -288,25 +327,6 @@ impl Migrator {
 }
 
 
-/// Generate a database connection string
-fn connect_string(settings: &Settings) -> Result<String> {
-    let pass = match settings.database_password {
-        Some(ref pass) => format!(":{}", pass),
-        None => "".into(),
-    };
-    let user = match settings.database_user {
-        Some(ref user) => user.to_string(),
-        None => bail!(Config <- "config-err: 'database_user' not specified"),
-    };
-    Ok(format!("{db_type}://{user}{pass}@{host}/{db_name}",
-            db_type=settings.database_type,
-            user=user,
-            pass=pass,
-            host=settings.database_host.as_ref().unwrap_or(&"localhost".to_string()),
-            db_name=settings.database_name))
-}
-
-
 /// Before running any SQLite migrations make sure the database file exists
 fn create_if_missing(db_path: &PathBuf) -> Result<()> {
     if let Err(e) = fs::File::open(&db_path) {
@@ -392,7 +412,7 @@ fn runner(config: &Config, filename: &str) -> Result<()> {
             run_sqlite(&db_path, filename)?;
         }
         "postgres" => {
-            let conn_str = connect_string(settings)?;
+            let conn_str = config.connect_string()?;
             run_postgres(&conn_str, filename)?;
         }
         _ => unreachable!(),
@@ -673,7 +693,7 @@ pub fn shell(config: &Config) -> Result<()> {
                     .map_err(Error::IoProc)?;
         }
         "postgres" => {
-            let conn_str = connect_string(&config.settings)?;
+            let conn_str = config.connect_string()?;
             Command::new("psql")
                     .arg(&conn_str)
                     .spawn().unwrap().wait()
