@@ -185,6 +185,27 @@ impl Config {
             .map_err(Error::IoWrite)?;
         Ok(())
     }
+
+    /// Return the absolute path to the directory containing migration folders
+    pub fn migration_dir(&self) -> Result<PathBuf> {
+        self.path.parent()
+            .map(|p| p.join(&self.settings.migration_location))
+            .ok_or_else(|| format_err!(Error::PathError, "Error generating PathBuf to migration_location"))
+    }
+
+    /// Return the absolute path to the database file. This is intended for
+    /// sqlite3 databases only
+    pub fn database_path(&self) -> Result<PathBuf> {
+        match self.settings.database_type.as_ref() {
+            "sqlite" => (),
+            db_t => bail!(Config <- "Cannot retrieve database-path for database-type: {}", db_t),
+        };
+
+        self.path.parent()
+            .map(|p| p.join(&self.settings.database_name))
+            .ok_or_else(|| format_err!(Error::PathError, "Error generating PathBuf to database-path"))
+    }
+
     /// Generate a database connection string.
     /// Not intended for file-based databases (sqlite)
     pub fn connect_string(&self) -> Result<String> {
@@ -258,8 +279,6 @@ struct Migration {
 #[derive(Debug, Clone)]
 /// Migration applicator
 pub struct Migrator {
-    project_dir: PathBuf,
-    config_path: PathBuf,
     config: Config,
     direction: Direction,
     force: bool,
@@ -270,24 +289,13 @@ pub struct Migrator {
 impl Migrator {
     /// Initialize a new `Migrator` with a given config
     pub fn with_config(config: &Config) -> Self {
-        let project_dir = config.path.parent()
-            .map(Path::to_path_buf)
-            .expect(&format!("Error extracting parent file-path from: {:?}", config.path));
         Self {
             config: config.clone(),
-            config_path: config.path.clone(),
-            project_dir: project_dir,
             direction: Direction::Up,
             force: false,
             fake: false,
             all: false,
         }
-    }
-
-    /// Set `project_dir`
-    pub fn project_dir(mut self, proj_dir: &PathBuf) -> Self {
-        self.project_dir = proj_dir.clone();
-        self
     }
 
     /// Set `direction`. Default is `Up`.
@@ -320,8 +328,8 @@ impl Migrator {
     /// Apply migrations using current configuration
     pub fn apply(self) -> Result<()> {
         apply_migration(
-            &self.project_dir, &self.config_path, &self.config,
-            self.direction, self.force, self.fake, self.all,
+            &self.config, self.direction,
+            self.force, self.fake, self.all,
             )
     }
 }
@@ -406,9 +414,7 @@ fn runner(config: &Config, filename: &str) -> Result<()> {
     let settings = &config.settings;
     Ok(match settings.database_type.as_ref() {
         "sqlite" => {
-            let mut db_path = config.path.clone();
-            db_path.pop();
-            db_path.push(&settings.database_name);
+            let db_path = config.database_path()?;
             run_sqlite(&db_path, filename)?;
         }
         "postgres" => {
@@ -562,10 +568,9 @@ fn next_available(direction: &Direction, mig_dir: &PathBuf, applied: &[String]) 
 
 
 /// Try applying the next available migration in the specified `Direction`
-fn apply_migration(project_dir: &PathBuf, config_path: &PathBuf, config: &Config, direction: Direction,
+fn apply_migration(config: &Config, direction: Direction,
                        force: bool, fake: bool, all: bool) -> Result<()> {
-    let mut mig_dir = project_dir.clone();
-    mig_dir.push(PathBuf::from(&config.settings.migration_location));
+    let mig_dir = config.migration_dir()?;
 
     let new_config = match next_available(&direction, &mig_dir, config.settings.applied.as_slice()) {
         None => bail!(MigrationComplete <- "No un-applied `{}` migration found in `{}/`", direction, config.settings.migration_location),
@@ -609,7 +614,7 @@ fn apply_migration(project_dir: &PathBuf, config_path: &PathBuf, config: &Config
     };
 
     if all {
-        let res = apply_migration(project_dir, config_path, &new_config, direction, force, fake, all);
+        let res = apply_migration(&new_config, direction, force, fake, all);
         match res {
             Ok(_) => (),
             Err(error) => match error {
@@ -624,19 +629,10 @@ fn apply_migration(project_dir: &PathBuf, config_path: &PathBuf, config: &Config
 }
 
 
-/// Try extracting the parent path
-fn parent_path(path: &PathBuf) -> Result<PathBuf> {
-    path.parent()
-        .map(PathBuf::from)
-        .ok_or_else(|| format!("Error extracting parent path from: {:?}", path))
-        .map_err(Error::PathError)
-}
-
-
 /// List the currently applied and available migrations under `migration_location`
 pub fn list(config: &Config) -> Result<()> {
-    let mut mig_dir = parent_path(&config.path)?;
-    mig_dir.push(PathBuf::from(&config.settings.migration_location));
+    let mig_dir = config.migration_dir()?;
+
     let available = search_for_migrations(&mig_dir);
     if available.is_empty() {
         println!("No migrations found under {:?}", &mig_dir);
@@ -664,10 +660,11 @@ pub fn new(config: &Config, tag: &str) -> Result<()> {
     let now = chrono::Utc::now();
     let dt_string = now.format(DT_FORMAT).to_string();
     let folder = format!("{stamp}_{tag}", stamp=dt_string, tag=tag);
-    let mut mig_dir = parent_path(&config.path)?;
-    mig_dir.push(&config.settings.migration_location);
-    mig_dir.push(folder);
-    let _ = fs::create_dir_all(&mig_dir);
+
+    let mig_dir = config.migration_dir()?.join(folder);
+
+    fs::create_dir_all(&mig_dir)
+        .map_err(Error::IoCreate)?;
 
     let up = "up.sql";
     let down = "down.sql";
@@ -685,8 +682,7 @@ pub fn new(config: &Config, tag: &str) -> Result<()> {
 pub fn shell(config: &Config) -> Result<()> {
     Ok(match config.settings.database_type.as_ref() {
         "sqlite" => {
-            let mut db_path = parent_path(&config.path)?;
-            db_path.push(&config.settings.database_name);
+            let db_path = config.database_path()?;
             let _ = Command::new("sqlite3")
                     .arg(db_path.to_str().unwrap())
                     .spawn().unwrap().wait()
