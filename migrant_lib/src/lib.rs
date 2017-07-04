@@ -62,7 +62,7 @@ impl Settings {
         Settings {
             database_type: db_type,
             database_name: db_name,
-            database_host: db_host.or_else(|| Some("localhost".to_string())),
+            database_host: db_host.map(|host| if host.is_empty() { "localhost".to_string() } else { host }),
             database_user: db_user,
             database_password: password,
             migration_location: "migrations".to_string(),
@@ -228,7 +228,7 @@ impl Config {
         let host = self.settings.database_host.as_ref()
             .map(|s| s.to_string())
             .unwrap_or("localhost".to_string());
-        let host = encode(&host);
+        let host = if host.is_empty() { "localhost".to_string() } else { encode(&host) };
         let db_name = encode(&self.settings.database_name);
         Ok(format!("{db_type}://{user}{pass}@{host}/{db_name}",
                 db_type=self.settings.database_type,
