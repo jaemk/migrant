@@ -1,12 +1,13 @@
 [package]
 name = "migrant"
-version = "0.8.2"
+version = "0.8.3"
 authors = ["James Kominick <james.kominick@gmail.com>"]
 description = "Simple migration manager for postgres, sqlite"
 repository = "https://github.com/jaemk/migrant"
 readme = "README.md"
 keywords = ["database", "migration", "sql", "postgres", "sqlite"]
 license = "MIT"
+exclude = ["ci/", ".travis.yml", "migrant_lib/", "migrations/", "*.db"]
 
 [dependencies]
 clap = "2.19.*"
