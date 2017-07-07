@@ -183,17 +183,17 @@ impl Config {
                     println!("        Please initialize your database and user");
                     println!("\n  ex) sudo -u postgres createdb {}", &settings.database_name);
                     println!("      sudo -u postgres createuser {}", settings.database_user.as_ref().unwrap());
-                    println!("      sudo -u postgres psql -c \"alert user {} with password '****'\"", settings.database_user.as_ref().unwrap());
+                    println!("      sudo -u postgres psql -c \"alter user {} with password '****'\"", settings.database_user.as_ref().unwrap());
                     println!();
                     bail!(Config <- "Cannot connect to postgres database");
                 } else {
-                    println!(" - Connection confirmed ✓");
+                    println!("    - Connection confirmed ✓");
                 }
             }
             _ => unreachable!(),
         }
 
-        println!("\n ** Setting up `__migrant_migrations` table");
+        println!("\n ** Setting up migrations table");
         let table_created = match settings.database_type.as_ref() {
             "sqlite" => {
                 let db_path = config_path.parent().unwrap().join(&settings.database_name);
@@ -210,7 +210,7 @@ impl Config {
             println!("    - migrations table missing");
             println!("    - `__migrant_migrations` table created ✓");
         } else {
-            println!("    - migrations table already exists ✓");
+            println!("    - `__migrant_migrations` table already exists ✓");
         }
 
         config.save()?;
@@ -399,7 +399,7 @@ fn pg_can_connect(connect_string: &str) -> Result<bool> {
 }
 
 #[cfg(feature="postgresql")]
-fn pg_can_connect(connect_string: &str) -> Result<bool> {
+fn pg_can_connect(conn_str: &str) -> Result<bool> {
     use postgres::{Connection, TlsMode};
 
     match Connection::connect(conn_str, TlsMode::None) {
@@ -414,7 +414,78 @@ fn create_file_if_missing(path: &PathBuf) -> Result<bool> {
     if path.exists() {
         Ok(false)
     } else {
+        let db_dir = path.parent().unwrap();
+        fs::create_dir(db_dir).map_err(Error::IoCreate)?;
         fs::File::create(path).map_err(Error::IoCreate)?;
+        Ok(true)
+    }
+}
+
+
+mod sql {
+    pub static CREATE_TABLE: &'static str = "create table __migrant_migrations(tag text unique);";
+    //pub static GET_MIGRATIONS: &'static str = "select tag from __migrant_migrations;";
+
+    pub static SQLITE_MIGRATION_TABLE_EXISTS: &'static str = "select exists(select 1 from sqlite_master where type = 'table' and name = '__migrant_migrations');";
+    //pub static SQLITE_ADD_MIGRATION: &'static str = "into __migrant_migrations (tag) values ('{}');";
+    //pub static SQLITE_DELETE_MIGRATION: &'static str = "delete from __migrant_migrations where tag = '{}';";
+
+    pub static PG_MIGRATION_TABLE_EXISTS: &'static str = "select exists(select 1 from pg_tables where tablename = '__migrant_migrations');";
+    //pub static PG_ADD_MIGRATION: &'static str = "prepare stmt as insert into __migrant_migrations (tag) values ($1); execute stmt({}); deallocate stmt;";
+    //pub static PG_DELETE_MIGRATION: &'static str = "prepare stmt as delete from __migrant_migrations where tag = $1; execute stmt({}); deallocate stmt;";
+}
+
+#[cfg(not(feature="postgres"))]
+fn pg_migration_setup(conn_str: &str) -> Result<bool> {
+    let exists = Command::new("psql")
+                    .arg(conn_str)
+                    .arg("-t")      // no headers or footer
+                    .arg("-A")      // un-aligned output
+                    .arg("-F,")     // comma separator
+                    .arg("-c")
+                    .arg(sql::PG_MIGRATION_TABLE_EXISTS)
+                    .output()
+                    .map_err(Error::IoProc)?;
+    if !exists.status.success() {
+        let stderr = std::str::from_utf8(&exists.stderr).unwrap();
+        bail!(Migration <- "Error executing statement: {}", stderr);
+    }
+    let stdout = std::str::from_utf8(&exists.stdout).unwrap();
+    if stdout.trim() == "t" {
+        // exists
+        Ok(false)
+    } else {
+        let out = Command::new("psql")
+                        .arg(conn_str)
+                        .arg("-t")
+                        .arg("-A")
+                        .arg("-F,")
+                        .arg("-c")
+                        .arg(sql::CREATE_TABLE)
+                        .output()
+                        .map_err(Error::IoProc)?;
+        if !out.status.success() {
+            let stderr = std::str::from_utf8(&out.stderr).unwrap();
+            bail!(Migration <- "Error executing statement: {}", stderr);
+        }
+        Ok(true)
+    }
+}
+
+#[cfg(feature="postgres")]
+fn pg_migration_setup(conn_str: &str) -> Result<bool> {
+    use postgres::{Connection, TlsMode};
+
+    let conn = Connection::connect(conn_str, TlsMode::None)
+        .map_err(|e| format_err!(Error::Migration, "{}", e))?;
+    let rows = conn.query(sql::PG_MIGRATION_TABLE_EXISTS, &[])
+        .map_err(|e| format_err!(Error::Migration, "{}", e))?;
+    let exists: bool = rows.iter().next().unwrap().get(0);
+    if exists {
+        Ok(false)
+    } else {
+        conn.execute(sql::CREATE_TABLE, &[])
+            .map_err(|e| format_err!(Error::Migration, "{}", e))?;
         Ok(true)
     }
 }
@@ -422,8 +493,52 @@ fn create_file_if_missing(path: &PathBuf) -> Result<bool> {
 
 #[cfg(not(feature="sqlite"))]
 fn sqlite_migration_setup(db_path: &PathBuf) -> Result<bool> {
-    let out = Command::new("sqlite3")
-                    .arg(db_path.as_os_str().to_str().unwrap())
+    let db_path = db_path.as_os_str().to_str().unwrap();
+    let exists = Command::new("sqlite3")
+                    .arg(&db_path)
+                    .arg("-csv")
+                    .arg(sql::SQLITE_MIGRATION_TABLE_EXISTS)
+                    .output()
+                    .map_err(Error::IoProc)?;
+    if !exists.status.success() {
+        let stderr = std::str::from_utf8(&exists.stderr).unwrap();
+        bail!(Migration <- "Error executing statement: {}", stderr);
+    }
+    let stdout = std::str::from_utf8(&exists.stdout).unwrap();
+    if stdout.trim() == "1" {
+        // exists
+        Ok(false)
+    } else {
+        let out = Command::new("sqlite3")
+                        .arg(&db_path)
+                        .arg("-csv")
+                        .arg(sql::CREATE_TABLE)
+                        .output()
+                        .map_err(Error::IoProc)?;
+        if !out.status.success() {
+            let stderr = std::str::from_utf8(&out.stderr).unwrap();
+            bail!(Migration <- "Error executing statement: {}", stderr);
+        }
+        Ok(true)
+    }
+}
+
+#[cfg(feature="sqlite")]
+fn sqlite_migration_setup(db_path: &PathBuf) -> Result<bool> {
+    use rusqlite::Connection;
+
+    let conn = Connection::open(db_path)
+        .map_err(|e| format_err!(Error::Migration, "{}", e))?;
+    let exists: bool = conn.query_row(sql::SQLITE_MIGRATION_TABLE_EXISTS, &[], |row| row.get(0))
+        .map_err(|e| format_err!(Error::Migration, "{}", e))?;
+
+    if exists {
+        Ok(false)
+    } else {
+        conn.execute(sql::CREATE_TABLE, &[])
+            .map_err(|e| format_err!(Error::Migration, "{}", e))?;
+        Ok(true)
+    }
 }
 
 
@@ -749,7 +864,6 @@ pub fn new(config: &Config, tag: &str) -> Result<()> {
         let mut p = mig_dir.clone();
         p.push(mig);
         let _ = fs::File::create(&p).map_err(Error::IoCreate)?;
-        println!("Created: {:?}", p);
     }
     Ok(())
 }
