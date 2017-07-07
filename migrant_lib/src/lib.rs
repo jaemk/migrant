@@ -160,7 +160,59 @@ impl Config {
         };
 
         let settings = Settings::new(db_type, db_name, db_host, db_user, db_pass);
-        let config = Config::new(settings, &config_path);
+        let config = Config::new(settings.clone(), &config_path);
+
+        println!("\n ** Confirming database credentials");
+        match settings.database_type.as_ref() {
+            "sqlite" => {
+                let db_path = config_path.parent().unwrap().join(&settings.database_name);
+                let created = create_file_if_missing(&db_path)?;
+                println!("created: {}", created);
+                println!("    - checking if db file already exists...");
+                if created {
+                    println!("    - db not found... creating now... ✓")
+                } else {
+                    println!("    - db already exists ✓");
+                }
+            }
+            "postgres" => {
+                let conn_str = config.connect_string()?;
+                let can_connect = pg_can_connect(&conn_str)?;
+                if !can_connect {
+                    println!(" ERROR: Unable to connect to {}", conn_str);
+                    println!("        Please initialize your database and user");
+                    println!("\n  ex) sudo -u postgres createdb {}", &settings.database_name);
+                    println!("      sudo -u postgres createuser {}", settings.database_user.as_ref().unwrap());
+                    println!("      sudo -u postgres psql -c \"alert user {} with password '****'\"", settings.database_user.as_ref().unwrap());
+                    println!();
+                    bail!(Config <- "Cannot connect to postgres database");
+                } else {
+                    println!(" - Connection confirmed ✓");
+                }
+            }
+            _ => unreachable!(),
+        }
+
+        println!("\n ** Setting up `__migrant_migrations` table");
+        let table_created = match settings.database_type.as_ref() {
+            "sqlite" => {
+                let db_path = config_path.parent().unwrap().join(&settings.database_name);
+                sqlite_migration_setup(&db_path)?
+            }
+            "postgres" => {
+                let conn_str = config.connect_string()?;
+                pg_migration_setup(&conn_str)?
+            }
+            _ => unreachable!(),
+        };
+
+        if table_created {
+            println!("    - migrations table missing");
+            println!("    - `__migrant_migrations` table created ✓");
+        } else {
+            println!("    - migrations table already exists ✓");
+        }
+
         config.save()?;
         Ok(config)
     }
@@ -335,23 +387,49 @@ impl Migrator {
 }
 
 
-/// Before running any SQLite migrations make sure the database file exists
-fn create_if_missing(db_path: &PathBuf) -> Result<()> {
-    if let Err(e) = fs::File::open(&db_path) {
-        match e.kind() {
-            io::ErrorKind::NotFound => {
-                fs::File::create(db_path).map_err(Error::IoCreate)?;
-            }
-            _ => (),
-        };
-    };
-    Ok(())
+#[cfg(not(feature="postgresql"))]
+fn pg_can_connect(connect_string: &str) -> Result<bool> {
+    let out = Command::new("psql")
+                    .arg(connect_string)
+                    .arg("-c")
+                    .arg("")
+                    .output()
+                    .map_err(Error::IoProc)?;
+    Ok(out.status.success())
 }
+
+#[cfg(feature="postgresql")]
+fn pg_can_connect(connect_string: &str) -> Result<bool> {
+    use postgres::{Connection, TlsMode};
+
+    match Connection::connect(conn_str, TlsMode::None) {
+        Ok(_)   => Ok(true),
+        Err(_)  => Ok(false)
+    }
+}
+
+
+/// Create a file if it doesn't exist, returning true if the file was created
+fn create_file_if_missing(path: &PathBuf) -> Result<bool> {
+    if path.exists() {
+        Ok(false)
+    } else {
+        fs::File::create(path).map_err(Error::IoCreate)?;
+        Ok(true)
+    }
+}
+
+
+#[cfg(not(feature="sqlite"))]
+fn sqlite_migration_setup(db_path: &PathBuf) -> Result<bool> {
+    let out = Command::new("sqlite3")
+                    .arg(db_path.as_os_str().to_str().unwrap())
+}
+
 
 /// Fall back to running the migration using the sqlite cli
 #[cfg(not(feature="sqlite"))]
 fn run_sqlite(db_path: &PathBuf, filename: &str) -> Result<()> {
-    create_if_missing(&db_path)?;
     Command::new("sqlite3")
             .arg(db_path.to_str().unwrap())
             .arg(&format!(".read {}", filename))
@@ -364,7 +442,6 @@ fn run_sqlite(db_path: &PathBuf, filename: &str) -> Result<()> {
 fn run_sqlite(db_path: &PathBuf, filename: &str) -> Result<()> {
     use rusqlite::Connection;
 
-    create_if_missing(&db_path)?;
     let mut file = fs::File::open(filename)
         .map_err(Error::IoOpen)?;
     let mut buf = String::new();
