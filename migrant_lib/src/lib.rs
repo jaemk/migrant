@@ -106,6 +106,10 @@ impl Config {
     }
 
     fn load_applied(&self) -> Result<Vec<String>> {
+        if !self.migration_table_exists()? {
+            bail!(Migration <- "`__migrant_migrations` table is missing, maybe try re-initializing? -> `migrant init`")
+        }
+
         let applied = match self.settings.database_type.as_ref() {
             "sqlite" => sqlite_select_migrations(&self.settings.database_name)?,
             "postgres" => pg_select_migrations(&self.connect_string()?)?,
@@ -126,6 +130,15 @@ impl Config {
     /// Reload configuration file
     pub fn reload(&self) -> Result<Config> {
         Self::load(&self.path)
+    }
+
+    /// Check if a __migrant_migrations table exists
+    fn migration_table_exists(&self) -> Result<bool> {
+        match self.settings.database_type.as_ref() {
+            "sqlite"   => sqlite_migration_table_exists(self.settings.database_name.as_str()),
+            "postgres" => pg_migration_table_exists(&self.connect_string()?),
+            _ => unreachable!()
+        }
     }
 
     /// Insert given tag into database migration table
@@ -478,8 +491,9 @@ mod sql {
     pub static PG_DELETE_MIGRATION: &'static str = "prepare stmt as delete from __migrant_migrations where tag = $1; execute stmt('__VAL__'); deallocate stmt;";
 }
 
+
 #[cfg(not(feature="postgres"))]
-fn pg_migration_setup(conn_str: &str) -> Result<bool> {
+fn pg_migration_table_exists(conn_str: &str) -> Result<bool> {
     let exists = Command::new("psql")
                     .arg(conn_str)
                     .arg("-t")      // no headers or footer
@@ -494,10 +508,51 @@ fn pg_migration_setup(conn_str: &str) -> Result<bool> {
         bail!(Migration <- "Error executing statement: {}", stderr);
     }
     let stdout = std::str::from_utf8(&exists.stdout).unwrap();
-    if stdout.trim() == "t" {
-        // exists
-        Ok(false)
-    } else {
+    Ok(stdout.trim() == "t")
+}
+
+#[cfg(feature="postgres")]
+fn pg_migration_table_exists(conn_str: &str) -> Result<bool> {
+    use postgres::{Connection, TlsMode};
+
+    let conn = Connection::connect(conn_str, TlsMode::None)
+        .map_err(|e| format_err!(Error::Migration, "{}", e))?;
+    let rows = conn.query(sql::PG_MIGRATION_TABLE_EXISTS, &[])
+        .map_err(|e| format_err!(Error::Migration, "{}", e))?;
+    let exists: bool = rows.iter().next().unwrap().get(0);
+    Ok(exists)
+}
+
+
+#[cfg(not(feature="sqlite"))]
+fn sqlite_migration_table_exists(db_path: &str) -> Result<bool> {
+    let exists = Command::new("sqlite3")
+                    .arg(&db_path)
+                    .arg("-csv")
+                    .arg(sql::SQLITE_MIGRATION_TABLE_EXISTS)
+                    .output()
+                    .map_err(Error::IoProc)?;
+    if !exists.status.success() {
+        let stderr = std::str::from_utf8(&exists.stderr).unwrap();
+        bail!(Migration <- "Error executing statement: {}", stderr);
+    }
+    let stdout = std::str::from_utf8(&exists.stdout).unwrap();
+    Ok(stdout.trim() == "1")
+}
+
+#[cfg(feature="sqlite")]
+fn sqlite_migration_table_exists(db_path: &PathBuf) -> Result<bool> {
+    use rusqlite::Connection;
+
+    let conn = Connection::open(db_path)?;
+    let exists: bool = conn.query_row(sql::SQLITE_MIGRATION_TABLE_EXISTS, &[], |row| row.get(0))?;
+    Ok(exists)
+}
+
+
+#[cfg(not(feature="postgres"))]
+fn pg_migration_setup(conn_str: &str) -> Result<bool> {
+    if !pg_migration_table_exists(conn_str)? {
         let out = Command::new("psql")
                         .arg(conn_str)
                         .arg("-t")
@@ -511,47 +566,30 @@ fn pg_migration_setup(conn_str: &str) -> Result<bool> {
             let stderr = std::str::from_utf8(&out.stderr).unwrap();
             bail!(Migration <- "Error executing statement: {}", stderr);
         }
-        Ok(true)
+        return Ok(true)
     }
+    Ok(false)
 }
 
 #[cfg(feature="postgres")]
 fn pg_migration_setup(conn_str: &str) -> Result<bool> {
     use postgres::{Connection, TlsMode};
 
-    let conn = Connection::connect(conn_str, TlsMode::None)
-        .map_err(|e| format_err!(Error::Migration, "{}", e))?;
-    let rows = conn.query(sql::PG_MIGRATION_TABLE_EXISTS, &[])
-        .map_err(|e| format_err!(Error::Migration, "{}", e))?;
-    let exists: bool = rows.iter().next().unwrap().get(0);
-    if exists {
-        Ok(false)
-    } else {
+    if !pg_migration_table_exists(conn_str) {
+        let conn = Connection::connect(conn_str, TlsMode::None)
+            .map_err(|e| format_err!(Error::Migration, "{}", e))?;
         conn.execute(sql::CREATE_TABLE, &[])
             .map_err(|e| format_err!(Error::Migration, "{}", e))?;
-        Ok(true)
+        return Ok(true)
     }
+    Ok(false)
 }
 
 
 #[cfg(not(feature="sqlite"))]
 fn sqlite_migration_setup(db_path: &PathBuf) -> Result<bool> {
-    let db_path = db_path.to_str().unwrap();
-    let exists = Command::new("sqlite3")
-                    .arg(&db_path)
-                    .arg("-csv")
-                    .arg(sql::SQLITE_MIGRATION_TABLE_EXISTS)
-                    .output()
-                    .map_err(Error::IoProc)?;
-    if !exists.status.success() {
-        let stderr = std::str::from_utf8(&exists.stderr).unwrap();
-        bail!(Migration <- "Error executing statement: {}", stderr);
-    }
-    let stdout = std::str::from_utf8(&exists.stdout).unwrap();
-    if stdout.trim() == "1" {
-        // exists
-        Ok(false)
-    } else {
+    let db_path = db_path.as_os_str().to_str().unwrap();
+    if !sqlite_migration_table_exists(db_path)? {
         let out = Command::new("sqlite3")
                         .arg(&db_path)
                         .arg("-csv")
@@ -562,23 +600,21 @@ fn sqlite_migration_setup(db_path: &PathBuf) -> Result<bool> {
             let stderr = std::str::from_utf8(&out.stderr).unwrap();
             bail!(Migration <- "Error executing statement: {}", stderr);
         }
-        Ok(true)
+        return Ok(true)
     }
+    Ok(false)
 }
 
 #[cfg(feature="sqlite")]
 fn sqlite_migration_setup(db_path: &PathBuf) -> Result<bool> {
     use rusqlite::Connection;
 
-    let conn = Connection::open(db_path)?;
-    let exists: bool = conn.query_row(sql::SQLITE_MIGRATION_TABLE_EXISTS, &[], |row| row.get(0))?;
-
-    if exists {
-        Ok(false)
-    } else {
+    if !sqlite_migration_table_exists(db_path)? {
+        let conn = Connection::open(db_path)?;
         conn.execute(sql::CREATE_TABLE, &[])?;
-        Ok(true)
+        return Ok(true)
     }
+    Ok(false)
 }
 
 
