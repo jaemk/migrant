@@ -42,7 +42,7 @@ lazy_static! {
     static ref TAG_RE: Regex = Regex::new(r"[^a-z0-9-]+").unwrap();
 
     // For pulling out `tag` names from `toml::to_string`
-    static ref MIG_RE: Regex = Regex::new(r##"(?P<mig>"[\d]+_[a-z0-9-]+")"##).unwrap();
+    //static ref MIG_RE: Regex = Regex::new(r##"(?P<mig>"[\d]+_[a-z0-9-]+")"##).unwrap();
 }
 
 
@@ -474,7 +474,7 @@ mod sql {
     pub static SQLITE_DELETE_MIGRATION: &'static str = "delete from __migrant_migrations where tag = '__VAL__';";
 
     pub static PG_MIGRATION_TABLE_EXISTS: &'static str = "select exists(select 1 from pg_tables where tablename = '__migrant_migrations');";
-    pub static PG_ADD_MIGRATION: &'static str = "prepare stmt as insert into __migrant_migrations (tag) values ($1); execute stmt('__VAL__') deallocate stmt;";
+    pub static PG_ADD_MIGRATION: &'static str = "prepare stmt as insert into __migrant_migrations (tag) values ($1); execute stmt('__VAL__'); deallocate stmt;";
     pub static PG_DELETE_MIGRATION: &'static str = "prepare stmt as delete from __migrant_migrations where tag = $1; execute stmt('__VAL__'); deallocate stmt;";
 }
 
@@ -595,7 +595,6 @@ fn sqlite_select_migrations(db_path: &str) -> Result<Vec<String>> {
         bail!(Migration <- "Error executing statement: {}", stderr);
     }
     let stdout = std::str::from_utf8(&migs.stdout).unwrap();
-    println!("stdout: {}", stdout);
     Ok(stdout.trim().lines().map(String::from).collect::<Vec<_>>())
 }
 
@@ -617,7 +616,21 @@ fn sqlite_select_migrations(db_path: &str) -> Result<Vec<String>> {
 
 #[cfg(not(feature="postgres"))]
 fn pg_select_migrations(conn_str: &str) -> Result<Vec<String>> {
-    unimplemented!()
+    let migs = Command::new("psql")
+                    .arg(conn_str)
+                    .arg("-t")      // no headers or footer
+                    .arg("-A")      // un-aligned output
+                    .arg("-F,")     // comma separator
+                    .arg("-c")
+                    .arg(sql::GET_MIGRATIONS)
+                    .output()
+                    .map_err(Error::IoProc)?;
+    if !migs.status.success() {
+        let stderr = std::str::from_utf8(&migs.stderr).unwrap();
+        bail!(Migration <- "Error executing statement: {}", stderr);
+    }
+    let stdout = std::str::from_utf8(&migs.stdout).unwrap();
+    Ok(stdout.trim().lines().map(String::from).collect::<Vec<_>>())
 }
 
 #[cfg(feature="postgres")]
@@ -655,7 +668,20 @@ fn sqlite_insert_migration_tag(db_path: &str, tag: &str) -> Result<()> {
 
 #[cfg(not(feature="postgres"))]
 fn pg_insert_migration_tag(conn_str: &str, tag: &str) -> Result<()> {
-    unimplemented!()
+    let insert = Command::new("psql")
+                    .arg(conn_str)
+                    .arg("-t")      // no headers or footer
+                    .arg("-A")      // un-aligned output
+                    .arg("-F,")     // comma separator
+                    .arg("-c")
+                    .arg(sql::PG_ADD_MIGRATION.replace("__VAL__", tag))
+                    .output()
+                    .map_err(Error::IoProc)?;
+    if !insert.status.success() {
+        let stderr = std::str::from_utf8(&insert.stderr).unwrap();
+        bail!(Migration <- "Error executing statement: {}", stderr);
+    }
+    Ok(())
 }
 
 #[cfg(feature="postgres")]
@@ -690,7 +716,20 @@ fn sqlite_remove_migration_tag(db_path: &str, tag: &str) -> Result<()> {
 
 #[cfg(not(feature="postgres"))]
 fn pg_remove_migration_tag(conn_str: &str, tag: &str) -> Result<()> {
-    unimplemented!()
+    let insert = Command::new("psql")
+                    .arg(conn_str)
+                    .arg("-t")      // no headers or footer
+                    .arg("-A")      // un-aligned output
+                    .arg("-F,")     // comma separator
+                    .arg("-c")
+                    .arg(sql::PG_DELETE_MIGRATION.replace("__VAL__", tag))
+                    .output()
+                    .map_err(Error::IoProc)?;
+    if !insert.status.success() {
+        let stderr = std::str::from_utf8(&insert.stderr).unwrap();
+        bail!(Migration <- "Error executing statement: {}", stderr);
+    }
+    Ok(())
 }
 
 #[cfg(feature="postgres")]
@@ -951,12 +990,12 @@ fn apply_migration(config: &Config, direction: Direction,
                 .expect(&format!("Error extracting parent dir-name from: {:?}", next));
             match direction {
                 Direction::Up => {
-                    config.insert_migration_tag(&mig_tag);
+                    config.insert_migration_tag(&mig_tag)?;
                     //config.settings.applied.push(mig_tag);
                     //config.save()?;
                 }
                 Direction::Down => {
-                    config.delete_migration_tag(&mig_tag);
+                    config.delete_migration_tag(&mig_tag)?;
                     //config.settings.applied.pop();
                     //config.save()?;
                 }
