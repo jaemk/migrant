@@ -55,7 +55,7 @@ struct Settings {
     database_user: Option<String>,
     database_password: Option<String>,
     migration_location: String,
-    applied: Vec<String>,
+    //applied: Vec<String>,
 }
 impl Settings {
     fn new(db_type: String, db_name: String, db_host: Option<String>, db_user: Option<String>, password: Option<String>) -> Settings {
@@ -66,7 +66,7 @@ impl Settings {
             database_user: db_user,
             database_password: password,
             migration_location: "migrations".to_string(),
-            applied: vec![],
+            //applied: vec![],
         }
     }
 }
@@ -77,6 +77,7 @@ impl Settings {
 pub struct Config {
     pub path: PathBuf,
     settings: Settings,
+    applied: Vec<String>,
 }
 impl Config {
     /// Create a new config
@@ -84,6 +85,7 @@ impl Config {
         Config {
             path: path.clone(),
             settings: settings,
+            applied: vec![],
         }
     }
 
@@ -93,15 +95,57 @@ impl Config {
         let mut content = String::new();
         file.read_to_string(&mut content).map_err(Error::IoRead)?;
         let settings = toml::from_str::<Settings>(&content).map_err(Error::TomlDe)?;
-        Ok(Config {
+        let mut config = Config {
             path: path.clone(),
             settings: settings,
-        })
+            applied: vec![],
+        };
+        let applied = config.load_applied()?;
+        config.applied = applied;
+        Ok(config)
+    }
+
+    fn load_applied(&self) -> Result<Vec<String>> {
+        let applied = match self.settings.database_type.as_ref() {
+            "sqlite" => sqlite_select_migrations(&self.settings.database_name)?,
+            "postgres" => pg_select_migrations(&self.connect_string()?)?,
+            _ => unreachable!(),
+        };
+        let mut stamped = applied.into_iter().map(|tag| {
+            let stamp = chrono::Utc.datetime_from_str(
+                tag.split('_').next().unwrap(),
+                DT_FORMAT
+            ).unwrap();
+            (stamp, tag)
+        }).collect::<Vec<_>>();
+        stamped.sort_by(|a, b| a.0.cmp(&b.0));
+        let applied = stamped.into_iter().map(|tup| tup.1).collect::<Vec<_>>();
+        Ok(applied)
     }
 
     /// Reload configuration file
     pub fn reload(&self) -> Result<Config> {
         Self::load(&self.path)
+    }
+
+    /// Insert given tag into database migration table
+    fn insert_migration_tag(&self, tag: &str) -> Result<()> {
+        match self.settings.database_type.as_ref() {
+            "sqlite" => sqlite_insert_migration_tag(&self.settings.database_name, tag)?,
+            "postgres" => pg_insert_migration_tag(&self.connect_string()?, tag)?,
+            _ => unreachable!(),
+        };
+        Ok(())
+    }
+
+    /// Remove a given tag from the database migration table
+    fn delete_migration_tag(&self, tag: &str) -> Result<()> {
+        match self.settings.database_type.as_ref() {
+            "sqlite"   => sqlite_remove_migration_tag(&self.settings.database_name, tag)?,
+            "postgres" => pg_remove_migration_tag(&self.connect_string()?, tag)?,
+            _ => unreachable!(),
+        };
+        Ok(())
     }
 
     /// Determines whether new .migrant file location should be in
@@ -167,7 +211,6 @@ impl Config {
             "sqlite" => {
                 let db_path = config_path.parent().unwrap().join(&settings.database_name);
                 let created = create_file_if_missing(&db_path)?;
-                println!("created: {}", created);
                 println!("    - checking if db file already exists...");
                 if created {
                     println!("    - db not found... creating now... ✓")
@@ -222,17 +265,17 @@ impl Config {
         let mut file = fs::File::create(self.path.clone())
                         .map_err(Error::IoCreate)?;
         let content = toml::to_string(&self.settings).map_err(Error::TomlSe)?;
-        let content = content.lines().map(|line| {
-            if !line.starts_with("applied") { line.to_string() }
-            else {
-                // format the list of applied migrations nicely
-                let migs = MIG_RE.captures_iter(line)
-                    .map(|cap| format!("    {}", &cap["mig"]))
-                    .collect::<Vec<_>>()
-                    .join(",\n");
-                format!("applied = [\n{}\n]", migs)
-            }
-        }).collect::<Vec<_>>().join("\n");
+        //let content = content.lines().map(|line| {
+        //    if !line.starts_with("applied") { line.to_string() }
+        //    else {
+        //        // format the list of applied migrations nicely
+        //        let migs = MIG_RE.captures_iter(line)
+        //            .map(|cap| format!("    {}", &cap["mig"]))
+        //            .collect::<Vec<_>>()
+        //            .join(",\n");
+        //        format!("applied = [\n{}\n]", migs)
+        //    }
+        //}).collect::<Vec<_>>().join("\n");
         file.write_all(content.as_bytes())
             .map_err(Error::IoWrite)?;
         Ok(())
@@ -424,15 +467,15 @@ fn create_file_if_missing(path: &PathBuf) -> Result<bool> {
 
 mod sql {
     pub static CREATE_TABLE: &'static str = "create table __migrant_migrations(tag text unique);";
-    //pub static GET_MIGRATIONS: &'static str = "select tag from __migrant_migrations;";
+    pub static GET_MIGRATIONS: &'static str = "select tag from __migrant_migrations;";
 
     pub static SQLITE_MIGRATION_TABLE_EXISTS: &'static str = "select exists(select 1 from sqlite_master where type = 'table' and name = '__migrant_migrations');";
-    //pub static SQLITE_ADD_MIGRATION: &'static str = "into __migrant_migrations (tag) values ('{}');";
-    //pub static SQLITE_DELETE_MIGRATION: &'static str = "delete from __migrant_migrations where tag = '{}';";
+    pub static SQLITE_ADD_MIGRATION: &'static str = "insert into __migrant_migrations (tag) values ('__VAL__');";
+    pub static SQLITE_DELETE_MIGRATION: &'static str = "delete from __migrant_migrations where tag = '__VAL__';";
 
     pub static PG_MIGRATION_TABLE_EXISTS: &'static str = "select exists(select 1 from pg_tables where tablename = '__migrant_migrations');";
-    //pub static PG_ADD_MIGRATION: &'static str = "prepare stmt as insert into __migrant_migrations (tag) values ($1); execute stmt({}); deallocate stmt;";
-    //pub static PG_DELETE_MIGRATION: &'static str = "prepare stmt as delete from __migrant_migrations where tag = $1; execute stmt({}); deallocate stmt;";
+    pub static PG_ADD_MIGRATION: &'static str = "prepare stmt as insert into __migrant_migrations (tag) values ($1); execute stmt('__VAL__') deallocate stmt;";
+    pub static PG_DELETE_MIGRATION: &'static str = "prepare stmt as delete from __migrant_migrations where tag = $1; execute stmt('__VAL__'); deallocate stmt;";
 }
 
 #[cfg(not(feature="postgres"))]
@@ -493,7 +536,7 @@ fn pg_migration_setup(conn_str: &str) -> Result<bool> {
 
 #[cfg(not(feature="sqlite"))]
 fn sqlite_migration_setup(db_path: &PathBuf) -> Result<bool> {
-    let db_path = db_path.as_os_str().to_str().unwrap();
+    let db_path = db_path.to_str().unwrap();
     let exists = Command::new("sqlite3")
                     .arg(&db_path)
                     .arg("-csv")
@@ -527,19 +570,134 @@ fn sqlite_migration_setup(db_path: &PathBuf) -> Result<bool> {
 fn sqlite_migration_setup(db_path: &PathBuf) -> Result<bool> {
     use rusqlite::Connection;
 
-    let conn = Connection::open(db_path)
-        .map_err(|e| format_err!(Error::Migration, "{}", e))?;
-    let exists: bool = conn.query_row(sql::SQLITE_MIGRATION_TABLE_EXISTS, &[], |row| row.get(0))
-        .map_err(|e| format_err!(Error::Migration, "{}", e))?;
+    let conn = Connection::open(db_path)?;
+    let exists: bool = conn.query_row(sql::SQLITE_MIGRATION_TABLE_EXISTS, &[], |row| row.get(0))?;
 
     if exists {
         Ok(false)
     } else {
-        conn.execute(sql::CREATE_TABLE, &[])
-            .map_err(|e| format_err!(Error::Migration, "{}", e))?;
+        conn.execute(sql::CREATE_TABLE, &[])?;
         Ok(true)
     }
 }
+
+
+#[cfg(not(feature="sqlite"))]
+fn sqlite_select_migrations(db_path: &str) -> Result<Vec<String>> {
+    let migs = Command::new("sqlite3")
+                    .arg(&db_path)
+                    .arg("-csv")
+                    .arg(sql::GET_MIGRATIONS)
+                    .output()
+                    .map_err(Error::IoProc)?;
+    if !migs.status.success() {
+        let stderr = std::str::from_utf8(&migs.stderr).unwrap();
+        bail!(Migration <- "Error executing statement: {}", stderr);
+    }
+    let stdout = std::str::from_utf8(&migs.stdout).unwrap();
+    println!("stdout: {}", stdout);
+    Ok(stdout.trim().lines().map(String::from).collect::<Vec<_>>())
+}
+
+#[cfg(feature="sqlite")]
+fn sqlite_select_migrations(db_path: &str) -> Result<Vec<String>> {
+    use rusqlite::Connection;
+
+    let conn = Connection::open(db_path)?;
+    let mut stmt = conn.prepare(sql::GET_MIGRATIONS)?;
+    let mut rows = stmt.query(&[])?;
+    let mut migs = vec![];
+    while let Some(row) = rows.next() {
+        let row = row?;
+        migs.push(row.get(0));
+    }
+    Ok(migs)
+}
+
+
+#[cfg(not(feature="postgres"))]
+fn pg_select_migrations(conn_str: &str) -> Result<Vec<String>> {
+    unimplemented!()
+}
+
+#[cfg(feature="postgres")]
+fn pg_select_migrations(conn_str: &str) -> Result<Vec<String>> {
+    unimplemented!()
+}
+
+
+#[cfg(not(feature="sqlite"))]
+fn sqlite_insert_migration_tag(db_path: &str, tag: &str) -> Result<()> {
+    let stmt = sql::SQLITE_ADD_MIGRATION.replace("__VAL__", tag);
+    println!("stmt: {}", stmt);
+    let insert = Command::new("sqlite3")
+                    .arg(&db_path)
+                    .arg("-csv")
+                    .arg(sql::SQLITE_ADD_MIGRATION.replace("__VAL__", tag))
+                    .output()
+                    .map_err(Error::IoProc)?;
+    if !insert.status.success() {
+        let stderr = std::str::from_utf8(&insert.stderr).unwrap();
+        bail!(Migration <- "Error executing statement: {}", stderr);
+    }
+    Ok(())
+}
+
+#[cfg(feature="sqlite")]
+fn sqlite_insert_migration_tag(db_path: &str, tag: &str) -> Result<()> {
+    use rusqlite::Connection;
+
+    let conn = Connection::open(db_path)?;
+    conn.execute("insert into __migrant_migrations (tag) values ($1)", &[&tag])?;
+    Ok(())
+}
+
+
+#[cfg(not(feature="postgres"))]
+fn pg_insert_migration_tag(conn_str: &str, tag: &str) -> Result<()> {
+    unimplemented!()
+}
+
+#[cfg(feature="postgres")]
+fn pg_insert_migration_tag(conn_str: &str, tag: &str) -> Result<()> {
+    unimplemented!()
+}
+
+
+#[cfg(not(feature="sqlite"))]
+fn sqlite_remove_migration_tag(db_path: &str, tag: &str) -> Result<()> {
+    let exists = Command::new("sqlite3")
+                    .arg(&db_path)
+                    .arg("-csv")
+                    .arg(sql::SQLITE_DELETE_MIGRATION.replace("__VAL__", tag))
+                    .output()
+                    .map_err(Error::IoProc)?;
+    if !exists.status.success() {
+        let stderr = std::str::from_utf8(&exists.stderr).unwrap();
+        bail!(Migration <- "Error executing statement: {}", stderr);
+    }
+    Ok(())
+}
+
+#[cfg(feature="sqlite")]
+fn sqlite_remove_migration_tag(db_path: &str, tag: &str) -> Result<()> {
+    use rusqlite::Connection;
+
+    let conn = Connection::open(db_path)?;
+    conn.execute("delete from __migrant_migrations where tag = $1", &[&tag])?;
+    Ok(())
+}
+
+#[cfg(not(feature="postgres"))]
+fn pg_remove_migration_tag(conn_str: &str, tag: &str) -> Result<()> {
+    unimplemented!()
+}
+
+#[cfg(feature="postgres")]
+fn pg_remove_migration_tag(conn_str: &str, tag: &str) -> Result<()> {
+    unimplemented!()
+}
+
 
 
 /// Fall back to running the migration using the sqlite cli
@@ -764,7 +922,7 @@ fn apply_migration(config: &Config, direction: Direction,
                        force: bool, fake: bool, all: bool) -> Result<()> {
     let mig_dir = config.migration_dir()?;
 
-    let new_config = match next_available(&direction, &mig_dir, config.settings.applied.as_slice()) {
+    match next_available(&direction, &mig_dir, config.applied.as_slice()) {
         None => bail!(MigrationComplete <- "No un-applied `{}` migration found in `{}/`", direction, config.settings.migration_location),
         Some(next) => {
             print!("Applying: {:?}", next);
@@ -785,28 +943,31 @@ fn apply_migration(config: &Config, direction: Direction,
                 };
             }
 
-            let mut config = config.clone();
+            //let mut config = config.clone();
+            let mig_tag = next.parent()
+                .and_then(Path::file_name)
+                .and_then(OsStr::to_str)
+                .map(str::to_string)
+                .expect(&format!("Error extracting parent dir-name from: {:?}", next));
             match direction {
                 Direction::Up => {
-                    let mig_tag = next.parent()
-                        .and_then(Path::file_name)
-                        .and_then(OsStr::to_str)
-                        .map(str::to_string)
-                        .expect(&format!("Error extracting parent dir-name from: {:?}", next));
-                    config.settings.applied.push(mig_tag);
-                    config.save()?;
+                    config.insert_migration_tag(&mig_tag);
+                    //config.settings.applied.push(mig_tag);
+                    //config.save()?;
                 }
                 Direction::Down => {
-                    config.settings.applied.pop();
-                    config.save()?;
+                    config.delete_migration_tag(&mig_tag);
+                    //config.settings.applied.pop();
+                    //config.save()?;
                 }
             }
-            config
         }
     };
 
+    let config = config.reload()?;
+
     if all {
-        let res = apply_migration(&new_config, direction, force, fake, all);
+        let res = apply_migration(&config, direction, force, fake, all);
         match res {
             Ok(_) => (),
             Err(error) => match error {
@@ -837,7 +998,7 @@ pub fn list(config: &Config) -> Result<()> {
             .and_then(OsStr::to_str)
             .map(str::to_string)
             .expect(&format!("Error extracting parent dir-name from: {:?}", mig.up));
-        let x = config.settings.applied.contains(&tagname);
+        let x = config.applied.contains(&tagname);
         println!(" -> [{x}] {name}", x=if x { '✓' } else { ' ' }, name=tagname);
     }
     Ok(())

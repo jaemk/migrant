@@ -1,6 +1,9 @@
 use std;
 use toml;
 
+#[cfg(feature="sqlite")]
+use rusqlite;
+
 
 pub type Result<T> = std::result::Result<T, Error>;
 
@@ -18,6 +21,9 @@ pub enum Error {
     Utf8Error(std::string::FromUtf8Error),
     TomlDe(toml::de::Error),
     TomlSe(toml::ser::Error),
+
+    #[cfg(feature="sqlite")]
+    Sqlite(rusqlite::Error),
 }
 
 impl std::fmt::Display for Error {
@@ -36,6 +42,9 @@ impl std::fmt::Display for Error {
             Utf8Error(ref e)          => write!(f, "Utf8 Error: {}", e),
             TomlDe(ref e)             => write!(f, "Toml Deserialization Error: {}", e),
             TomlSe(ref e)             => write!(f, "Toml Serialization Error: {}", e),
+
+            #[cfg(feature="sqlite")]
+            Sqlite(ref e)   => write!(f, "Sqlite Error: {}", e),
         }
     }
 }
@@ -56,8 +65,20 @@ impl std::error::Error for Error {
             Utf8Error(ref e)  => e,
             TomlDe(ref e)     => e,
             TomlSe(ref e)     => e,
+
+            #[cfg(feature="sqlite")]
+            Sqlite(ref e)     => e,
+
             _ => return None
         })
+    }
+}
+
+
+#[cfg(feature="sqlite")]
+impl From<rusqlite::Error> for Error {
+    fn from(e: rusqlite::Error) -> Error {
+        Error::Sqlite(e)
     }
 }
 
