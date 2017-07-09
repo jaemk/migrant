@@ -100,6 +100,121 @@ fn write_to_path(path: &Path, content: &[u8]) -> Result<()> {
 
 
 #[derive(Debug, Clone)]
+/// Project configuration/settings builder to initialize a new config file
+pub struct ConfigInitializer {
+    dir: PathBuf,
+    database_type: Option<String>,
+    interactive: bool,
+
+}
+impl ConfigInitializer {
+    /// Start a new `ConfigInitializer`
+    pub fn new(dir: &Path) -> Self {
+        Self {
+            dir: dir.to_owned(),
+            database_type: None,
+            interactive: true,
+        }
+    }
+
+    /// Specify the database_type, checks whether the type is supported
+    pub fn for_database(mut self, db_type: &str) -> Result<Self> {
+        match db_type.as_ref() {
+            "postgres" | "sqlite" => (),
+            e => bail!(Config <- "unsupported database type: {}", e),
+        };
+        self.database_type = Some(db_type.to_owned());
+        Ok(self)
+    }
+
+    /// Toggle interactive prompts
+    pub fn interactive(mut self, b: bool) -> Self {
+        self.interactive = b;
+        self
+    }
+
+    /// Determines whether new .migrant file location should be in
+    /// the given directory or a user specified path
+    fn confirm_new_config_location(dir: &Path) -> Result<PathBuf> {
+        println!(" $ A new `{}` config file will be created at the following location: ", CONFIG_FILE);
+        println!(" $  {:?}", dir.display());
+        let ans = Prompt::with_msg(" $ Is this ok? (y/n) >> ").ask()?;
+        if ans.trim().to_lowercase() == "y" {
+            return Ok(dir.to_owned());
+        }
+
+        println!(" $ You can specify the absolute location now, or nothing to exit");
+        let ans = Prompt::with_msg(" $ >> ").ask()?;
+        if ans.trim().is_empty() {
+            bail!(Config <- "No `{}` path provided", CONFIG_FILE)
+        }
+
+        let path = PathBuf::from(ans);
+        if !path.is_absolute() || path.file_name().unwrap() != CONFIG_FILE {
+            bail!(Config <- "Invalid absolute path: {}, must end in `{}`", path.display(), CONFIG_FILE);
+        }
+        Ok(path)
+    }
+
+    /// Generate a template config file using provided parameters or prompting the user
+    /// If running interactively, the file will be opened for editing and `Config::setup`
+    /// will be run.
+    pub fn initialize(self) -> Result<()> {
+        let config_path = self.dir.join(CONFIG_FILE);
+        let config_path = if !self.interactive {
+            config_path
+        } else {
+            ConfigInitializer::confirm_new_config_location(&config_path)
+                .map_err(|e| format_err!(Error::Config, "unable to create a `{}` config -> {}", CONFIG_FILE, e))?
+        };
+
+        let db_type = if let Some(db_type) = self.database_type.as_ref() {
+            db_type.to_owned()
+        } else {
+            if !self.interactive {
+                bail!(Config <- "database type must be specified if running non-interactively")
+            }
+            println!("\n ** Gathering database information...");
+            let db_type = Prompt::with_msg(" database type (sqlite|postgres) >> ").ask()?;
+            match db_type.as_ref() {
+                "postgres" | "sqlite" => (),
+                e => bail!(Config <- "unsupported database type: {}", e),
+            };
+            db_type
+        };
+
+        println!("\n ** Writing {} config template to {:?}", db_type, config_path);
+        match db_type.as_ref() {
+            "postgres" => {
+                write_to_path(&config_path, PG_CONFIG_TEMPLATE.as_bytes())?;
+            }
+            "sqlite" => {
+                let content = SQLITE_CONFIG_TEMPLATE.replace("__CONFIG_DIR__", config_path.parent().unwrap().to_str().unwrap());
+                write_to_path(&config_path, content.as_bytes())?;
+            }
+            _ => unreachable!(),
+        };
+
+        println!("\n ** Please update `{}` with your database credentials and run `setup`", CONFIG_FILE);
+
+        if self.interactive {
+            let editor = env::var("EDITOR").unwrap_or_else(|_| "vim".to_string());
+            let command = format!("{} {}", editor, config_path.to_str().unwrap());
+            println!(" -- Your config file will be opened with the following command: `{}`", &command);
+            println!(" -- After editing, the `setup` command will be run for you");
+            let _ = Prompt::with_msg(&format!(" -- Press [ENTER] to open now or [CTRL+C] to exit and open manually")).ask()?;
+            run_command_in_fg(&command)
+                .map_err(|e| format_err!(Error::Config, "Error editing config file: {}", e))?;
+
+            let config = Config::load(&config_path)?;
+            let _setup = config.setup()?;
+        }
+        Ok(())
+    }
+}
+
+
+#[derive(Debug, Clone)]
 /// Project configuration/settings
 pub struct Config {
     pub path: PathBuf,
@@ -179,67 +294,13 @@ impl Config {
         Ok(())
     }
 
-    /// Determines whether new .migrant file location should be in
-    /// the given directory or a user specified path
-    fn confirm_new_config_location(mut dir: PathBuf) -> Result<PathBuf> {
-        dir.push(".migrant.toml");
-        println!(" $ A new `.migrant.toml` config file will be created at the following location: ");
-        println!(" $  {:?}", dir.display());
-        let ans = Prompt::with_msg(" $ Is this ok? (y/n) >> ").ask()?;
-        if ans.trim().to_lowercase() == "y" {
-            return Ok(dir);
-        }
-
-        println!(" $ You can specify the absolute location now, or nothing to exit");
-        let ans = Prompt::with_msg(" $ >> ").ask()?;
-        if ans.trim().is_empty() {
-            bail!(Config <- "No `.migrant.toml` path provided")
-        }
-
-        let path = PathBuf::from(ans);
-        if !path.is_absolute() || path.file_name().unwrap() != ".migrant.toml" {
-            bail!(Config <- "Invalid absolute path: {}, must end in '.migrant.toml'", path.display());
-        }
-        Ok(path)
+    /// Start a config initializer in the give directory
+    pub fn init_in(dir: &Path) -> ConfigInitializer {
+        ConfigInitializer::new(dir)
     }
 
-    /// Initialize project in the given directory
-    pub fn init(dir: &PathBuf) -> Result<()> {
-        let config_path = Config::confirm_new_config_location(dir.clone())
-            .map_err(|e| format_err!(Error::Config, "unable to create a .migrant.toml config -> {}", e))?;
-
-        println!("\n ** Gathering database information...");
-        let db_type = Prompt::with_msg(" database type (sqlite|postgres) >> ").ask()?;
-        match db_type.as_ref() {
-            "postgres" | "sqlite" => (),
-            e => bail!(Config <- "unsupported database type: {}", e),
-        }
-
-        println!("\n ** Writing {} config template to {:?}", db_type, config_path);
-        match db_type.as_ref() {
-            "postgres" => {
-                write_to_path(&config_path, PG_CONFIG_TEMPLATE.as_bytes())?;
-            }
-            "sqlite" => {
-                let content = SQLITE_CONFIG_TEMPLATE.replace("__CONFIG_DIR__", config_path.parent().unwrap().to_str().unwrap());
-                write_to_path(&config_path, content.as_bytes())?;
-            }
-            _ => unreachable!(),
-        };
-        println!("\n ** Please update `{}` with your database credentials and run `setup`", CONFIG_FILE);
-        let editor = env::var("EDITOR").unwrap_or_else(|_| "vim".to_string());
-        let command = format!("{} {}", editor, config_path.to_str().unwrap());
-        println!(" -- Your config file will be opened with the following command: `{}`", &command);
-        let _ = Prompt::with_msg(&format!(" -- Press [ENTER] to open now or [CTRL+C] to exit and open manually")).ask()?;
-        let command = CString::new(command.as_str()).unwrap();
-        let ret = unsafe { libc::system(command.as_ptr()) };
-        if ret != 0 { bail!(Config <- "Something went wrong while editing config file") }
-
-        let config = Config::load(&config_path)?;
-        let _setup = config.setup()?;
-        Ok(())
-    }
-
+    /// - Confirm the database can be accessed
+    /// - Setup the database migrations table if it doesn't exist yet
     pub fn setup(&self) -> Result<bool> {
         println!(" ** Confirming database credentials...");
         match self.settings.database_type.as_ref() {

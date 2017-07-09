@@ -13,7 +13,21 @@ fn main() {
         .author("James K. <james.kominick@gmail.com>")
         .about("Postgres/SQLite migration manager")
         .subcommand(SubCommand::with_name("init")
-            .about("Initialize project config"))
+            .about("Initialize project config")
+            .arg(Arg::with_name("type")
+                 .long("type")
+                 .short("t")
+                 .takes_value(true)
+                 .help("Specify the database type (sqlite|postgres)"))
+            .arg(Arg::with_name("location")
+                 .long("location")
+                 .short("l")
+                 .takes_value(true)
+                 .help("Directory to initialize in"))
+            .arg(Arg::with_name("no-confirm")
+                 .long("no-confirm")
+                 .takes_value(false)
+                 .help("Disable interactive prompts")))
         .subcommand(SubCommand::with_name("setup")
             .about("Setup migration table"))
         .subcommand(SubCommand::with_name("connect-string")
@@ -65,17 +79,28 @@ fn run(dir: &PathBuf, matches: &clap::ArgMatches) -> Result<(), Error> {
     let config_path = migrant_lib::search_for_config(dir);
 
     if matches.is_present("init") || config_path.is_none() {
-        let _ = Config::init(dir)?;
+        let init_matches = matches.subcommand_matches("init").unwrap();
+        let dir = init_matches.value_of("location").map(PathBuf::from).unwrap_or_else(|| dir.to_owned());
+        let interactive = !init_matches.is_present("no-confirm");
+        let config_init = Config::init_in(&dir).interactive(interactive);
+        let config_init = if let Some(db_type) = init_matches.value_of("type") {
+            config_init.for_database(db_type)?
+        } else {
+            config_init
+        };
+        config_init.initialize()?;
         return Ok(())
     }
 
     let config_path = config_path.unwrap();    // absolute path of `.migrant` file
-    let config = Config::load(&config_path)?;
+    let config = Config::load_file_only(&config_path)?;
 
     if matches.is_present("setup") {
         config.setup()?;
         return Ok(())
     }
+
+    let config = config.reload()?;
 
     match matches.subcommand() {
         ("connect-string", _) => {
