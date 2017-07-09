@@ -13,7 +13,11 @@ fn main() {
         .author("James K. <james.kominick@gmail.com>")
         .about("Postgres/SQLite migration manager")
         .subcommand(SubCommand::with_name("init")
-            .about("Initialize project"))
+            .about("Initialize project config"))
+        .subcommand(SubCommand::with_name("setup")
+            .about("Setup migration table"))
+        .subcommand(SubCommand::with_name("connect-string")
+            .about("Print out the connection string for postgres, or file-path for sqlite"))
         .subcommand(SubCommand::with_name("list")
             .about("List status of applied and available migrations"))
         .subcommand(SubCommand::with_name("apply")
@@ -66,10 +70,21 @@ fn run(dir: &PathBuf, matches: &clap::ArgMatches) -> Result<(), Error> {
     }
 
     let config_path = config_path.unwrap();    // absolute path of `.migrant` file
-
     let config = Config::load(&config_path)?;
 
+    if matches.is_present("setup") {
+        config.setup()?;
+        return Ok(())
+    }
+
     match matches.subcommand() {
+        ("connect-string", _) => {
+            if config.database_type()? == "sqlite" {
+                println!("{}", config.database_path()?.to_str().unwrap());
+            } else {
+                println!("{}", config.connect_string()?);
+            }
+        }
         ("list", _) => {
             migrant_lib::list(&config)?;
         }
