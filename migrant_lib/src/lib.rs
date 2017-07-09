@@ -35,9 +35,12 @@ use regex::Regex;
 mod errors;
 pub use errors::*;
 
+mod drivers;
+
 
 static CONFIG_FILE: &'static str = ".migrant.toml";
 static DT_FORMAT: &'static str = "%Y%m%d%H%M%S";
+
 
 static SQLITE_CONFIG_TEMPLATE: &'static str = r#"
 # required, do not edit
@@ -49,6 +52,7 @@ database_name = ""
 
 migration_location = "migrations"  # defeault "migrations"
 "#;
+
 
 static PG_CONFIG_TEMPLATE: &'static str = r#"
 # required, do not edit
@@ -72,7 +76,10 @@ migration_location = "migrations"   # default "migrations"
 
 lazy_static! {
     // For verifying new `tag` names
-    static ref TAG_RE: Regex = Regex::new(r"[^a-z0-9-]+").unwrap();
+    static ref TAG_RE: Regex = Regex::new(r"[^a-z0-9-]+").expect("failed to compile regex");
+
+    // For verifying complete stamp+tag names
+    static ref FULL_TAG_RE: Regex = Regex::new(r"[0-9]{14}_[a-z0-9-]+").expect("failed to compile regex");
 }
 
 
@@ -90,11 +97,24 @@ struct Settings {
 }
 
 
+/// Write the provided bytes to the specified path
 fn write_to_path(path: &Path, content: &[u8]) -> Result<()> {
     let mut file = fs::File::create(path)
                     .map_err(Error::IoCreate)?;
     file.write_all(content)
         .map_err(Error::IoWrite)?;
+    Ok(())
+}
+
+
+/// Run the given command in the foreground
+/// Note: `std::process::Command` runs everything in a background
+///       child process. In order to run things like opening an
+///       editor, the command must be run in the current process.
+fn run_command_in_fg(command: &str) -> Result<()> {
+    let c_comm = CString::new(command).unwrap();
+    let ret = unsafe { libc::system(c_comm.as_ptr()) };
+    if ret != 0 { bail!(ShellCommand <- "Command `{}` exited with status `{}`", command, ret) }
     Ok(())
 }
 
@@ -227,54 +247,66 @@ pub struct Config {
     applied: Vec<String>,
 }
 impl Config {
-    /// Load `.migrant.toml` config file from the given path
-    pub fn load(path: &PathBuf) -> Result<Config> {
+    /// Do a full reload of the configuration file
+    pub fn reload(&self) -> Result<Config> {
+        Self::load(&self.path)
+    }
+
+    /// Load config file from the given path without querying the database
+    /// to check for applied migrations
+    pub fn load_file_only(path: &Path) -> Result<Config> {
         let mut file = fs::File::open(path).map_err(Error::IoOpen)?;
         let mut content = String::new();
         file.read_to_string(&mut content).map_err(Error::IoRead)?;
         let settings = toml::from_str::<Settings>(&content).map_err(Error::TomlDe)?;
-        let mut config = Config {
-            path: path.clone(),
+        Ok(Config {
+            path: path.to_owned(),
             settings: settings,
             applied: vec![],
-        };
+        })
+    }
+
+    /// Load config file from the given path and query the database to load up applied migrations
+    pub fn load(path: &Path) -> Result<Config> {
+        let mut config = Config::load_file_only(path)?;
         let applied = config.load_applied()?;
         config.applied = applied;
         Ok(config)
     }
 
+    /// Load the applied migrations from the database migration table
     fn load_applied(&self) -> Result<Vec<String>> {
         if !self.migration_table_exists()? {
             bail!(Migration <- "`__migrant_migrations` table is missing, maybe try re-setting-up? -> `setup`")
         }
 
         let applied = match self.settings.database_type.as_ref() {
-            "sqlite" => sqlite_select_migrations(&self.settings.database_name)?,
-            "postgres" => pg_select_migrations(&self.connect_string()?)?,
+            "sqlite"    => drivers::sqlite::select_migrations(&self.settings.database_name)?,
+            "postgres"  => drivers::pg::select_migrations(&self.connect_string()?)?,
             _ => unreachable!(),
         };
-        let mut stamped = applied.into_iter().map(|tag| {
+        let mut stamped = vec![];
+        for tag in applied.into_iter() {
+            if !FULL_TAG_RE.is_match(&tag) {
+                bail!(Migration <- "Found a non-conforming tag in the database: `{}`", tag)
+            }
             let stamp = chrono::Utc.datetime_from_str(
                 tag.split('_').next().unwrap(),
                 DT_FORMAT
             ).unwrap();
-            (stamp, tag)
-        }).collect::<Vec<_>>();
+            stamped.push((stamp, tag));
+        }
         stamped.sort_by(|a, b| a.0.cmp(&b.0));
         let applied = stamped.into_iter().map(|tup| tup.1).collect::<Vec<_>>();
         Ok(applied)
     }
 
-    /// Reload configuration file
-    pub fn reload(&self) -> Result<Config> {
-        Self::load(&self.path)
-    }
 
     /// Check if a __migrant_migrations table exists
     fn migration_table_exists(&self) -> Result<bool> {
         match self.settings.database_type.as_ref() {
-            "sqlite"   => sqlite_migration_table_exists(self.settings.database_name.as_str()),
-            "postgres" => pg_migration_table_exists(&self.connect_string()?),
+            "sqlite"    => drivers::sqlite::migration_table_exists(self.settings.database_name.as_str()),
+            "postgres"  => drivers::pg::migration_table_exists(&self.connect_string()?),
             _ => unreachable!()
         }
     }
@@ -282,8 +314,8 @@ impl Config {
     /// Insert given tag into database migration table
     fn insert_migration_tag(&self, tag: &str) -> Result<()> {
         match self.settings.database_type.as_ref() {
-            "sqlite" => sqlite_insert_migration_tag(&self.settings.database_name, tag)?,
-            "postgres" => pg_insert_migration_tag(&self.connect_string()?, tag)?,
+            "sqlite"    => drivers::sqlite::insert_migration_tag(&self.settings.database_name, tag)?,
+            "postgres"  => drivers::pg::insert_migration_tag(&self.connect_string()?, tag)?,
             _ => unreachable!(),
         };
         Ok(())
@@ -292,14 +324,14 @@ impl Config {
     /// Remove a given tag from the database migration table
     fn delete_migration_tag(&self, tag: &str) -> Result<()> {
         match self.settings.database_type.as_ref() {
-            "sqlite"   => sqlite_remove_migration_tag(&self.settings.database_name, tag)?,
-            "postgres" => pg_remove_migration_tag(&self.connect_string()?, tag)?,
+            "sqlite"    => drivers::sqlite::remove_migration_tag(&self.settings.database_name, tag)?,
+            "postgres"  => drivers::pg::remove_migration_tag(&self.connect_string()?, tag)?,
             _ => unreachable!(),
         };
         Ok(())
     }
 
-    /// Start a config initializer in the give directory
+    /// Start a config initializer in the given directory
     pub fn init_in(dir: &Path) -> ConfigInitializer {
         ConfigInitializer::new(dir)
     }
@@ -311,7 +343,7 @@ impl Config {
         match self.settings.database_type.as_ref() {
             "sqlite" => {
                 let db_path = self.path.parent().unwrap().join(&self.settings.database_name);
-                let created = create_file_if_missing(&db_path)?;
+                let created = drivers::sqlite::create_file_if_missing(&db_path)?;
                 println!("    - checking if db file already exists...");
                 if created {
                     println!("    - db not found... creating now... ✓")
@@ -321,7 +353,7 @@ impl Config {
             }
             "postgres" => {
                 let conn_str = self.connect_string()?;
-                let can_connect = pg_can_connect(&conn_str)?;
+                let can_connect = drivers::pg::can_connect(&conn_str)?;
                 if !can_connect {
                     println!(" ERROR: Unable to connect to {}", conn_str);
                     println!("        Please initialize your database and user");
@@ -341,11 +373,11 @@ impl Config {
         let table_created = match self.settings.database_type.as_ref() {
             "sqlite" => {
                 let db_path = self.path.parent().unwrap().join(&self.settings.database_name);
-                sqlite_migration_setup(&db_path)?
+                drivers::sqlite::migration_setup(&db_path)?
             }
             "postgres" => {
                 let conn_str = self.connect_string()?;
-                pg_migration_setup(&conn_str)?
+                drivers::pg::migration_setup(&conn_str)?
             }
             _ => unreachable!(),
         };
@@ -360,13 +392,6 @@ impl Config {
         }
     }
 
-    /// Write the current config to its file path
-    //fn save(&self) -> Result<()> {
-    //    let content = toml::to_string(&self.settings).map_err(Error::TomlSe)?;
-    //    write_to_path(&self.path, content.as_bytes())?;
-    //    Ok(())
-    //}
-
     /// Return the absolute path to the directory containing migration folders
     pub fn migration_dir(&self) -> Result<PathBuf> {
         self.path.parent()
@@ -374,9 +399,11 @@ impl Config {
             .ok_or_else(|| format_err!(Error::PathError, "Error generating PathBuf to migration_location"))
     }
 
+    /// Return the database type
     pub fn database_type(&self) -> Result<String> {
         Ok(self.settings.database_type.to_owned())
     }
+
     /// Return the absolute path to the database file. This is intended for
     /// sqlite3 databases only
     pub fn database_path(&self) -> Result<PathBuf> {
@@ -547,432 +574,17 @@ impl Migrator {
 }
 
 
-#[cfg(not(feature="postgresql"))]
-fn pg_can_connect(connect_string: &str) -> Result<bool> {
-    let out = Command::new("psql")
-                    .arg(connect_string)
-                    .arg("-c")
-                    .arg("")
-                    .output()
-                    .map_err(Error::IoProc)?;
-    Ok(out.status.success())
-}
-
-#[cfg(feature="postgresql")]
-fn pg_can_connect(conn_str: &str) -> Result<bool> {
-    use postgres::{Connection, TlsMode};
-
-    match Connection::connect(conn_str, TlsMode::None) {
-        Ok(_)   => Ok(true),
-        Err(_)  => Ok(false)
-    }
-}
-
-
-/// Create a file if it doesn't exist, returning true if the file was created
-fn create_file_if_missing(path: &PathBuf) -> Result<bool> {
-    if path.exists() {
-        Ok(false)
-    } else {
-        let db_dir = path.parent().unwrap();
-        fs::create_dir(db_dir).map_err(Error::IoCreate)?;
-        fs::File::create(path).map_err(Error::IoCreate)?;
-        Ok(true)
-    }
-}
-
-
-mod sql {
-    pub static CREATE_TABLE: &'static str = "create table __migrant_migrations(tag text unique);";
-    pub static GET_MIGRATIONS: &'static str = "select tag from __migrant_migrations;";
-
-    pub static SQLITE_MIGRATION_TABLE_EXISTS: &'static str = "select exists(select 1 from sqlite_master where type = 'table' and name = '__migrant_migrations');";
-    pub static PG_MIGRATION_TABLE_EXISTS: &'static str = "select exists(select 1 from pg_tables where tablename = '__migrant_migrations');";
-
-    #[cfg(not(feature="sqlite"))]
-    pub use self::q_sqlite::*;
-    #[cfg(not(feature="sqlite"))]
-    mod q_sqlite {
-        pub static SQLITE_ADD_MIGRATION: &'static str = "insert into __migrant_migrations (tag) values ('__VAL__');";
-        pub static SQLITE_DELETE_MIGRATION: &'static str = "delete from __migrant_migrations where tag = '__VAL__';";
-    }
-
-    #[cfg(not(feature="postgresql"))]
-    pub use self::q_postgres::*;
-    #[cfg(not(feature="postgresql"))]
-    mod q_postgres {
-        pub static PG_ADD_MIGRATION: &'static str = "prepare stmt as insert into __migrant_migrations (tag) values ($1); execute stmt('__VAL__'); deallocate stmt;";
-        pub static PG_DELETE_MIGRATION: &'static str = "prepare stmt as delete from __migrant_migrations where tag = $1; execute stmt('__VAL__'); deallocate stmt;";
-    }
-}
-
-
-#[cfg(not(feature="postgresql"))]
-fn pg_migration_table_exists(conn_str: &str) -> Result<bool> {
-    let exists = Command::new("psql")
-                    .arg(conn_str)
-                    .arg("-t")      // no headers or footer
-                    .arg("-A")      // un-aligned output
-                    .arg("-F,")     // comma separator
-                    .arg("-c")
-                    .arg(sql::PG_MIGRATION_TABLE_EXISTS)
-                    .output()
-                    .map_err(Error::IoProc)?;
-    if !exists.status.success() {
-        let stderr = std::str::from_utf8(&exists.stderr).unwrap();
-        bail!(Migration <- "Error executing statement: {}", stderr);
-    }
-    let stdout = std::str::from_utf8(&exists.stdout).unwrap();
-    Ok(stdout.trim() == "t")
-}
-
-#[cfg(feature="postgresql")]
-fn pg_migration_table_exists(conn_str: &str) -> Result<bool> {
-    use postgres::{Connection, TlsMode};
-
-    let conn = Connection::connect(conn_str, TlsMode::None)
-        .map_err(|e| format_err!(Error::Migration, "{}", e))?;
-    let rows = conn.query(sql::PG_MIGRATION_TABLE_EXISTS, &[])
-        .map_err(|e| format_err!(Error::Migration, "{}", e))?;
-    let exists: bool = rows.iter().next().unwrap().get(0);
-    Ok(exists)
-}
-
-
-#[cfg(not(feature="sqlite"))]
-fn sqlite_migration_table_exists(db_path: &str) -> Result<bool> {
-    let exists = Command::new("sqlite3")
-                    .arg(&db_path)
-                    .arg("-csv")
-                    .arg(sql::SQLITE_MIGRATION_TABLE_EXISTS)
-                    .output()
-                    .map_err(Error::IoProc)?;
-    if !exists.status.success() {
-        let stderr = std::str::from_utf8(&exists.stderr).unwrap();
-        bail!(Migration <- "Error executing statement: {}", stderr);
-    }
-    let stdout = std::str::from_utf8(&exists.stdout).unwrap();
-    Ok(stdout.trim() == "1")
-}
-
-#[cfg(feature="sqlite")]
-fn sqlite_migration_table_exists(db_path: &str) -> Result<bool> {
-    use rusqlite::Connection;
-
-    let conn = Connection::open(db_path)?;
-    let exists: bool = conn.query_row(sql::SQLITE_MIGRATION_TABLE_EXISTS, &[], |row| row.get(0))?;
-    Ok(exists)
-}
-
-
-#[cfg(not(feature="postgresql"))]
-fn pg_migration_setup(conn_str: &str) -> Result<bool> {
-    if !pg_migration_table_exists(conn_str)? {
-        let out = Command::new("psql")
-                        .arg(conn_str)
-                        .arg("-t")
-                        .arg("-A")
-                        .arg("-F,")
-                        .arg("-c")
-                        .arg(sql::CREATE_TABLE)
-                        .output()
-                        .map_err(Error::IoProc)?;
-        if !out.status.success() {
-            let stderr = std::str::from_utf8(&out.stderr).unwrap();
-            bail!(Migration <- "Error executing statement: {}", stderr);
-        }
-        return Ok(true)
-    }
-    Ok(false)
-}
-
-#[cfg(feature="postgresql")]
-fn pg_migration_setup(conn_str: &str) -> Result<bool> {
-    use postgres::{Connection, TlsMode};
-
-    if !pg_migration_table_exists(conn_str)? {
-        let conn = Connection::connect(conn_str, TlsMode::None)
-            .map_err(|e| format_err!(Error::Migration, "{}", e))?;
-        conn.execute(sql::CREATE_TABLE, &[])
-            .map_err(|e| format_err!(Error::Migration, "{}", e))?;
-        return Ok(true)
-    }
-    Ok(false)
-}
-
-
-#[cfg(not(feature="sqlite"))]
-fn sqlite_migration_setup(db_path: &PathBuf) -> Result<bool> {
-    let db_path = db_path.as_os_str().to_str().unwrap();
-    if !sqlite_migration_table_exists(db_path)? {
-        let out = Command::new("sqlite3")
-                        .arg(&db_path)
-                        .arg("-csv")
-                        .arg(sql::CREATE_TABLE)
-                        .output()
-                        .map_err(Error::IoProc)?;
-        if !out.status.success() {
-            let stderr = std::str::from_utf8(&out.stderr).unwrap();
-            bail!(Migration <- "Error executing statement: {}", stderr);
-        }
-        return Ok(true)
-    }
-    Ok(false)
-}
-
-#[cfg(feature="sqlite")]
-fn sqlite_migration_setup(db_path: &PathBuf) -> Result<bool> {
-    use rusqlite::Connection;
-
-    let db_path = db_path.to_str().unwrap();
-    if !sqlite_migration_table_exists(db_path)? {
-        let conn = Connection::open(db_path)?;
-        conn.execute(sql::CREATE_TABLE, &[])?;
-        return Ok(true)
-    }
-    Ok(false)
-}
-
-
-#[cfg(not(feature="sqlite"))]
-fn sqlite_select_migrations(db_path: &str) -> Result<Vec<String>> {
-    let migs = Command::new("sqlite3")
-                    .arg(&db_path)
-                    .arg("-csv")
-                    .arg(sql::GET_MIGRATIONS)
-                    .output()
-                    .map_err(Error::IoProc)?;
-    if !migs.status.success() {
-        let stderr = std::str::from_utf8(&migs.stderr).unwrap();
-        bail!(Migration <- "Error executing statement: {}", stderr);
-    }
-    let stdout = std::str::from_utf8(&migs.stdout).unwrap();
-    Ok(stdout.trim().lines().map(String::from).collect::<Vec<_>>())
-}
-
-#[cfg(feature="sqlite")]
-fn sqlite_select_migrations(db_path: &str) -> Result<Vec<String>> {
-    use rusqlite::Connection;
-
-    let conn = Connection::open(db_path)?;
-    let mut stmt = conn.prepare(sql::GET_MIGRATIONS)?;
-    let mut rows = stmt.query(&[])?;
-    let mut migs = vec![];
-    while let Some(row) = rows.next() {
-        let row = row?;
-        migs.push(row.get(0));
-    }
-    Ok(migs)
-}
-
-
-#[cfg(not(feature="postgresql"))]
-fn pg_select_migrations(conn_str: &str) -> Result<Vec<String>> {
-    let migs = Command::new("psql")
-                    .arg(conn_str)
-                    .arg("-t")      // no headers or footer
-                    .arg("-A")      // un-aligned output
-                    .arg("-F,")     // comma separator
-                    .arg("-c")
-                    .arg(sql::GET_MIGRATIONS)
-                    .output()
-                    .map_err(Error::IoProc)?;
-    if !migs.status.success() {
-        let stderr = std::str::from_utf8(&migs.stderr).unwrap();
-        bail!(Migration <- "Error executing statement: {}", stderr);
-    }
-    let stdout = std::str::from_utf8(&migs.stdout).unwrap();
-    Ok(stdout.trim().lines().map(String::from).collect())
-}
-
-#[cfg(feature="postgresql")]
-fn pg_select_migrations(conn_str: &str) -> Result<Vec<String>> {
-    use postgres::{Connection, TlsMode};
-
-    let conn = Connection::connect(conn_str, TlsMode::None)?;
-    let rows = conn.query(sql::GET_MIGRATIONS, &[])?;
-    Ok(rows.iter().map(|row| row.get(0)).collect())
-}
-
-
-#[cfg(not(feature="sqlite"))]
-fn sqlite_insert_migration_tag(db_path: &str, tag: &str) -> Result<()> {
-    let stmt = sql::SQLITE_ADD_MIGRATION.replace("__VAL__", tag);
-    println!("stmt: {}", stmt);
-    let insert = Command::new("sqlite3")
-                    .arg(&db_path)
-                    .arg("-csv")
-                    .arg(sql::SQLITE_ADD_MIGRATION.replace("__VAL__", tag))
-                    .output()
-                    .map_err(Error::IoProc)?;
-    if !insert.status.success() {
-        let stderr = std::str::from_utf8(&insert.stderr).unwrap();
-        bail!(Migration <- "Error executing statement: {}", stderr);
-    }
-    Ok(())
-}
-
-#[cfg(feature="sqlite")]
-fn sqlite_insert_migration_tag(db_path: &str, tag: &str) -> Result<()> {
-    use rusqlite::Connection;
-
-    let conn = Connection::open(db_path)?;
-    conn.execute("insert into __migrant_migrations (tag) values ($1)", &[&tag])?;
-    Ok(())
-}
-
-
-#[cfg(not(feature="postgresql"))]
-fn pg_insert_migration_tag(conn_str: &str, tag: &str) -> Result<()> {
-    let insert = Command::new("psql")
-                    .arg(conn_str)
-                    .arg("-t")      // no headers or footer
-                    .arg("-A")      // un-aligned output
-                    .arg("-F,")     // comma separator
-                    .arg("-c")
-                    .arg(sql::PG_ADD_MIGRATION.replace("__VAL__", tag))
-                    .output()
-                    .map_err(Error::IoProc)?;
-    if !insert.status.success() {
-        let stderr = std::str::from_utf8(&insert.stderr).unwrap();
-        bail!(Migration <- "Error executing statement: {}", stderr);
-    }
-    Ok(())
-}
-
-#[cfg(feature="postgresql")]
-fn pg_insert_migration_tag(conn_str: &str, tag: &str) -> Result<()> {
-    use postgres::{Connection, TlsMode};
-
-    let conn = Connection::connect(conn_str, TlsMode::None)?;
-    conn.execute("insert into __migrant_migrations (tag) values ($1)", &[&tag])?;
-    Ok(())
-}
-
-
-#[cfg(not(feature="sqlite"))]
-fn sqlite_remove_migration_tag(db_path: &str, tag: &str) -> Result<()> {
-    let exists = Command::new("sqlite3")
-                    .arg(&db_path)
-                    .arg("-csv")
-                    .arg(sql::SQLITE_DELETE_MIGRATION.replace("__VAL__", tag))
-                    .output()
-                    .map_err(Error::IoProc)?;
-    if !exists.status.success() {
-        let stderr = std::str::from_utf8(&exists.stderr).unwrap();
-        bail!(Migration <- "Error executing statement: {}", stderr);
-    }
-    Ok(())
-}
-
-#[cfg(feature="sqlite")]
-fn sqlite_remove_migration_tag(db_path: &str, tag: &str) -> Result<()> {
-    use rusqlite::Connection;
-
-    let conn = Connection::open(db_path)?;
-    conn.execute("delete from __migrant_migrations where tag = $1", &[&tag])?;
-    Ok(())
-}
-
-#[cfg(not(feature="postgresql"))]
-fn pg_remove_migration_tag(conn_str: &str, tag: &str) -> Result<()> {
-    let insert = Command::new("psql")
-                    .arg(conn_str)
-                    .arg("-t")      // no headers or footer
-                    .arg("-A")      // un-aligned output
-                    .arg("-F,")     // comma separator
-                    .arg("-c")
-                    .arg(sql::PG_DELETE_MIGRATION.replace("__VAL__", tag))
-                    .output()
-                    .map_err(Error::IoProc)?;
-    if !insert.status.success() {
-        let stderr = std::str::from_utf8(&insert.stderr).unwrap();
-        bail!(Migration <- "Error executing statement: {}", stderr);
-    }
-    Ok(())
-}
-
-#[cfg(feature="postgresql")]
-fn pg_remove_migration_tag(conn_str: &str, tag: &str) -> Result<()> {
-    use postgres::{Connection, TlsMode};
-
-    let conn = Connection::connect(conn_str, TlsMode::None)?;
-    conn.execute("delete from __migrant_migrations where tag = $1", &[&tag])?;
-    Ok(())
-}
-
-
-
-/// Fall back to running the migration using the sqlite cli
-#[cfg(not(feature="sqlite"))]
-fn run_sqlite(db_path: &PathBuf, filename: &str) -> Result<()> {
-    Command::new("sqlite3")
-            .arg(db_path.to_str().unwrap())
-            .arg(&format!(".read {}", filename))
-            .output()
-            .map_err(Error::IoProc)?;
-    Ok(())
-}
-
-#[cfg(feature="sqlite")]
-fn run_sqlite(db_path: &PathBuf, filename: &str) -> Result<()> {
-    use rusqlite::Connection;
-
-    let mut file = fs::File::open(filename)
-        .map_err(Error::IoOpen)?;
-    let mut buf = String::new();
-    file.read_to_string(&mut buf)
-        .map_err(Error::IoRead)?;
-    if buf.is_empty() { return Ok(()); }
-
-    let conn = Connection::open(db_path)
-        .map_err(|e| format_err!(Error::Migration, "{}", e))?;
-    conn.execute(&buf, &[])
-        .map_err(|e| format_err!(Error::Migration, "{}", e))?;
-    Ok(())
-}
-
-
-#[cfg(feature="postgresql")]
-fn run_postgres(conn_str: &str, filename: &str) -> Result<()> {
-    use postgres::{Connection, TlsMode};
-
-    let mut file = fs::File::open(filename)
-        .map_err(Error::IoOpen)?;
-    let mut buf = String::new();
-    file.read_to_string(&mut buf)
-        .map_err(Error::IoRead)?;
-
-    let conn = Connection::connect(conn_str, TlsMode::None)
-        .map_err(|e| format_err!(Error::Migration, "{}", e))?;
-    conn.execute(&buf, &[])
-        .map_err(|e| format_err!(Error::Migration, "{}", e))?;
-    Ok(())
-}
-
-/// Fall back to running the migration using the postgres cli
-#[cfg(not(feature="postgresql"))]
-fn run_postgres(conn_str: &str, filename: &str) -> Result<()> {
-    Command::new("psql")
-            .arg(&conn_str)
-            .arg("-f").arg(filename)
-            .output()
-            .map_err(Error::IoProc)?;
-    Ok(())
-}
-
-
 /// Run a given migration file through either sqlite or postgres, returning the output
 fn runner(config: &Config, filename: &str) -> Result<()> {
     let settings = &config.settings;
     Ok(match settings.database_type.as_ref() {
         "sqlite" => {
             let db_path = config.database_path()?;
-            run_sqlite(&db_path, filename)?;
+            drivers::sqlite::run_migration(&db_path, filename)?;
         }
         "postgres" => {
             let conn_str = config.connect_string()?;
-            run_postgres(&conn_str, filename)?;
+            drivers::pg::run_migration(&conn_str, filename)?;
         }
         _ => unreachable!(),
     })

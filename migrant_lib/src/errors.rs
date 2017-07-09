@@ -14,6 +14,7 @@ pub enum Error {
     Config(String),
     Migration(String),
     MigrationComplete(String),
+    ShellCommand(String),
     PathError(String),
     IoOpen(std::io::Error),
     IoCreate(std::io::Error),
@@ -40,6 +41,7 @@ impl std::fmt::Display for Error {
             Config(ref s)             => write!(f, "Config Error: {}", s),
             Migration(ref s)          => write!(f, "Migration Error: {}", s),
             MigrationComplete(ref s)  => write!(f, "MigrationComplete: {}", s),
+            ShellCommand(ref s)       => write!(f, "ShellCommand Error: {}", s),
             PathError(ref s)          => write!(f, "PathError: {}", s),
             IoOpen(ref e)             => write!(f, "IoOpen Error: {}", e),
             IoCreate(ref e)           => write!(f, "IoCreate Error: {}", e),
@@ -142,6 +144,12 @@ macro_rules! bail {
     };
     (MigrationComplete <- $msg:expr, $($arg:expr),*) => {
         return Err(format_err!(Error::MigrationComplete, $msg, $($arg),*))
+    };
+    (ShellCommand <- $msg:expr) => {
+        return Err(format_err!(Error::ShellCommand, $msg))
+    };
+    (ShellCommand <- $msg:expr, $($arg:expr),*) => {
+        return Err(format_err!(Error::ShellCommand, $msg, $($arg),*))
     };
 }
 
