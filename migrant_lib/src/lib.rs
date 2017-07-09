@@ -8,6 +8,7 @@ extern crate walkdir;
 extern crate regex;
 extern crate percent_encoding;
 extern crate hyper;
+extern crate libc;
 
 #[cfg(feature="postgresql")]
 extern crate postgres;
@@ -19,7 +20,7 @@ use std::collections::HashMap;
 use std::process::Command;
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
-use std::ffi::OsStr;
+use std::ffi::{OsStr, CString};
 use std::fs;
 use std::fmt;
 use std::env;
@@ -226,9 +227,17 @@ impl Config {
             }
             _ => unreachable!(),
         };
-        println!(" ** Please update `{}` with your database credentials and run `setup`", CONFIG_FILE);
+        println!("\n ** Please update `{}` with your database credentials and run `setup`", CONFIG_FILE);
         let editor = env::var("EDITOR").unwrap_or_else(|_| "vim".to_string());
-        println!("    -> `{} {}`", editor, config_path.to_str().unwrap());
+        let command = format!("{} {}", editor, config_path.to_str().unwrap());
+        println!(" -- Your config file will be opened with the following command: `{}`", &command);
+        let _ = Prompt::with_msg(&format!(" -- Press [ENTER] to open now or [CTRL+C] to exit and open manually")).ask()?;
+        let command = CString::new(command.as_str()).unwrap();
+        let ret = unsafe { libc::system(command.as_ptr()) };
+        if ret != 0 { bail!(Config <- "Something went wrong while editing config file") }
+
+        let config = Config::load(&config_path)?;
+        let _setup = config.setup()?;
         Ok(())
     }
 
@@ -331,12 +340,16 @@ impl Config {
             },
             None => "".into(),
         };
-        let user = match self.settings.database_user {
+        let user = match self.settings.database_user.as_ref().and_then(|s| if s.is_empty() { None } else { Some(s) }) {
             Some(ref user) => encode(user),
-            None => bail!(Config <- "config-err: 'database_user' not specified"),
+            None => bail!(Config <- "'database_user' not specified"),
         };
 
-        let db_name = encode(&self.settings.database_name);
+        let db_name = if self.settings.database_name.is_empty() {
+            bail!(Config <- "`database_name` not specified");
+        } else {
+            encode(&self.settings.database_name)
+        };
 
         let host = self.settings.database_host.clone().unwrap_or_else(|| "localhost".to_string());
         let host = if host.is_empty() { "localhost".to_string() } else { host };
