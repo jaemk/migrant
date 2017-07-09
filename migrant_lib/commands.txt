@@ -1,6 +1,0 @@
-psql postgres://upaste:upaste-pass@localhost/upaste -t -A -F, -c "create table __migrant_migrations(tag text unique);"
-psql postgres://upaste:upaste-pass@localhost/upaste -t -A -F, -c "insert into __migrant_migrations (tag) values ('new_tag_1');"
-psql postgres://upaste:upaste-pass@localhost/upaste -t -A -F, -c "select * from __migrant_migrations;"
-psql postgres://upaste:upaste-pass@localhost/upaste -t -A -F, -c "delete from __migrant_migrations where tag='new_tag_1';"
-
-sqlite db.db -csv "create table __migrant_migrations(tag text unique);"
