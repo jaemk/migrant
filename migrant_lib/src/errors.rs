@@ -4,6 +4,8 @@ use toml;
 #[cfg(feature="sqlite")]
 use rusqlite;
 
+#[cfg(feature="postgresql")]
+use postgres;
 
 pub type Result<T> = std::result::Result<T, Error>;
 
@@ -24,6 +26,11 @@ pub enum Error {
 
     #[cfg(feature="sqlite")]
     Sqlite(rusqlite::Error),
+
+    #[cfg(feature="postgresql")]
+    Postgres(postgres::error::Error),
+    #[cfg(feature="postgresql")]
+    PostgresConnect(postgres::error::ConnectError),
 }
 
 impl std::fmt::Display for Error {
@@ -45,6 +52,11 @@ impl std::fmt::Display for Error {
 
             #[cfg(feature="sqlite")]
             Sqlite(ref e)   => write!(f, "Sqlite Error: {}", e),
+
+            #[cfg(feature="postgresql")]
+            Postgres(ref e) => write!(f, "Postgres Error: {}", e),
+            #[cfg(feature="postgresql")]
+            PostgresConnect(ref e) => write!(f, "Postgres ConnectError: {}", e),
         }
     }
 }
@@ -69,6 +81,11 @@ impl std::error::Error for Error {
             #[cfg(feature="sqlite")]
             Sqlite(ref e)     => e,
 
+            #[cfg(feature="postgresql")]
+            Postgres(ref e)   => e,
+            #[cfg(feature="postgresql")]
+            PostgresConnect(ref e)   => e,
+
             _ => return None
         })
     }
@@ -82,6 +99,20 @@ impl From<rusqlite::Error> for Error {
     }
 }
 
+
+#[cfg(feature="postgresql")]
+impl From<postgres::error::Error> for Error {
+    fn from(e: postgres::error::Error) -> Error {
+        Error::Postgres(e)
+    }
+}
+
+#[cfg(feature="postgresql")]
+impl From<postgres::error::ConnectError> for Error {
+    fn from(e: postgres::error::ConnectError) -> Error {
+        Error::PostgresConnect(e)
+    }
+}
 
 macro_rules! format_err {
     ($e_type:expr, $literal:expr) => {

@@ -483,16 +483,27 @@ mod sql {
     pub static GET_MIGRATIONS: &'static str = "select tag from __migrant_migrations;";
 
     pub static SQLITE_MIGRATION_TABLE_EXISTS: &'static str = "select exists(select 1 from sqlite_master where type = 'table' and name = '__migrant_migrations');";
-    pub static SQLITE_ADD_MIGRATION: &'static str = "insert into __migrant_migrations (tag) values ('__VAL__');";
-    pub static SQLITE_DELETE_MIGRATION: &'static str = "delete from __migrant_migrations where tag = '__VAL__';";
-
     pub static PG_MIGRATION_TABLE_EXISTS: &'static str = "select exists(select 1 from pg_tables where tablename = '__migrant_migrations');";
-    pub static PG_ADD_MIGRATION: &'static str = "prepare stmt as insert into __migrant_migrations (tag) values ($1); execute stmt('__VAL__'); deallocate stmt;";
-    pub static PG_DELETE_MIGRATION: &'static str = "prepare stmt as delete from __migrant_migrations where tag = $1; execute stmt('__VAL__'); deallocate stmt;";
+
+    #[cfg(not(feature="sqlite"))]
+    pub use self::q_sqlite::*;
+    #[cfg(not(feature="sqlite"))]
+    mod q_sqlite {
+        pub static SQLITE_ADD_MIGRATION: &'static str = "insert into __migrant_migrations (tag) values ('__VAL__');";
+        pub static SQLITE_DELETE_MIGRATION: &'static str = "delete from __migrant_migrations where tag = '__VAL__';";
+    }
+
+    #[cfg(not(feature="postgresql"))]
+    pub use self::q_postgres::*;
+    #[cfg(not(feature="postgresql"))]
+    mod q_postgres {
+        pub static PG_ADD_MIGRATION: &'static str = "prepare stmt as insert into __migrant_migrations (tag) values ($1); execute stmt('__VAL__'); deallocate stmt;";
+        pub static PG_DELETE_MIGRATION: &'static str = "prepare stmt as delete from __migrant_migrations where tag = $1; execute stmt('__VAL__'); deallocate stmt;";
+    }
 }
 
 
-#[cfg(not(feature="postgres"))]
+#[cfg(not(feature="postgresql"))]
 fn pg_migration_table_exists(conn_str: &str) -> Result<bool> {
     let exists = Command::new("psql")
                     .arg(conn_str)
@@ -511,7 +522,7 @@ fn pg_migration_table_exists(conn_str: &str) -> Result<bool> {
     Ok(stdout.trim() == "t")
 }
 
-#[cfg(feature="postgres")]
+#[cfg(feature="postgresql")]
 fn pg_migration_table_exists(conn_str: &str) -> Result<bool> {
     use postgres::{Connection, TlsMode};
 
@@ -541,7 +552,7 @@ fn sqlite_migration_table_exists(db_path: &str) -> Result<bool> {
 }
 
 #[cfg(feature="sqlite")]
-fn sqlite_migration_table_exists(db_path: &PathBuf) -> Result<bool> {
+fn sqlite_migration_table_exists(db_path: &str) -> Result<bool> {
     use rusqlite::Connection;
 
     let conn = Connection::open(db_path)?;
@@ -550,7 +561,7 @@ fn sqlite_migration_table_exists(db_path: &PathBuf) -> Result<bool> {
 }
 
 
-#[cfg(not(feature="postgres"))]
+#[cfg(not(feature="postgresql"))]
 fn pg_migration_setup(conn_str: &str) -> Result<bool> {
     if !pg_migration_table_exists(conn_str)? {
         let out = Command::new("psql")
@@ -571,11 +582,11 @@ fn pg_migration_setup(conn_str: &str) -> Result<bool> {
     Ok(false)
 }
 
-#[cfg(feature="postgres")]
+#[cfg(feature="postgresql")]
 fn pg_migration_setup(conn_str: &str) -> Result<bool> {
     use postgres::{Connection, TlsMode};
 
-    if !pg_migration_table_exists(conn_str) {
+    if !pg_migration_table_exists(conn_str)? {
         let conn = Connection::connect(conn_str, TlsMode::None)
             .map_err(|e| format_err!(Error::Migration, "{}", e))?;
         conn.execute(sql::CREATE_TABLE, &[])
@@ -609,6 +620,7 @@ fn sqlite_migration_setup(db_path: &PathBuf) -> Result<bool> {
 fn sqlite_migration_setup(db_path: &PathBuf) -> Result<bool> {
     use rusqlite::Connection;
 
+    let db_path = db_path.to_str().unwrap();
     if !sqlite_migration_table_exists(db_path)? {
         let conn = Connection::open(db_path)?;
         conn.execute(sql::CREATE_TABLE, &[])?;
@@ -650,7 +662,7 @@ fn sqlite_select_migrations(db_path: &str) -> Result<Vec<String>> {
 }
 
 
-#[cfg(not(feature="postgres"))]
+#[cfg(not(feature="postgresql"))]
 fn pg_select_migrations(conn_str: &str) -> Result<Vec<String>> {
     let migs = Command::new("psql")
                     .arg(conn_str)
@@ -666,12 +678,16 @@ fn pg_select_migrations(conn_str: &str) -> Result<Vec<String>> {
         bail!(Migration <- "Error executing statement: {}", stderr);
     }
     let stdout = std::str::from_utf8(&migs.stdout).unwrap();
-    Ok(stdout.trim().lines().map(String::from).collect::<Vec<_>>())
+    Ok(stdout.trim().lines().map(String::from).collect())
 }
 
-#[cfg(feature="postgres")]
+#[cfg(feature="postgresql")]
 fn pg_select_migrations(conn_str: &str) -> Result<Vec<String>> {
-    unimplemented!()
+    use postgres::{Connection, TlsMode};
+
+    let conn = Connection::connect(conn_str, TlsMode::None)?;
+    let rows = conn.query(sql::GET_MIGRATIONS, &[])?;
+    Ok(rows.iter().map(|row| row.get(0)).collect())
 }
 
 
@@ -702,7 +718,7 @@ fn sqlite_insert_migration_tag(db_path: &str, tag: &str) -> Result<()> {
 }
 
 
-#[cfg(not(feature="postgres"))]
+#[cfg(not(feature="postgresql"))]
 fn pg_insert_migration_tag(conn_str: &str, tag: &str) -> Result<()> {
     let insert = Command::new("psql")
                     .arg(conn_str)
@@ -720,9 +736,13 @@ fn pg_insert_migration_tag(conn_str: &str, tag: &str) -> Result<()> {
     Ok(())
 }
 
-#[cfg(feature="postgres")]
+#[cfg(feature="postgresql")]
 fn pg_insert_migration_tag(conn_str: &str, tag: &str) -> Result<()> {
-    unimplemented!()
+    use postgres::{Connection, TlsMode};
+
+    let conn = Connection::connect(conn_str, TlsMode::None)?;
+    conn.execute("insert into __migrant_migrations (tag) values ($1)", &[&tag])?;
+    Ok(())
 }
 
 
@@ -750,7 +770,7 @@ fn sqlite_remove_migration_tag(db_path: &str, tag: &str) -> Result<()> {
     Ok(())
 }
 
-#[cfg(not(feature="postgres"))]
+#[cfg(not(feature="postgresql"))]
 fn pg_remove_migration_tag(conn_str: &str, tag: &str) -> Result<()> {
     let insert = Command::new("psql")
                     .arg(conn_str)
@@ -768,9 +788,13 @@ fn pg_remove_migration_tag(conn_str: &str, tag: &str) -> Result<()> {
     Ok(())
 }
 
-#[cfg(feature="postgres")]
+#[cfg(feature="postgresql")]
 fn pg_remove_migration_tag(conn_str: &str, tag: &str) -> Result<()> {
-    unimplemented!()
+    use postgres::{Connection, TlsMode};
+
+    let conn = Connection::connect(conn_str, TlsMode::None)?;
+    conn.execute("delete from __migrant_migrations where tag = $1", &[&tag])?;
+    Ok(())
 }
 
 
