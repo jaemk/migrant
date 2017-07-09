@@ -47,21 +47,20 @@ database_type = "sqlite"
 # ex.) database_name = "db/db.db"
 database_name = ""
 
-migration_location = "migrations"
+migration_location = "migrations"  # defeault "migrations"
 "#;
 
 static PG_CONFIG_TEMPLATE: &'static str = r#"
 # required, do not edit
 database_type = "postgres"
 
-# all required
-database_name = ""
-database_user = ""
+database_name = ""      # required
+database_user = ""      # required
 database_password = ""
 
-database_host = "localhost"
-database_port = "5432"
-migration_location = "migrations"
+database_host = "localhost"         # default "localhost"
+database_port = "5432"              # default "5432"
+migration_location = "migrations"   # default "migrations"
 
 # with the format:
 # [database_params]
