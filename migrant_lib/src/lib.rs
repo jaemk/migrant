@@ -118,12 +118,17 @@ impl ConfigInitializer {
     }
 
     /// Specify the database_type, checks whether the type is supported
-    pub fn for_database(mut self, db_type: &str) -> Result<Self> {
-        match db_type.as_ref() {
-            "postgres" | "sqlite" => (),
-            e => bail!(Config <- "unsupported database type: {}", e),
-        };
-        self.database_type = Some(db_type.to_owned());
+    pub fn for_database(mut self, db_type: Option<&str>) -> Result<Self> {
+        match db_type {
+            None => self.database_type = None,
+            Some(db_type) => {
+                match db_type {
+                    "postgres" | "sqlite" => (),
+                    e => bail!(Config <- "unsupported database type: {}", e),
+                };
+                self.database_type = Some(db_type.to_owned());
+            }
+        }
         Ok(self)
     }
 

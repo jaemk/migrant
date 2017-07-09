@@ -82,13 +82,9 @@ fn run(dir: &PathBuf, matches: &clap::ArgMatches) -> Result<(), Error> {
         let init_matches = matches.subcommand_matches("init").unwrap();
         let dir = init_matches.value_of("location").map(PathBuf::from).unwrap_or_else(|| dir.to_owned());
         let interactive = !init_matches.is_present("no-confirm");
-        let config_init = Config::init_in(&dir).interactive(interactive);
-        let config_init = if let Some(db_type) = init_matches.value_of("type") {
-            config_init.for_database(db_type)?
-        } else {
-            config_init
-        };
-        config_init.initialize()?;
+        Config::init_in(&dir)
+            .interactive(interactive)
+            .for_database(init_matches.value_of("type"))?;
         return Ok(())
     }
 
