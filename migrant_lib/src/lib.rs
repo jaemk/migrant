@@ -7,6 +7,7 @@ extern crate chrono;
 extern crate walkdir;
 extern crate regex;
 extern crate percent_encoding;
+extern crate hyper;
 
 #[cfg(feature="postgresql")]
 extern crate postgres;
@@ -21,6 +22,7 @@ use std::path::{Path, PathBuf};
 use std::ffi::OsStr;
 use std::fs;
 use std::fmt;
+use std::env;
 
 use percent_encoding::{percent_encode, DEFAULT_ENCODE_SET};
 use rpassword::read_password;
@@ -36,13 +38,41 @@ pub use errors::*;
 static CONFIG_FILE: &'static str = ".migrant.toml";
 static DT_FORMAT: &'static str = "%Y%m%d%H%M%S";
 
+static SQLITE_CONFIG_TEMPLATE: &'static str = r#"
+# required, do not edit
+database_type = "sqlite"
+
+# required: relative path to your database file from this config file dir: `__CONFIG_DIR__/`
+# ex.) database_name = "db/db.db"
+database_name = ""
+
+migration_location = "migrations"
+"#;
+
+static PG_CONFIG_TEMPLATE: &'static str = r#"
+# required, do not edit
+database_type = "postgres"
+
+# all required
+database_name = ""
+database_user = ""
+database_password = ""
+
+database_host = "localhost"
+database_port = "5432"
+migration_location = "migrations"
+
+# with the format:
+# [database_params]
+# key = "value"
+[database_params]
+
+"#;
+
 
 lazy_static! {
     // For verifying new `tag` names
     static ref TAG_RE: Regex = Regex::new(r"[^a-z0-9-]+").unwrap();
-
-    // For pulling out `tag` names from `toml::to_string`
-    //static ref MIG_RE: Regex = Regex::new(r##"(?P<mig>"[\d]+_[a-z0-9-]+")"##).unwrap();
 }
 
 
@@ -52,23 +82,20 @@ struct Settings {
     database_type: String,
     database_name: String,
     database_host: Option<String>,
+    database_port: Option<String>,
     database_user: Option<String>,
     database_password: Option<String>,
     migration_location: String,
-    //applied: Vec<String>,
+    database_params: Option<toml::value::Table>,
 }
-impl Settings {
-    fn new(db_type: String, db_name: String, db_host: Option<String>, db_user: Option<String>, password: Option<String>) -> Settings {
-        Settings {
-            database_type: db_type,
-            database_name: db_name,
-            database_host: db_host.map(|host| if host.is_empty() { "localhost".to_string() } else { host }),
-            database_user: db_user,
-            database_password: password,
-            migration_location: "migrations".to_string(),
-            //applied: vec![],
-        }
-    }
+
+
+fn write_to_path(path: &Path, content: &[u8]) -> Result<()> {
+    let mut file = fs::File::create(path)
+                    .map_err(Error::IoCreate)?;
+    file.write_all(content)
+        .map_err(Error::IoWrite)?;
+    Ok(())
 }
 
 
@@ -80,15 +107,6 @@ pub struct Config {
     applied: Vec<String>,
 }
 impl Config {
-    /// Create a new config
-    fn new(settings: Settings, path: &PathBuf) -> Config {
-        Config {
-            path: path.clone(),
-            settings: settings,
-            applied: vec![],
-        }
-    }
-
     /// Load `.migrant.toml` config file from the given path
     pub fn load(path: &PathBuf) -> Result<Config> {
         let mut file = fs::File::open(path).map_err(Error::IoOpen)?;
@@ -107,7 +125,7 @@ impl Config {
 
     fn load_applied(&self) -> Result<Vec<String>> {
         if !self.migration_table_exists()? {
-            bail!(Migration <- "`__migrant_migrations` table is missing, maybe try re-initializing? -> `migrant init`")
+            bail!(Migration <- "`__migrant_migrations` table is missing, maybe try re-setting-up? -> `setup`")
         }
 
         let applied = match self.settings.database_type.as_ref() {
@@ -186,43 +204,39 @@ impl Config {
     }
 
     /// Initialize project in the given directory
-    pub fn init(dir: &PathBuf) -> Result<Config> {
+    pub fn init(dir: &PathBuf) -> Result<()> {
         let config_path = Config::confirm_new_config_location(dir.clone())
             .map_err(|e| format_err!(Error::Config, "unable to create a .migrant.toml config -> {}", e))?;
 
-        let db_type = Prompt::with_msg(" db-type (sqlite|postgres) >> ").ask()?;
+        println!("\n ** Gathering database information...");
+        let db_type = Prompt::with_msg(" database type (sqlite|postgres) >> ").ask()?;
         match db_type.as_ref() {
             "postgres" | "sqlite" => (),
             e => bail!(Config <- "unsupported database type: {}", e),
         }
 
-        let (db_name, db_host, db_user, db_pass) = match db_type.as_ref() {
+        println!("\n ** Writing {} config template to {:?}", db_type, config_path);
+        match db_type.as_ref() {
             "postgres" => {
-                (
-                    Prompt::with_msg(" $ database name >> ").ask()?,
-                    Some(Prompt::with_msg(&format!(" $ {} database host (leave blank to default to `localhost`) >> ", &db_type)).ask()?),
-                    Some(Prompt::with_msg(&format!(" $ {} database user >> ", &db_type)).ask()?),
-                    Some(Prompt::with_msg(&format!(" $ {} user password >> ", &db_type)).secure().ask()?),
-                )
+                write_to_path(&config_path, PG_CONFIG_TEMPLATE.as_bytes())?;
             }
             "sqlite" => {
-                (
-                    Prompt::with_msg(" $ relative path to database (from .migrant.toml config file) >> ").ask()?,
-                    None,
-                    None,
-                    None,
-                )
+                let content = SQLITE_CONFIG_TEMPLATE.replace("__CONFIG_DIR__", config_path.parent().unwrap().to_str().unwrap());
+                write_to_path(&config_path, content.as_bytes())?;
             }
             _ => unreachable!(),
         };
+        println!(" ** Please update `{}` with your database credentials and run `setup`", CONFIG_FILE);
+        let editor = env::var("EDITOR").unwrap_or_else(|_| "vim".to_string());
+        println!("    -> `{} {}`", editor, config_path.to_str().unwrap());
+        Ok(())
+    }
 
-        let settings = Settings::new(db_type, db_name, db_host, db_user, db_pass);
-        let config = Config::new(settings.clone(), &config_path);
-
-        println!("\n ** Confirming database credentials");
-        match settings.database_type.as_ref() {
+    pub fn setup(&self) -> Result<bool> {
+        println!(" ** Confirming database credentials...");
+        match self.settings.database_type.as_ref() {
             "sqlite" => {
-                let db_path = config_path.parent().unwrap().join(&settings.database_name);
+                let db_path = self.path.parent().unwrap().join(&self.settings.database_name);
                 let created = create_file_if_missing(&db_path)?;
                 println!("    - checking if db file already exists...");
                 if created {
@@ -232,14 +246,14 @@ impl Config {
                 }
             }
             "postgres" => {
-                let conn_str = config.connect_string()?;
+                let conn_str = self.connect_string()?;
                 let can_connect = pg_can_connect(&conn_str)?;
                 if !can_connect {
                     println!(" ERROR: Unable to connect to {}", conn_str);
                     println!("        Please initialize your database and user");
-                    println!("\n  ex) sudo -u postgres createdb {}", &settings.database_name);
-                    println!("      sudo -u postgres createuser {}", settings.database_user.as_ref().unwrap());
-                    println!("      sudo -u postgres psql -c \"alter user {} with password '****'\"", settings.database_user.as_ref().unwrap());
+                    println!("\n  ex) sudo -u postgres createdb {}", &self.settings.database_name);
+                    println!("      sudo -u postgres createuser {}", self.settings.database_user.as_ref().unwrap());
+                    println!("      sudo -u postgres psql -c \"alter user {} with password '****'\"", self.settings.database_user.as_ref().unwrap());
                     println!();
                     bail!(Config <- "Cannot connect to postgres database");
                 } else {
@@ -250,13 +264,13 @@ impl Config {
         }
 
         println!("\n ** Setting up migrations table");
-        let table_created = match settings.database_type.as_ref() {
+        let table_created = match self.settings.database_type.as_ref() {
             "sqlite" => {
-                let db_path = config_path.parent().unwrap().join(&settings.database_name);
+                let db_path = self.path.parent().unwrap().join(&self.settings.database_name);
                 sqlite_migration_setup(&db_path)?
             }
             "postgres" => {
-                let conn_str = config.connect_string()?;
+                let conn_str = self.connect_string()?;
                 pg_migration_setup(&conn_str)?
             }
             _ => unreachable!(),
@@ -265,34 +279,19 @@ impl Config {
         if table_created {
             println!("    - migrations table missing");
             println!("    - `__migrant_migrations` table created ✓");
+            Ok(true)
         } else {
             println!("    - `__migrant_migrations` table already exists ✓");
+            Ok(false)
         }
-
-        config.save()?;
-        Ok(config)
     }
 
     /// Write the current config to its file path
-    fn save(&self) -> Result<()> {
-        let mut file = fs::File::create(self.path.clone())
-                        .map_err(Error::IoCreate)?;
-        let content = toml::to_string(&self.settings).map_err(Error::TomlSe)?;
-        //let content = content.lines().map(|line| {
-        //    if !line.starts_with("applied") { line.to_string() }
-        //    else {
-        //        // format the list of applied migrations nicely
-        //        let migs = MIG_RE.captures_iter(line)
-        //            .map(|cap| format!("    {}", &cap["mig"]))
-        //            .collect::<Vec<_>>()
-        //            .join(",\n");
-        //        format!("applied = [\n{}\n]", migs)
-        //    }
-        //}).collect::<Vec<_>>().join("\n");
-        file.write_all(content.as_bytes())
-            .map_err(Error::IoWrite)?;
-        Ok(())
-    }
+    //fn save(&self) -> Result<()> {
+    //    let content = toml::to_string(&self.settings).map_err(Error::TomlSe)?;
+    //    write_to_path(&self.path, content.as_bytes())?;
+    //    Ok(())
+    //}
 
     /// Return the absolute path to the directory containing migration folders
     pub fn migration_dir(&self) -> Result<PathBuf> {
@@ -301,6 +300,9 @@ impl Config {
             .ok_or_else(|| format_err!(Error::PathError, "Error generating PathBuf to migration_location"))
     }
 
+    pub fn database_type(&self) -> Result<String> {
+        Ok(self.settings.database_type.to_owned())
+    }
     /// Return the absolute path to the database file. This is intended for
     /// sqlite3 databases only
     pub fn database_path(&self) -> Result<PathBuf> {
@@ -333,17 +335,41 @@ impl Config {
             Some(ref user) => encode(user),
             None => bail!(Config <- "config-err: 'database_user' not specified"),
         };
-        let host = self.settings.database_host.as_ref()
-            .map(|s| s.to_string())
-            .unwrap_or("localhost".to_string());
-        let host = if host.is_empty() { "localhost".to_string() } else { encode(&host) };
+
         let db_name = encode(&self.settings.database_name);
-        Ok(format!("{db_type}://{user}{pass}@{host}/{db_name}",
+
+        let host = self.settings.database_host.clone().unwrap_or_else(|| "localhost".to_string());
+        let host = if host.is_empty() { "localhost".to_string() } else { host };
+        let host = encode(&host);
+
+        let port = self.settings.database_port.clone().unwrap_or_else(|| "5432".to_string());
+        let port = if host.is_empty() { "5432".to_string() } else { port };
+        let port = encode(&port);
+
+        let s = format!("{db_type}://{user}{pass}@{host}:{port}/{db_name}",
                 db_type=self.settings.database_type,
                 user=user,
                 pass=pass,
                 host=host,
-                db_name=db_name))
+                port=port,
+                db_name=db_name);
+        let mut url = hyper::Url::parse(&s)
+            .map_err(|e| format_err!(Error::Config, "{}", e))?;
+
+        if let Some(ref params) = self.settings.database_params {
+            let mut pairs: Vec<(String, String)> = vec![];
+            for (k, v) in params.iter() {
+                let k = k.to_string();
+                let v = match *v {
+                    toml::value::Value::String(ref s) => s.to_owned(),
+                    ref v => bail!(Config <- "Database params can only be strings, found `{}={}`", k, v),
+                };
+                pairs.push((k, v));
+            }
+            url.set_query_from_pairs(pairs);
+        }
+
+        Ok(url.serialize())
     }
 }
 
