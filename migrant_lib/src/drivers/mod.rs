@@ -3,9 +3,6 @@ use std::fs;
 use std::process::Command;
 use std::path::Path;
 
-#[cfg(feature="postgresql")]
-use std::io::Read;
-
 use super::errors::*;
 
 
@@ -41,6 +38,9 @@ mod sql {
 /// Postgres database functions using shell commands and db drivers
 pub mod pg {
     use super::*;
+
+    #[cfg(feature="postgresql")]
+    use std::io::Read;
 
     // --
     // Check connection
@@ -83,7 +83,7 @@ pub mod pg {
                         .map_err(Error::IoProc)?;
         if !exists.status.success() {
             let stderr = std::str::from_utf8(&exists.stderr).unwrap();
-            bail!(Migration <- "Error executing statement: {}", stderr);
+            bail!(Migration <- "Error executing statement, stderr: `{}`", stderr);
         }
         let stdout = std::str::from_utf8(&exists.stdout).unwrap();
         Ok(stdout.trim() == "t")
@@ -119,7 +119,7 @@ pub mod pg {
                             .map_err(Error::IoProc)?;
             if !out.status.success() {
                 let stderr = std::str::from_utf8(&out.stderr).unwrap();
-                bail!(Migration <- "Error executing statement: {}", stderr);
+                bail!(Migration <- "Error executing statement, stderr: `{}`", stderr);
             }
             return Ok(true)
         }
@@ -157,7 +157,7 @@ pub mod pg {
                         .map_err(Error::IoProc)?;
         if !migs.status.success() {
             let stderr = std::str::from_utf8(&migs.stderr).unwrap();
-            bail!(Migration <- "Error executing statement: {}", stderr);
+            bail!(Migration <- "Error executing statement, stderr: `{}`", stderr);
         }
         let stdout = std::str::from_utf8(&migs.stdout).unwrap();
         Ok(stdout.trim().lines().map(String::from).collect())
@@ -189,7 +189,7 @@ pub mod pg {
                         .map_err(Error::IoProc)?;
         if !insert.status.success() {
             let stderr = std::str::from_utf8(&insert.stderr).unwrap();
-            bail!(Migration <- "Error executing statement: {}", stderr);
+            bail!(Migration <- "Error executing statement, stderr: `{}`", stderr);
         }
         Ok(())
     }
@@ -220,7 +220,7 @@ pub mod pg {
                         .map_err(Error::IoProc)?;
         if !insert.status.success() {
             let stderr = std::str::from_utf8(&insert.stderr).unwrap();
-            bail!(Migration <- "Error executing statement: {}", stderr);
+            bail!(Migration <- "Error executing statement, stderr: `{}`", stderr);
         }
         Ok(())
     }
@@ -271,6 +271,8 @@ pub mod pg {
 pub mod sqlite {
     use super::*;
 
+    #[cfg(feature="sqlite")]
+    use std::io::Read;
 
     // --
     // Check database exists / create it
@@ -301,7 +303,7 @@ pub mod sqlite {
                         .map_err(Error::IoProc)?;
         if !exists.status.success() {
             let stderr = std::str::from_utf8(&exists.stderr).unwrap();
-            bail!(Migration <- "Error executing statement: {}", stderr);
+            bail!(Migration <- "Error executing statement, stderr: `{}`", stderr);
         }
         let stdout = std::str::from_utf8(&exists.stdout).unwrap();
         Ok(stdout.trim() == "1")
@@ -332,7 +334,7 @@ pub mod sqlite {
                             .map_err(Error::IoProc)?;
             if !out.status.success() {
                 let stderr = std::str::from_utf8(&out.stderr).unwrap();
-                bail!(Migration <- "Error executing statement: {}", stderr);
+                bail!(Migration <- "Error executing statement, stderr: `{}`", stderr);
             }
             return Ok(true)
         }
@@ -366,7 +368,7 @@ pub mod sqlite {
                         .map_err(Error::IoProc)?;
         if !migs.status.success() {
             let stderr = std::str::from_utf8(&migs.stderr).unwrap();
-            bail!(Migration <- "Error executing statement: {}", stderr);
+            bail!(Migration <- "Error executing statement, stderr: `{}`", stderr);
         }
         let stdout = std::str::from_utf8(&migs.stdout).unwrap();
         Ok(stdout.trim().lines().map(String::from).collect::<Vec<_>>())
@@ -393,8 +395,6 @@ pub mod sqlite {
     // --
     #[cfg(not(feature="sqlite"))]
     pub fn insert_migration_tag(db_path: &str, tag: &str) -> Result<()> {
-        let stmt = sql::SQLITE_ADD_MIGRATION.replace("__VAL__", tag);
-        println!("stmt: {}", stmt);
         let insert = Command::new("sqlite3")
                         .arg(&db_path)
                         .arg("-csv")
@@ -403,7 +403,7 @@ pub mod sqlite {
                         .map_err(Error::IoProc)?;
         if !insert.status.success() {
             let stderr = std::str::from_utf8(&insert.stderr).unwrap();
-            bail!(Migration <- "Error executing statement: {}", stderr);
+            bail!(Migration <- "Error executing statement, stderr: `{}`", stderr);
         }
         Ok(())
     }
@@ -431,7 +431,7 @@ pub mod sqlite {
                         .map_err(Error::IoProc)?;
         if !exists.status.success() {
             let stderr = std::str::from_utf8(&exists.stderr).unwrap();
-            bail!(Migration <- "Error executing statement: {}", stderr);
+            bail!(Migration <- "Error executing statement, stderr: `{}`", stderr);
         }
         Ok(())
     }

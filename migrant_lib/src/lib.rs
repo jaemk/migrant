@@ -2,12 +2,11 @@
 #[macro_use] extern crate serde_derive;
 extern crate serde;
 extern crate toml;
-extern crate rpassword;
 extern crate chrono;
 extern crate walkdir;
 extern crate regex;
 extern crate percent_encoding;
-extern crate hyper;
+extern crate url;
 extern crate libc;
 
 #[cfg(feature="postgresql")]
@@ -26,7 +25,6 @@ use std::fmt;
 use std::env;
 
 use percent_encoding::{percent_encode, DEFAULT_ENCODE_SET};
-use rpassword::read_password;
 use walkdir::WalkDir;
 use chrono::TimeZone;
 use regex::Regex;
@@ -83,20 +81,6 @@ lazy_static! {
 }
 
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
-/// Settings that are serialized and saved in a project `.migrant.toml` file
-struct Settings {
-    database_type: String,
-    database_name: String,
-    database_host: Option<String>,
-    database_port: Option<String>,
-    database_user: Option<String>,
-    database_password: Option<String>,
-    migration_location: String,
-    database_params: Option<toml::value::Table>,
-}
-
-
 /// Write the provided bytes to the specified path
 fn write_to_path(path: &Path, content: &[u8]) -> Result<()> {
     let mut file = fs::File::create(path)
@@ -116,6 +100,37 @@ fn run_command_in_fg(command: &str) -> Result<()> {
     let ret = unsafe { libc::system(c_comm.as_ptr()) };
     if ret != 0 { bail!(ShellCommand <- "Command `{}` exited with status `{}`", command, ret) }
     Ok(())
+}
+
+
+/// Percent encode a string
+fn encode(s: &str) -> String {
+    percent_encode(s.as_bytes(), DEFAULT_ENCODE_SET).to_string()
+}
+
+
+/// Prompt the user and return their input
+fn prompt(msg: &str) -> Result<String> {
+    print!("{}", msg);
+    io::stdout().flush().map_err(Error::IoWrite)?;
+    let mut resp = String::new();
+    io::stdin().read_line(&mut resp)
+        .map_err(Error::IoRead)?;
+    Ok(resp.trim().to_string())
+}
+
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+/// Settings that are serialized and saved in a project `.migrant.toml` file
+struct Settings {
+    database_type: String,
+    database_name: String,
+    database_host: Option<String>,
+    database_port: Option<String>,
+    database_user: Option<String>,
+    database_password: Option<String>,
+    migration_location: String,
+    database_params: Option<toml::value::Table>,
 }
 
 
@@ -152,7 +167,7 @@ impl ConfigInitializer {
         Ok(self)
     }
 
-    /// Toggle interactive prompts
+    /// Set interactive prompts, default is `true`
     pub fn interactive(mut self, b: bool) -> Self {
         self.interactive = b;
         self
@@ -161,15 +176,15 @@ impl ConfigInitializer {
     /// Determines whether new .migrant file location should be in
     /// the given directory or a user specified path
     fn confirm_new_config_location(dir: &Path) -> Result<PathBuf> {
-        println!(" $ A new `{}` config file will be created at the following location: ", CONFIG_FILE);
-        println!(" $  {:?}", dir.display());
-        let ans = Prompt::with_msg(" $ Is this ok? (y/n) >> ").ask()?;
+        println!(" A new `{}` config file will be created at the following location: ", CONFIG_FILE);
+        println!("   {:?}", dir.display());
+        let ans = prompt(" Is this ok? (y/n) >> ")?;
         if ans.trim().to_lowercase() == "y" {
             return Ok(dir.to_owned());
         }
 
-        println!(" $ You can specify the absolute location now, or nothing to exit");
-        let ans = Prompt::with_msg(" $ >> ").ask()?;
+        println!(" You can specify the absolute location now, or nothing to exit");
+        let ans = prompt(" >> ")?;
         if ans.trim().is_empty() {
             bail!(Config <- "No `{}` path provided", CONFIG_FILE)
         }
@@ -181,9 +196,9 @@ impl ConfigInitializer {
         Ok(path)
     }
 
-    /// Generate a template config file using provided parameters or prompting the user
+    /// Generate a template config file using provided parameters or prompting the user.
     /// If running interactively, the file will be opened for editing and `Config::setup`
-    /// will be run.
+    /// will be run automatically.
     pub fn initialize(self) -> Result<()> {
         let config_path = self.dir.join(CONFIG_FILE);
         let config_path = if !self.interactive {
@@ -200,7 +215,7 @@ impl ConfigInitializer {
                 bail!(Config <- "database type must be specified if running non-interactively")
             }
             println!("\n ** Gathering database information...");
-            let db_type = Prompt::with_msg(" database type (sqlite|postgres) >> ").ask()?;
+            let db_type = prompt(" database type (sqlite|postgres) >> ")?;
             match db_type.as_ref() {
                 "postgres" | "sqlite" => (),
                 e => bail!(Config <- "unsupported database type: {}", e),
@@ -227,11 +242,12 @@ impl ConfigInitializer {
             let command = format!("{} {}", editor, config_path.to_str().unwrap());
             println!(" -- Your config file will be opened with the following command: `{}`", &command);
             println!(" -- After editing, the `setup` command will be run for you");
-            let _ = Prompt::with_msg(&format!(" -- Press [ENTER] to open now or [CTRL+C] to exit and open manually")).ask()?;
+            let _ = prompt(&format!(" -- Press [ENTER] to open now or [CTRL+C] to exit and edit manually"))?;
             run_command_in_fg(&command)
                 .map_err(|e| format_err!(Error::Config, "Error editing config file: {}", e))?;
 
-            let config = Config::load(&config_path)?;
+            println!();
+            let config = Config::load_file_only(&config_path)?;
             let _setup = config.setup()?;
         }
         Ok(())
@@ -356,7 +372,7 @@ impl Config {
                 let can_connect = drivers::pg::can_connect(&conn_str)?;
                 if !can_connect {
                     println!(" ERROR: Unable to connect to {}", conn_str);
-                    println!("        Please initialize your database and user");
+                    println!("        Please initialize your database and user and then run `setup`");
                     println!("\n  ex) sudo -u postgres createdb {}", &self.settings.database_name);
                     println!("      sudo -u postgres createuser {}", self.settings.database_user.as_ref().unwrap());
                     println!("      sudo -u postgres psql -c \"alter user {} with password '****'\"", self.settings.database_user.as_ref().unwrap());
@@ -458,30 +474,23 @@ impl Config {
                 host=host,
                 port=port,
                 db_name=db_name);
-        let mut url = hyper::Url::parse(&s)
-            .map_err(|e| format_err!(Error::Config, "{}", e))?;
+
+        let mut url = url::Url::parse(&s)?;
 
         if let Some(ref params) = self.settings.database_params {
-            let mut pairs: Vec<(String, String)> = vec![];
+            let mut url = url.query_pairs_mut();
             for (k, v) in params.iter() {
-                let k = k.to_string();
+                let k = encode(k);
                 let v = match *v {
-                    toml::value::Value::String(ref s) => s.to_owned(),
+                    toml::value::Value::String(ref s) => encode(s),
                     ref v => bail!(Config <- "Database params can only be strings, found `{}={}`", k, v),
                 };
-                pairs.push((k, v));
+                url.append_pair(&k, &v);
             }
-            url.set_query_from_pairs(pairs);
         }
 
-        Ok(url.serialize())
+        Ok(url.into_string())
     }
-}
-
-
-/// Percent encode a string
-fn encode(s: &str) -> String {
-    percent_encode(s.as_bytes(), DEFAULT_ENCODE_SET).to_string()
 }
 
 
@@ -570,60 +579,6 @@ impl Migrator {
             &self.config, self.direction,
             self.force, self.fake, self.all,
             )
-    }
-}
-
-
-/// Run a given migration file through either sqlite or postgres, returning the output
-fn runner(config: &Config, filename: &str) -> Result<()> {
-    let settings = &config.settings;
-    Ok(match settings.database_type.as_ref() {
-        "sqlite" => {
-            let db_path = config.database_path()?;
-            drivers::sqlite::run_migration(&db_path, filename)?;
-        }
-        "postgres" => {
-            let conn_str = config.connect_string()?;
-            drivers::pg::run_migration(&conn_str, filename)?;
-        }
-        _ => unreachable!(),
-    })
-}
-
-
-/// CLI Prompter
-pub struct Prompt {
-    msg: String,
-    secure: bool,
-}
-impl Prompt {
-    /// Construct a new `Prompt` with the given message
-    pub fn with_msg(msg: &str) -> Self {
-        Self {
-            msg: msg.into(),
-            secure: false,
-        }
-    }
-
-    /// Ask securely. Don't show output when typing
-    pub fn secure(mut self) -> Self {
-        self.secure = true;
-        self
-    }
-
-    /// Prompt the user and return their input
-    pub fn ask(self) -> Result<String> {
-        print!("{}", self.msg);
-        io::stdout().flush().map_err(Error::IoWrite)?;
-        let resp = if self.secure {
-            read_password().map_err(Error::IoRead)?
-        } else {
-            let mut resp = String::new();
-            io::stdin().read_line(&mut resp)
-                .map_err(Error::IoRead)?;
-            resp.trim().to_string()
-        };
-        Ok(resp)
     }
 }
 
@@ -732,6 +687,23 @@ fn next_available(direction: &Direction, mig_dir: &PathBuf, applied: &[String]) 
 }
 
 
+/// Run a given migration file through either sqlite or postgres, returning the output
+fn runner(config: &Config, filename: &str) -> Result<()> {
+    let settings = &config.settings;
+    Ok(match settings.database_type.as_ref() {
+        "sqlite" => {
+            let db_path = config.database_path()?;
+            drivers::sqlite::run_migration(&db_path, filename)?;
+        }
+        "postgres" => {
+            let conn_str = config.connect_string()?;
+            drivers::pg::run_migration(&conn_str, filename)?;
+        }
+        _ => unreachable!(),
+    })
+}
+
+
 /// Try applying the next available migration in the specified `Direction`
 fn apply_migration(config: &Config, direction: Direction,
                        force: bool, fake: bool, all: bool) -> Result<()> {
@@ -758,7 +730,6 @@ fn apply_migration(config: &Config, direction: Direction,
                 };
             }
 
-            //let mut config = config.clone();
             let mig_tag = next.parent()
                 .and_then(Path::file_name)
                 .and_then(OsStr::to_str)
@@ -767,13 +738,9 @@ fn apply_migration(config: &Config, direction: Direction,
             match direction {
                 Direction::Up => {
                     config.insert_migration_tag(&mig_tag)?;
-                    //config.settings.applied.push(mig_tag);
-                    //config.save()?;
                 }
                 Direction::Down => {
                     config.delete_migration_tag(&mig_tag)?;
-                    //config.settings.applied.pop();
-                    //config.save()?;
                 }
             }
         }

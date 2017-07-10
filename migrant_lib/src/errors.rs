@@ -1,5 +1,6 @@
 use std;
 use toml;
+use url;
 
 #[cfg(feature="sqlite")]
 use rusqlite;
@@ -24,6 +25,7 @@ pub enum Error {
     Utf8Error(std::string::FromUtf8Error),
     TomlDe(toml::de::Error),
     TomlSe(toml::ser::Error),
+    UrlParse(url::ParseError),
 
     #[cfg(feature="sqlite")]
     Sqlite(rusqlite::Error),
@@ -51,6 +53,7 @@ impl std::fmt::Display for Error {
             Utf8Error(ref e)          => write!(f, "Utf8 Error: {}", e),
             TomlDe(ref e)             => write!(f, "Toml Deserialization Error: {}", e),
             TomlSe(ref e)             => write!(f, "Toml Serialization Error: {}", e),
+            UrlParse(ref e)           => write!(f, "UrlParse Error: {}", e),
 
             #[cfg(feature="sqlite")]
             Sqlite(ref e)   => write!(f, "Sqlite Error: {}", e),
@@ -79,6 +82,7 @@ impl std::error::Error for Error {
             Utf8Error(ref e)  => e,
             TomlDe(ref e)     => e,
             TomlSe(ref e)     => e,
+            UrlParse(ref e)   => e,
 
             #[cfg(feature="sqlite")]
             Sqlite(ref e)     => e,
@@ -93,6 +97,12 @@ impl std::error::Error for Error {
     }
 }
 
+
+impl From<url::ParseError> for Error {
+    fn from(e: url::ParseError) -> Error {
+        Error::UrlParse(e)
+    }
+}
 
 #[cfg(feature="sqlite")]
 impl From<rusqlite::Error> for Error {
