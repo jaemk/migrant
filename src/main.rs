@@ -79,13 +79,16 @@ fn run(dir: &PathBuf, matches: &clap::ArgMatches) -> Result<(), Error> {
     let config_path = migrant_lib::search_for_config(dir);
 
     if matches.is_present("init") || config_path.is_none() {
-        let init_matches = matches.subcommand_matches("init").unwrap();
-        let dir = init_matches.value_of("location").map(PathBuf::from).unwrap_or_else(|| dir.to_owned());
-        let interactive = !init_matches.is_present("no-confirm");
-        Config::init_in(&dir)
-            .interactive(interactive)
-            .for_database(init_matches.value_of("type"))?
-            .initialize()?;
+        let config = if let Some(init_matches) = matches.subcommand_matches("init") {
+            let dir = init_matches.value_of("location").map(PathBuf::from).unwrap_or_else(|| dir.to_owned());
+            let interactive = !init_matches.is_present("no-confirm");
+            Config::init_in(&dir)
+                .interactive(interactive)
+                .for_database(init_matches.value_of("type"))?
+        } else {
+            Config::init_in(&dir)
+        };
+        config.initialize()?;
         return Ok(())
     }
 
