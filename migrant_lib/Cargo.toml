@@ -1,6 +1,6 @@
 [package]
 name = "migrant_lib"
-version = "0.10.1"
+version = "0.11.0"
 authors = ["James Kominick <james.kominick@gmail.com>"]
 description = "Simple database migration library for postgres, sqlite"
 repository = "https://github.com/jaemk/migrant"
