@@ -238,6 +238,20 @@ pub mod pg {
     // --
     // Apply migration to database
     // --
+    #[cfg(not(feature="postgresql"))]
+    pub fn run_migration(conn_str: &str, filename: &str) -> Result<()> {
+        let migrate = Command::new("psql")
+                .arg(&conn_str)
+                .arg("-f").arg(filename)
+                .output()
+                .map_err(Error::IoProc)?;
+        if !migrate.status.success() {
+            let stderr = std::str::from_utf8(&migrate.stderr).unwrap();
+            bail!(Migration <- "Error executing statement, stderr: `{}`", stderr);
+        }
+        Ok(())
+    }
+
     #[cfg(feature="postgresql")]
     pub fn run_migration(conn_str: &str, filename: &str) -> Result<()> {
         use postgres::{Connection, TlsMode};
@@ -255,16 +269,6 @@ pub mod pg {
         Ok(())
     }
 
-    /// Fall back to running the migration using the postgres cli
-    #[cfg(not(feature="postgresql"))]
-    pub fn run_migration(conn_str: &str, filename: &str) -> Result<()> {
-        Command::new("psql")
-                .arg(&conn_str)
-                .arg("-f").arg(filename)
-                .output()
-                .map_err(Error::IoProc)?;
-        Ok(())
-    }
 }
 
 
@@ -450,14 +454,17 @@ pub mod sqlite {
     // --
     // Apply migration file to database
     // --
-    /// Fall back to running the migration using the sqlite cli
     #[cfg(not(feature="sqlite"))]
     pub fn run_migration(db_path: &Path, filename: &str) -> Result<()> {
-        Command::new("sqlite3")
+        let migrate = Command::new("sqlite3")
                 .arg(db_path.to_str().unwrap())
                 .arg(&format!(".read {}", filename))
                 .output()
                 .map_err(Error::IoProc)?;
+        if !migrate.status.success() {
+            let stderr = std::str::from_utf8(&migrate.stderr).unwrap();
+            bail!(Migration <- "Error executing statement, stderr: `{}`", stderr);
+        }
         Ok(())
     }
 
