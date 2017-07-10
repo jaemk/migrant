@@ -209,7 +209,7 @@ pub mod pg {
     // --
     #[cfg(not(feature="postgresql"))]
     pub fn remove_migration_tag(conn_str: &str, tag: &str) -> Result<()> {
-        let insert = Command::new("psql")
+        let remove = Command::new("psql")
                         .arg(conn_str)
                         .arg("-t")      // no headers or footer
                         .arg("-A")      // un-aligned output
@@ -218,8 +218,8 @@ pub mod pg {
                         .arg(sql::PG_DELETE_MIGRATION.replace("__VAL__", tag))
                         .output()
                         .map_err(Error::IoProc)?;
-        if !insert.status.success() {
-            let stderr = std::str::from_utf8(&insert.stderr).unwrap();
+        if !remove.status.success() {
+            let stderr = std::str::from_utf8(&remove.stderr).unwrap();
             bail!(Migration <- "Error executing statement, stderr: `{}`", stderr);
         }
         Ok(())
@@ -428,14 +428,14 @@ pub mod sqlite {
     // --
     #[cfg(not(feature="sqlite"))]
     pub fn remove_migration_tag(db_path: &str, tag: &str) -> Result<()> {
-        let exists = Command::new("sqlite3")
+        let remove = Command::new("sqlite3")
                         .arg(&db_path)
                         .arg("-csv")
                         .arg(sql::SQLITE_DELETE_MIGRATION.replace("__VAL__", tag))
                         .output()
                         .map_err(Error::IoProc)?;
-        if !exists.status.success() {
-            let stderr = std::str::from_utf8(&exists.stderr).unwrap();
+        if !remove.status.success() {
+            let stderr = std::str::from_utf8(&remove.stderr).unwrap();
             bail!(Migration <- "Error executing statement, stderr: `{}`", stderr);
         }
         Ok(())
