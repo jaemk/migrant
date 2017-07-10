@@ -481,14 +481,20 @@ impl Config {
         let mut url = url::Url::parse(&s)?;
 
         if let Some(ref params) = self.settings.database_params {
-            let mut url = url.query_pairs_mut();
+            let mut pairs = vec![];
             for (k, v) in params.iter() {
                 let k = encode(k);
                 let v = match *v {
                     toml::value::Value::String(ref s) => encode(s),
                     ref v => bail!(Config <- "Database params can only be strings, found `{}={}`", k, v),
                 };
-                url.append_pair(&k, &v);
+                pairs.push((k, v));
+            }
+            if !pairs.is_empty() {
+                let mut url = url.query_pairs_mut();
+                for &(ref k, ref v) in &pairs {
+                    url.append_pair(k, v);
+                }
             }
         }
 
