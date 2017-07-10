@@ -358,6 +358,9 @@ impl Config {
         println!(" ** Confirming database credentials...");
         match self.settings.database_type.as_ref() {
             "sqlite" => {
+                if self.settings.database_name.is_empty() {
+                    bail!(Config <- "`database_name` cannot be blank!")
+                }
                 let db_path = self.path.parent().unwrap().join(&self.settings.database_name);
                 let created = drivers::sqlite::create_file_if_missing(&db_path)?;
                 println!("    - checking if db file already exists...");
