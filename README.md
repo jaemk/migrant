@@ -6,12 +6,18 @@ Currently supports:
  * sqlite
 
 
+`migrant` will manage all migrations that live under `<project-dir>/migrations/` where `project-dir` is `.../<project-dir>/.migrant.toml`.
+The default migration location can be modified in your `.migrant.toml` file (`"migration_location"`).
+If the directory doesn't exist, it will be created the first time you create a new migration.
+`migrant` stores all applied migrations in a database table named `__migrant_migrations`
+
+
 ### Installation
 
 By default `migrant` will build without any features, falling back to using each database's `cli` commands (`psql` & `sqlite3`).
 The `postgres` and `rusqlite` database driver libraries can be activated with the `postgresql` and `sqlite` `features`.
-Both of these drivers require their dev libraries (`postgres`: `libpq-dev`, `sqlite`: `libsqlite3-dev`).
-The binary releases are built with these features.
+Both of these drivers require their dev libraries (`postgresql`: `libpq-dev`, `sqlite`: `libsqlite3-dev`).
+The binary releases are built with all features.
 
 See [releases](https://github.com/jaemk/migrant/releases) for binaries, or
 
@@ -32,17 +38,22 @@ cargo install migrant --features 'postgresql sqlite'
 
 ### Simple Usage
 
-`migrant init` - initialize project and create a `.migrant.toml` file (which should be `.gitignore'd`) with db info/credentials. The default migration location (relative to your `.migrant.toml`) is `migrations/`. This can be modified in your `.migrant.toml` file (`"migration_location"`). If the directory doesn't exist, it will be created the first time you create a new migration.
+`migrant init [--type <database-type>, --location <project-dir>, --no-confirm]` - Initialize project by creating a `.migrant.toml` file with db info/credentials.
+When run interactively (without `--no-confirm`), `setup` will be run automatically.
 
-`migrant new initial` - generate new up & down files with the tag `initial` under the specified `migration_location`.
+`migrant setup` - Verify database info/credentials and setup a `__migrant_migrations` table if missing.
 
-`migrant list` - display all available .sql files and mark those applied.
+`migrant new initial` - Generate new up & down files with the tag `initial` under the specified `migration_location`.
 
-`migrant apply [--down, --all, --force, --fake]` - apply the next available migration[s].
+`migrant list` - Display all available .sql files and mark those applied.
 
-`migrant shell` - open a repl
+`migrant apply [--down, --all, --force, --fake]` - Apply the next available migration[s].
 
-`migrant which-config` - display the full path of the `.migrant.toml` file being used
+`migrant shell` - Open a repl
+
+`migrant which-config` - Display the full path of the `.migrant.toml` file being used
+
+`migrant connect-string` - Display either the connection-string generated from config-params or the database-path for sqlite
 
 
 ### Usage as a library

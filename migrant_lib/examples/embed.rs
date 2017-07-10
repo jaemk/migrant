@@ -10,14 +10,15 @@ use std::env;
 use migrant_lib::Config;
 
 
-pub fn main() {
+fn run() -> Result<(), migrant_lib::Error> {
     let dir = env::current_dir().unwrap();
     let config = match migrant_lib::search_for_config(&dir) {
         None => {
-            Config::init(&dir).expect("failed to initialize project");
-            return;
+            Config::init_in(&dir)
+                .initialize()?;
+            return Ok(())
         }
-        Some(p) => Config::load(&p).expect("failed to load config"),
+        Some(p) => Config::load(&p)?
     };
 
     // This will fail if no migration files are present!
@@ -25,9 +26,14 @@ pub fn main() {
     // migrant_lib::Migrator::with_config(&config)
     //     .direction(migrant_lib::Direction::Up)
     //     .all(true)
-    //     .apply()
-    //     .expect("failed to apply migrations")
+    //     .apply()?;
 
-    migrant_lib::list(&config)
-        .expect("failed to list migrations");
+    migrant_lib::list(&config)?;
+    Ok(())
+}
+
+pub fn main() {
+    if let Err(e) = run() {
+        println!("[ERROR] {}", e);
+    }
 }

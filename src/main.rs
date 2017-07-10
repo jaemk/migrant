@@ -13,7 +13,25 @@ fn main() {
         .author("James K. <james.kominick@gmail.com>")
         .about("Postgres/SQLite migration manager")
         .subcommand(SubCommand::with_name("init")
-            .about("Initialize project"))
+            .about("Initialize project config")
+            .arg(Arg::with_name("type")
+                 .long("type")
+                 .short("t")
+                 .takes_value(true)
+                 .help("Specify the database type (sqlite|postgres)"))
+            .arg(Arg::with_name("location")
+                 .long("location")
+                 .short("l")
+                 .takes_value(true)
+                 .help("Directory to initialize in"))
+            .arg(Arg::with_name("no-confirm")
+                 .long("no-confirm")
+                 .takes_value(false)
+                 .help("Disable interactive prompts")))
+        .subcommand(SubCommand::with_name("setup")
+            .about("Setup migration table"))
+        .subcommand(SubCommand::with_name("connect-string")
+            .about("Print out the connection string for postgres, or file-path for sqlite"))
         .subcommand(SubCommand::with_name("list")
             .about("List status of applied and available migrations"))
         .subcommand(SubCommand::with_name("apply")
@@ -61,13 +79,38 @@ fn run(dir: &PathBuf, matches: &clap::ArgMatches) -> Result<(), Error> {
     let config_path = migrant_lib::search_for_config(dir);
 
     if matches.is_present("init") || config_path.is_none() {
-        let _ = Config::init(dir)?;
+        let config = if let Some(init_matches) = matches.subcommand_matches("init") {
+            let dir = init_matches.value_of("location").map(PathBuf::from).unwrap_or_else(|| dir.to_owned());
+            let interactive = !init_matches.is_present("no-confirm");
+            Config::init_in(&dir)
+                .interactive(interactive)
+                .for_database(init_matches.value_of("type"))?
+        } else {
+            Config::init_in(&dir)
+        };
+        config.initialize()?;
         return Ok(())
     }
 
     let config_path = config_path.unwrap();    // absolute path of `.migrant` file
+    let config = Config::load_file_only(&config_path)?;
 
-    let config = Config::load(&config_path)?;
+    if matches.is_present("setup") {
+        config.setup()?;
+        return Ok(())
+    }
+
+    if matches.is_present("connect-string") {
+        if config.database_type()? == "sqlite" {
+            println!("{}", config.database_path()?.to_str().unwrap());
+        } else {
+            println!("{}", config.connect_string()?);
+        }
+        return Ok(())
+    }
+
+    // load applied migrations from the database
+    let config = config.reload()?;
 
     match matches.subcommand() {
         ("list", _) => {

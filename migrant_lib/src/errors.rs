@@ -1,6 +1,12 @@
 use std;
 use toml;
+use url;
 
+#[cfg(feature="sqlite")]
+use rusqlite;
+
+#[cfg(feature="postgresql")]
+use postgres;
 
 pub type Result<T> = std::result::Result<T, Error>;
 
@@ -9,6 +15,7 @@ pub enum Error {
     Config(String),
     Migration(String),
     MigrationComplete(String),
+    ShellCommand(String),
     PathError(String),
     IoOpen(std::io::Error),
     IoCreate(std::io::Error),
@@ -18,6 +25,15 @@ pub enum Error {
     Utf8Error(std::string::FromUtf8Error),
     TomlDe(toml::de::Error),
     TomlSe(toml::ser::Error),
+    UrlParse(url::ParseError),
+
+    #[cfg(feature="sqlite")]
+    Sqlite(rusqlite::Error),
+
+    #[cfg(feature="postgresql")]
+    Postgres(postgres::error::Error),
+    #[cfg(feature="postgresql")]
+    PostgresConnect(postgres::error::ConnectError),
 }
 
 impl std::fmt::Display for Error {
@@ -27,6 +43,7 @@ impl std::fmt::Display for Error {
             Config(ref s)             => write!(f, "Config Error: {}", s),
             Migration(ref s)          => write!(f, "Migration Error: {}", s),
             MigrationComplete(ref s)  => write!(f, "MigrationComplete: {}", s),
+            ShellCommand(ref s)       => write!(f, "ShellCommand Error: {}", s),
             PathError(ref s)          => write!(f, "PathError: {}", s),
             IoOpen(ref e)             => write!(f, "IoOpen Error: {}", e),
             IoCreate(ref e)           => write!(f, "IoCreate Error: {}", e),
@@ -36,6 +53,15 @@ impl std::fmt::Display for Error {
             Utf8Error(ref e)          => write!(f, "Utf8 Error: {}", e),
             TomlDe(ref e)             => write!(f, "Toml Deserialization Error: {}", e),
             TomlSe(ref e)             => write!(f, "Toml Serialization Error: {}", e),
+            UrlParse(ref e)           => write!(f, "UrlParse Error: {}", e),
+
+            #[cfg(feature="sqlite")]
+            Sqlite(ref e)   => write!(f, "Sqlite Error: {}", e),
+
+            #[cfg(feature="postgresql")]
+            Postgres(ref e) => write!(f, "Postgres Error: {}", e),
+            #[cfg(feature="postgresql")]
+            PostgresConnect(ref e) => write!(f, "Postgres ConnectError: {}", e),
         }
     }
 }
@@ -56,11 +82,49 @@ impl std::error::Error for Error {
             Utf8Error(ref e)  => e,
             TomlDe(ref e)     => e,
             TomlSe(ref e)     => e,
+            UrlParse(ref e)   => e,
+
+            #[cfg(feature="sqlite")]
+            Sqlite(ref e)     => e,
+
+            #[cfg(feature="postgresql")]
+            Postgres(ref e)   => e,
+            #[cfg(feature="postgresql")]
+            PostgresConnect(ref e)   => e,
+
             _ => return None
         })
     }
 }
 
+
+impl From<url::ParseError> for Error {
+    fn from(e: url::ParseError) -> Error {
+        Error::UrlParse(e)
+    }
+}
+
+#[cfg(feature="sqlite")]
+impl From<rusqlite::Error> for Error {
+    fn from(e: rusqlite::Error) -> Error {
+        Error::Sqlite(e)
+    }
+}
+
+
+#[cfg(feature="postgresql")]
+impl From<postgres::error::Error> for Error {
+    fn from(e: postgres::error::Error) -> Error {
+        Error::Postgres(e)
+    }
+}
+
+#[cfg(feature="postgresql")]
+impl From<postgres::error::ConnectError> for Error {
+    fn from(e: postgres::error::ConnectError) -> Error {
+        Error::PostgresConnect(e)
+    }
+}
 
 macro_rules! format_err {
     ($e_type:expr, $literal:expr) => {
@@ -90,6 +154,12 @@ macro_rules! bail {
     };
     (MigrationComplete <- $msg:expr, $($arg:expr),*) => {
         return Err(format_err!(Error::MigrationComplete, $msg, $($arg),*))
+    };
+    (ShellCommand <- $msg:expr) => {
+        return Err(format_err!(Error::ShellCommand, $msg))
+    };
+    (ShellCommand <- $msg:expr, $($arg:expr),*) => {
+        return Err(format_err!(Error::ShellCommand, $msg, $($arg),*))
     };
 }
 
