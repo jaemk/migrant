@@ -283,7 +283,8 @@ pub mod sqlite {
             Ok(false)
         } else {
             let db_dir = path.parent().unwrap();
-            fs::create_dir(db_dir).map_err(Error::IoCreate)?;
+            fs::create_dir_all(db_dir).map_err(Error::IoCreate)?;
+            println!("{:?}", path);
             fs::File::create(path).map_err(Error::IoCreate)?;
             Ok(true)
         }
