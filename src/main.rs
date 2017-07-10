@@ -84,7 +84,8 @@ fn run(dir: &PathBuf, matches: &clap::ArgMatches) -> Result<(), Error> {
         let interactive = !init_matches.is_present("no-confirm");
         Config::init_in(&dir)
             .interactive(interactive)
-            .for_database(init_matches.value_of("type"))?;
+            .for_database(init_matches.value_of("type"))?
+            .initialize()?;
         return Ok(())
     }
 
@@ -96,16 +97,19 @@ fn run(dir: &PathBuf, matches: &clap::ArgMatches) -> Result<(), Error> {
         return Ok(())
     }
 
+    if matches.is_present("connect-string") {
+        if config.database_type()? == "sqlite" {
+            println!("{}", config.database_path()?.to_str().unwrap());
+        } else {
+            println!("{}", config.connect_string()?);
+        }
+        return Ok(())
+    }
+
+    // load applied migrations from the database
     let config = config.reload()?;
 
     match matches.subcommand() {
-        ("connect-string", _) => {
-            if config.database_type()? == "sqlite" {
-                println!("{}", config.database_path()?.to_str().unwrap());
-            } else {
-                println!("{}", config.connect_string()?);
-            }
-        }
         ("list", _) => {
             migrant_lib::list(&config)?;
         }
