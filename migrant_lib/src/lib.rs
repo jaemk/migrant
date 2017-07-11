@@ -96,7 +96,8 @@ fn write_to_path(path: &Path, content: &[u8]) -> Result<()> {
 ///       child process. In order to run things like opening an
 ///       editor, the command must be run in the current process.
 fn run_command_in_fg(command: &str) -> Result<()> {
-    let c_comm = CString::new(command).unwrap();
+    let c_comm = CString::new(command)
+        .map_err(|e| format_err!(Error::ShellCommand, "Unable to create an `ffi::Cstring` from `{:?}`, err: {}", &command, e))?;
     let ret = unsafe { libc::system(c_comm.as_ptr()) };
     if ret != 0 { bail!(ShellCommand <- "Command `{}` exited with status `{}`", command, ret) }
     Ok(())
