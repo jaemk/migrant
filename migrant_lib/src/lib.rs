@@ -7,7 +7,6 @@ extern crate walkdir;
 extern crate regex;
 extern crate percent_encoding;
 extern crate url;
-extern crate libc;
 
 #[cfg(feature="postgresql")]
 extern crate postgres;
@@ -19,7 +18,7 @@ use std::collections::HashMap;
 use std::process::Command;
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
-use std::ffi::{OsStr, CString};
+use std::ffi::OsStr;
 use std::fs;
 use std::fmt;
 use std::env;
@@ -92,14 +91,13 @@ fn write_to_path(path: &Path, content: &[u8]) -> Result<()> {
 
 
 /// Run the given command in the foreground
-/// Note: `std::process::Command` runs everything in a background
-///       child process. In order to run things like opening an
-///       editor, the command must be run in the current process.
-fn run_command_in_fg(command: &str) -> Result<()> {
-    let c_comm = CString::new(command)
-        .map_err(|e| format_err!(Error::ShellCommand, "Unable to create an `ffi::Cstring` from `{:?}`, err: {}", &command, e))?;
-    let ret = unsafe { libc::system(c_comm.as_ptr()) };
-    if ret != 0 { bail!(ShellCommand <- "Command `{}` exited with status `{}`", command, ret) }
+fn open_file_in_fg(command: &str, file_path: &str) -> Result<()> {
+    let mut p = Command::new(command)
+        .arg(file_path)
+        .spawn()
+        .map_err(Error::IoProc)?;
+    let ret = p.wait().map_err(Error::IoProc)?;
+    if !ret.success() { bail!(ShellCommand <- "Command `{}` exited with status `{}`", command, ret) }
     Ok(())
 }
 
@@ -240,11 +238,12 @@ impl ConfigInitializer {
 
         if self.interactive {
             let editor = env::var("EDITOR").unwrap_or_else(|_| "vim".to_string());
-            let command = format!("{} {}", editor, config_path.to_str().unwrap());
+            let file_path = config_path.to_str().unwrap();
+            let command = format!("{} {}", editor, file_path);
             println!(" -- Your config file will be opened with the following command: `{}`", &command);
             println!(" -- After editing, the `setup` command will be run for you");
             let _ = prompt(&format!(" -- Press [ENTER] to open now or [CTRL+C] to exit and edit manually"))?;
-            run_command_in_fg(&command)
+            open_file_in_fg(&editor, file_path)
                 .map_err(|e| format_err!(Error::Config, "Error editing config file: {}", e))?;
 
             println!();

@@ -1,6 +1,6 @@
 [package]
 name = "migrant_lib"
-version = "0.11.0"
+version = "0.11.1"
 authors = ["James Kominick <james.kominick@gmail.com>"]
 description = "Simple database migration library for postgres, sqlite"
 repository = "https://github.com/jaemk/migrant"
@@ -23,7 +23,6 @@ serde_derive = "1"
 toml = "0.4"
 percent-encoding = "1"
 url = "1"
-libc = "0.2"
 postgres = {version = "0.14", optional = true}
 rusqlite = {version = "0.12", optional = true, features = ["bundled"] }
 
