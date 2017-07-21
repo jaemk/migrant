@@ -52,11 +52,19 @@ fn main() {
                 .help("Updates the `.migrant.toml` file as if the specified migration was applied")))
         .subcommand(SubCommand::with_name("new")
             .about("Create new migration up/down files")
-            .arg(Arg::with_name("TAG")
+            .arg(Arg::with_name("tag")
                  .required(true)
                  .help("tag to use for new migration")))
         .subcommand(SubCommand::with_name("shell")
             .about("Open a repl connection"))
+        .subcommand(SubCommand::with_name("edit")
+            .about("Edit a migration file by tag name")
+            .arg(Arg::with_name("tag")
+                 .help("Tag name"))
+            .arg(Arg::with_name("down")
+                 .long("down")
+                 .short("d")
+                 .help("Edit the down.sql file")))
         .subcommand(SubCommand::with_name("which-config")
             .about("Display the path to the configuration file being used"))
         .get_matches();
@@ -117,7 +125,7 @@ fn run(dir: &PathBuf, matches: &clap::ArgMatches) -> Result<(), Error> {
             migrant_lib::list(&config)?;
         }
         ("new", Some(matches)) => {
-            let tag = matches.value_of("TAG").unwrap();
+            let tag = matches.value_of("tag").unwrap();
             migrant_lib::new(&config, tag)?;
             migrant_lib::list(&config)?;
         }
@@ -139,6 +147,11 @@ fn run(dir: &PathBuf, matches: &clap::ArgMatches) -> Result<(), Error> {
         }
         ("shell", _) => {
             migrant_lib::shell(&config)?;
+        }
+        ("edit", Some(matches)) => {
+            let tag = matches.value_of("tag").unwrap();
+            let up_down = if matches.is_present("down") { Direction::Down } else { Direction::Up };
+            migrant_lib::edit(&config, &tag, &up_down)?;
         }
         ("which-config", _) => {
             println!("{}", config_path.to_str().unwrap());
