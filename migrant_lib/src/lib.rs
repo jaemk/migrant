@@ -527,6 +527,7 @@ impl fmt::Display for Direction {
 /// Migration meta data
 struct Migration {
     stamp: chrono::DateTime<chrono::Utc>,
+    tag: String,
     dir: PathBuf,
     up: PathBuf,
     down: PathBuf,
@@ -631,12 +632,13 @@ fn search_for_migrations(mig_root: &PathBuf) -> Vec<Migration> {
     // transform up&down files into a Vec<Migration>
     let mut migrations = vec![];
     for (path, migs) in &files {
-        let stamp = PathBuf::from(path);
-        let mut stamp = stamp.file_name()
+        let full_name = PathBuf::from(path);
+        let mut full_name = full_name.file_name()
             .and_then(OsStr::to_str)
-            .expect(&format!("Error extracting file-name from: {:?}", stamp))
+            .expect(&format!("Error extracting file-name from: {:?}", full_name))
             .split('_');
-        let stamp = stamp.next().unwrap();
+        let stamp = full_name.next().unwrap();
+        let tag = full_name.next().unwrap();
 
         let mut up = PathBuf::from(path);
         let mut down = PathBuf::from(path);
@@ -655,7 +657,8 @@ fn search_for_migrations(mig_root: &PathBuf) -> Vec<Migration> {
             dir: up.parent().map(PathBuf::from).unwrap(),
             up: up,
             down: down,
-            stamp: chrono::Utc.datetime_from_str(stamp, DT_FORMAT).unwrap()
+            stamp: chrono::Utc.datetime_from_str(stamp, DT_FORMAT).unwrap(),
+            tag: tag.to_owned(),
         };
         migrations.push(migration);
     }
@@ -840,4 +843,72 @@ pub fn shell(config: &Config) -> Result<()> {
         }
         _ => unreachable!(),
     })
+}
+
+
+/// Get user's selection of a set of migrations
+fn select_from_matches<'a>(tag: &str, matches: &'a [Migration]) -> Result<&'a Migration> {
+    let min = 1;
+    let max = matches.len();
+    loop {
+        println!("* Migrations matching `{}`:", tag);
+        for (row, mig) in matches.iter().enumerate() {
+            let dt_string = mig.stamp.format(DT_FORMAT).to_string();
+            let info = format!("{stamp}_{tag}", stamp=dt_string, tag=mig.tag);
+            println!("    {}) {}", row + 1, info);
+        }
+        print!("\n Please select a migration [1-{}] >> ", max);
+        io::stdout().flush().map_err(Error::IoWrite)?;
+        let mut s = String::new();
+        io::stdin().read_line(&mut s).map_err(Error::IoRead)?;
+        let n = match s.trim().parse::<usize>() {
+            Err(e) => {
+                println!("\nError: {}", e);
+                continue;
+            }
+            Ok(n) => {
+                if min <= n && n <= max { n - 1 }
+                else {
+                    println!("\nPlease select a number between 1-{}", max);
+                    continue;
+                }
+            }
+        };
+        return Ok(&matches[n]);
+    }
+}
+
+
+/// Open a migration file containing `tag` in its name
+pub fn edit(config: &Config, tag: &str, up_down: &Direction) -> Result<()> {
+    let mig_dir = config.migration_dir()?;
+
+    let available = search_for_migrations(&mig_dir);
+    if available.is_empty() {
+        println!("No migrations found under {:?}", &mig_dir);
+        return Ok(())
+    }
+
+    let matches = available.into_iter().filter(|m| m.tag.contains(tag)).collect::<Vec<_>>();
+    let n = matches.len();
+    let editor = env::var("EDITOR").unwrap_or_else(|_| "vim".to_string());
+    let mig = match n {
+        0 => bail!(Config <- "No migrations found with tag: {}", tag),
+        1 => &matches[0],
+        _ => {
+            println!("* Multiple tags found!");
+            select_from_matches(tag, &matches)?
+        }
+    };
+    let file = match *up_down {
+        Direction::Up   => mig.up.to_owned(),
+        Direction::Down => mig.down.to_owned(),
+    };
+    let file_path = file.to_str().unwrap();
+    let command = format!("{} {}", editor, file_path);
+    println!("* Running: `{}`", command);
+    let _ = prompt(&format!(" -- Press [ENTER] to open now or [CTRL+C] to exit and edit manually"))?;
+    open_file_in_fg(&editor, file_path)
+        .map_err(|e| format_err!(Error::Migration, "Error editing migrant file: {}", e))?;
+    Ok(())
 }
