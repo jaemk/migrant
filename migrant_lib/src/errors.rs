@@ -104,6 +104,12 @@ impl From<url::ParseError> for Error {
     }
 }
 
+impl From<std::string::FromUtf8Error> for Error {
+    fn from(e: std::string::FromUtf8Error) -> Error {
+        Error::Utf8Error(e)
+    }
+}
+
 #[cfg(feature="sqlite")]
 impl From<rusqlite::Error> for Error {
     fn from(e: rusqlite::Error) -> Error {

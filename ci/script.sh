@@ -12,6 +12,7 @@ main() {
     #fi
 
     #cross test --target $TARGET
+    $(cd migrant_lib; ./test.sh)
     cross test --target $TARGET --release
     cross test --target $TARGET --release --features postgresql
     cross test --target $TARGET --release --features sqlite

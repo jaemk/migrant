@@ -799,9 +799,14 @@ pub fn list(config: &Config) -> Result<()> {
 }
 
 
+fn valid_tag(tag: &str) -> bool {
+    TAG_RE.is_match(tag)
+}
+
+
 /// Create a new migration with the given tag
 pub fn new(config: &Config, tag: &str) -> Result<()> {
-    if TAG_RE.is_match(tag) {
+    if valid_tag(tag) {
         bail!(Migration <- "Invalid tag `{}`. Tags can contain [a-z0-9-]", tag);
     }
     let now = chrono::Utc::now();
