@@ -177,14 +177,14 @@ impl ConfigInitializer {
     fn confirm_new_config_location(dir: &Path) -> Result<PathBuf> {
         println!(" A new `{}` config file will be created at the following location: ", CONFIG_FILE);
         println!("   {:?}", dir.display());
-        let ans = prompt(" Is this ok? (y/n) >> ")?;
-        if ans.trim().to_lowercase() == "y" {
+        let ans = prompt(" Is this ok? [Y/n] ")?;
+        if ans.is_empty() || ans.to_lowercase() == "y" {
             return Ok(dir.to_owned());
         }
 
         println!(" You can specify the absolute location now, or nothing to exit");
         let ans = prompt(" >> ")?;
-        if ans.trim().is_empty() {
+        if ans.is_empty() {
             bail!(Config <- "No `{}` path provided", CONFIG_FILE)
         }
 
