@@ -1,5 +1,5 @@
 #!/bin/bash
-
+set -x
 
 PROJ_DIR=`dirname $0`
 mkdir -p "$PROJ_DIR/db"
@@ -12,6 +12,6 @@ SQLITE_TEST_CONN_STR=$SQLITE cargo test
 rm "$SQLITE"
 touch "$SQLITE"
 
-SQLITE_TEST_CONN_STR=$SQLITE cargo test --features sqlite
+SQLITE_TEST_CONN_STR=$SQLITE cargo test --features 'sqlite postgresql'
 
 rm "$SQLITE"

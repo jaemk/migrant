@@ -1,10 +1,4 @@
-use std;
-use std::fs;
-use std::process::Command;
-use std::path::Path;
-
 use super::errors::*;
-
 
 mod sql {
     pub static CREATE_TABLE: &'static str = "create table __migrant_migrations(tag text unique);";

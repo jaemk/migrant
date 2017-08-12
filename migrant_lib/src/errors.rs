@@ -31,9 +31,7 @@ pub enum Error {
     Sqlite(rusqlite::Error),
 
     #[cfg(feature="postgresql")]
-    Postgres(postgres::error::Error),
-    #[cfg(feature="postgresql")]
-    PostgresConnect(postgres::error::ConnectError),
+    Postgres(postgres::Error),
 }
 
 impl std::fmt::Display for Error {
@@ -60,8 +58,6 @@ impl std::fmt::Display for Error {
 
             #[cfg(feature="postgresql")]
             Postgres(ref e) => write!(f, "Postgres Error: {}", e),
-            #[cfg(feature="postgresql")]
-            PostgresConnect(ref e) => write!(f, "Postgres ConnectError: {}", e),
         }
     }
 }
@@ -89,8 +85,6 @@ impl std::error::Error for Error {
 
             #[cfg(feature="postgresql")]
             Postgres(ref e)   => e,
-            #[cfg(feature="postgresql")]
-            PostgresConnect(ref e)   => e,
 
             _ => return None
         })
@@ -119,16 +113,9 @@ impl From<rusqlite::Error> for Error {
 
 
 #[cfg(feature="postgresql")]
-impl From<postgres::error::Error> for Error {
-    fn from(e: postgres::error::Error) -> Error {
+impl From<postgres::Error> for Error {
+    fn from(e: postgres::Error) -> Error {
         Error::Postgres(e)
-    }
-}
-
-#[cfg(feature="postgresql")]
-impl From<postgres::error::ConnectError> for Error {
-    fn from(e: postgres::error::ConnectError) -> Error {
-        Error::PostgresConnect(e)
     }
 }
 

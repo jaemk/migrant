@@ -1,8 +1,14 @@
 /// Postgres database functions using shell commands and db drivers
+use std;
 use super::*;
 
 #[cfg(feature="postgresql")]
 use std::io::Read;
+#[cfg(feature="postgresql")]
+use postgres::{Connection, TlsMode};
+
+#[cfg(not(feature="postgresql"))]
+use std::process::Command;
 
 // --
 // Check connection
@@ -20,8 +26,6 @@ pub fn can_connect(connect_string: &str) -> Result<bool> {
 
 #[cfg(feature="postgresql")]
 pub fn can_connect(conn_str: &str) -> Result<bool> {
-    use postgres::{Connection, TlsMode};
-
     match Connection::connect(conn_str, TlsMode::None) {
         Ok(_)   => Ok(true),
         Err(_)  => Ok(false)
@@ -53,8 +57,6 @@ pub fn migration_table_exists(conn_str: &str) -> Result<bool> {
 
 #[cfg(feature="postgresql")]
 pub fn migration_table_exists(conn_str: &str) -> Result<bool> {
-    use postgres::{Connection, TlsMode};
-
     let conn = Connection::connect(conn_str, TlsMode::None)
         .map_err(|e| format_err!(Error::Migration, "{}", e))?;
     let rows = conn.query(sql::PG_MIGRATION_TABLE_EXISTS, &[])
@@ -90,8 +92,6 @@ pub fn migration_setup(conn_str: &str) -> Result<bool> {
 
 #[cfg(feature="postgresql")]
 pub fn migration_setup(conn_str: &str) -> Result<bool> {
-    use postgres::{Connection, TlsMode};
-
     if !migration_table_exists(conn_str)? {
         let conn = Connection::connect(conn_str, TlsMode::None)
             .map_err(|e| format_err!(Error::Migration, "{}", e))?;
@@ -127,8 +127,6 @@ pub fn select_migrations(conn_str: &str) -> Result<Vec<String>> {
 
 #[cfg(feature="postgresql")]
 pub fn select_migrations(conn_str: &str) -> Result<Vec<String>> {
-    use postgres::{Connection, TlsMode};
-
     let conn = Connection::connect(conn_str, TlsMode::None)?;
     let rows = conn.query(sql::GET_MIGRATIONS, &[])?;
     Ok(rows.iter().map(|row| row.get(0)).collect())
@@ -158,8 +156,6 @@ pub fn insert_migration_tag(conn_str: &str, tag: &str) -> Result<()> {
 
 #[cfg(feature="postgresql")]
 pub fn insert_migration_tag(conn_str: &str, tag: &str) -> Result<()> {
-    use postgres::{Connection, TlsMode};
-
     let conn = Connection::connect(conn_str, TlsMode::None)?;
     conn.execute("insert into __migrant_migrations (tag) values ($1)", &[&tag])?;
     Ok(())
@@ -189,8 +185,6 @@ pub fn remove_migration_tag(conn_str: &str, tag: &str) -> Result<()> {
 
 #[cfg(feature="postgresql")]
 pub fn remove_migration_tag(conn_str: &str, tag: &str) -> Result<()> {
-    use postgres::{Connection, TlsMode};
-
     let conn = Connection::connect(conn_str, TlsMode::None)?;
     conn.execute("delete from __migrant_migrations where tag = $1", &[&tag])?;
     Ok(())
@@ -216,9 +210,7 @@ pub fn run_migration(conn_str: &str, filename: &str) -> Result<()> {
 
 #[cfg(feature="postgresql")]
 pub fn run_migration(conn_str: &str, filename: &str) -> Result<()> {
-    use postgres::{Connection, TlsMode};
-
-    let mut file = fs::File::open(filename)
+    let mut file = std::fs::File::open(filename)
         .map_err(Error::IoOpen)?;
     let mut buf = String::new();
     file.read_to_string(&mut buf)

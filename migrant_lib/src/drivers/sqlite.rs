@@ -1,7 +1,16 @@
+use std::fs;
+use std::path::Path;
 use super::*;
 
 #[cfg(feature="sqlite")]
 use std::io::Read;
+#[cfg(feature="sqlite")]
+use rusqlite::Connection;
+
+#[cfg(not(feature="sqlite"))]
+use std::process::Command;
+#[cfg(not(feature="sqlite"))]
+use std::str;
 
 // --
 // Check database exists / create it
@@ -29,7 +38,7 @@ fn sqlite_cmd(db_path: &str, cmd: &str) -> Result<String> {
                     .output()
                     .map_err(Error::IoProc)?;
     if !migs.status.success() {
-        let stderr = std::str::from_utf8(&migs.stderr).unwrap();
+        let stderr = str::from_utf8(&migs.stderr).unwrap();
         bail!(Migration <- "Error executing statement, stderr: `{}`", stderr);
     }
     let stdout = String::from_utf8(migs.stdout)?;
@@ -48,8 +57,6 @@ pub fn migration_table_exists(db_path: &str) -> Result<bool> {
 
 #[cfg(feature="sqlite")]
 pub fn migration_table_exists(db_path: &str) -> Result<bool> {
-    use rusqlite::Connection;
-
     let conn = Connection::open(db_path)?;
     let exists: bool = conn.query_row(sql::SQLITE_MIGRATION_TABLE_EXISTS, &[], |row| row.get(0))?;
     Ok(exists)
@@ -71,8 +78,6 @@ pub fn migration_setup(db_path: &Path) -> Result<bool> {
 
 #[cfg(feature="sqlite")]
 pub fn migration_setup(db_path: &Path) -> Result<bool> {
-    use rusqlite::Connection;
-
     let db_path = db_path.to_str().unwrap();
     if !migration_table_exists(db_path)? {
         let conn = Connection::open(db_path)?;
@@ -94,8 +99,6 @@ pub fn select_migrations(db_path: &str) -> Result<Vec<String>> {
 
 #[cfg(feature="sqlite")]
 pub fn select_migrations(db_path: &str) -> Result<Vec<String>> {
-    use rusqlite::Connection;
-
     let conn = Connection::open(db_path)?;
     let mut stmt = conn.prepare(sql::GET_MIGRATIONS)?;
     let mut rows = stmt.query(&[])?;
@@ -119,8 +122,6 @@ pub fn insert_migration_tag(db_path: &str, tag: &str) -> Result<()> {
 
 #[cfg(feature="sqlite")]
 pub fn insert_migration_tag(db_path: &str, tag: &str) -> Result<()> {
-    use rusqlite::Connection;
-
     let conn = Connection::open(db_path)?;
     conn.execute("insert into __migrant_migrations (tag) values ($1)", &[&tag])?;
     Ok(())
@@ -138,8 +139,6 @@ pub fn remove_migration_tag(db_path: &str, tag: &str) -> Result<()> {
 
 #[cfg(feature="sqlite")]
 pub fn remove_migration_tag(db_path: &str, tag: &str) -> Result<()> {
-    use rusqlite::Connection;
-
     let conn = Connection::open(db_path)?;
     conn.execute("delete from __migrant_migrations where tag = $1", &[&tag])?;
     Ok(())
@@ -158,8 +157,6 @@ pub fn run_migration(db_path: &Path, filename: &str) -> Result<()> {
 
 #[cfg(feature="sqlite")]
 pub fn run_migration(db_path: &Path, filename: &str) -> Result<()> {
-    use rusqlite::Connection;
-
     let mut file = fs::File::open(filename)
         .map_err(Error::IoOpen)?;
     let mut buf = String::new();
@@ -177,6 +174,7 @@ pub fn run_migration(db_path: &Path, filename: &str) -> Result<()> {
 
 #[cfg(test)]
 mod test {
+    use std;
     use super::*;
     macro_rules! _try {
         ($exp:expr) => {
