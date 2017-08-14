@@ -31,17 +31,17 @@ pub fn create_file_if_missing(path: &Path) -> Result<bool> {
 
 #[cfg(not(feature="sqlite"))]
 fn sqlite_cmd(db_path: &str, cmd: &str) -> Result<String> {
-    let migs = Command::new("sqlite3")
+    let out = Command::new("sqlite3")
                     .arg(&db_path)
                     .arg("-csv")
                     .arg(cmd)
                     .output()
                     .map_err(Error::IoProc)?;
-    if !migs.status.success() {
-        let stderr = str::from_utf8(&migs.stderr).unwrap();
+    if !out.status.success() {
+        let stderr = str::from_utf8(&out.stderr).unwrap();
         bail!(Migration <- "Error executing statement, stderr: `{}`", stderr);
     }
-    let stdout = String::from_utf8(migs.stdout)?;
+    let stdout = String::from_utf8(out.stdout)?;
     Ok(stdout)
 }
 

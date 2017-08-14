@@ -10,13 +10,34 @@ use postgres::{Connection, TlsMode};
 #[cfg(not(feature="postgresql"))]
 use std::process::Command;
 
+
+#[cfg(not(feature="postgresql"))]
+fn psql_cmd(conn_str: &str, cmd: &str) -> Result<String> {
+    let out = Command::new("psql")
+                    .arg(conn_str)
+                    .arg("-t")      // no headers or footer
+                    .arg("-A")      // un-aligned output
+                    .arg("-F,")     // comma separator
+                    .arg("-c")
+                    .arg(cmd)
+                    .output()
+                    .map_err(Error::IoProc)?;
+    if !out.status.success() {
+        let stderr = std::str::from_utf8(&out.stderr).unwrap();
+        bail!(Migration <- "Error executing statement, stderr: `{}`", stderr);
+    }
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    Ok(stdout)
+}
+
+
 // --
 // Check connection
 // --
 #[cfg(not(feature="postgresql"))]
-pub fn can_connect(connect_string: &str) -> Result<bool> {
+pub fn can_connect(conn_str: &str) -> Result<bool> {
     let out = Command::new("psql")
-                    .arg(connect_string)
+                    .arg(conn_str)
                     .arg("-c")
                     .arg("")
                     .output()
@@ -38,20 +59,7 @@ pub fn can_connect(conn_str: &str) -> Result<bool> {
 // --
 #[cfg(not(feature="postgresql"))]
 pub fn migration_table_exists(conn_str: &str) -> Result<bool> {
-    let exists = Command::new("psql")
-                    .arg(conn_str)
-                    .arg("-t")      // no headers or footer
-                    .arg("-A")      // un-aligned output
-                    .arg("-F,")     // comma separator
-                    .arg("-c")
-                    .arg(sql::PG_MIGRATION_TABLE_EXISTS)
-                    .output()
-                    .map_err(Error::IoProc)?;
-    if !exists.status.success() {
-        let stderr = std::str::from_utf8(&exists.stderr).unwrap();
-        bail!(Migration <- "Error executing statement, stderr: `{}`", stderr);
-    }
-    let stdout = std::str::from_utf8(&exists.stdout).unwrap();
+    let stdout = psql_cmd(conn_str, sql::PG_MIGRATION_TABLE_EXISTS)?;
     Ok(stdout.trim() == "t")
 }
 
@@ -72,19 +80,7 @@ pub fn migration_table_exists(conn_str: &str) -> Result<bool> {
 #[cfg(not(feature="postgresql"))]
 pub fn migration_setup(conn_str: &str) -> Result<bool> {
     if !migration_table_exists(conn_str)? {
-        let out = Command::new("psql")
-                        .arg(conn_str)
-                        .arg("-t")
-                        .arg("-A")
-                        .arg("-F,")
-                        .arg("-c")
-                        .arg(sql::CREATE_TABLE)
-                        .output()
-                        .map_err(Error::IoProc)?;
-        if !out.status.success() {
-            let stderr = std::str::from_utf8(&out.stderr).unwrap();
-            bail!(Migration <- "Error executing statement, stderr: `{}`", stderr);
-        }
+        psql_cmd(conn_str, sql::CREATE_TABLE)?;
         return Ok(true)
     }
     Ok(false)
@@ -108,20 +104,7 @@ pub fn migration_setup(conn_str: &str) -> Result<bool> {
 // --
 #[cfg(not(feature="postgresql"))]
 pub fn select_migrations(conn_str: &str) -> Result<Vec<String>> {
-    let migs = Command::new("psql")
-                    .arg(conn_str)
-                    .arg("-t")      // no headers or footer
-                    .arg("-A")      // un-aligned output
-                    .arg("-F,")     // comma separator
-                    .arg("-c")
-                    .arg(sql::GET_MIGRATIONS)
-                    .output()
-                    .map_err(Error::IoProc)?;
-    if !migs.status.success() {
-        let stderr = std::str::from_utf8(&migs.stderr).unwrap();
-        bail!(Migration <- "Error executing statement, stderr: `{}`", stderr);
-    }
-    let stdout = std::str::from_utf8(&migs.stdout).unwrap();
+    let stdout = psql_cmd(conn_str, sql::GET_MIGRATIONS)?;
     Ok(stdout.trim().lines().map(String::from).collect())
 }
 
@@ -138,19 +121,7 @@ pub fn select_migrations(conn_str: &str) -> Result<Vec<String>> {
 // --
 #[cfg(not(feature="postgresql"))]
 pub fn insert_migration_tag(conn_str: &str, tag: &str) -> Result<()> {
-    let insert = Command::new("psql")
-                    .arg(conn_str)
-                    .arg("-t")      // no headers or footer
-                    .arg("-A")      // un-aligned output
-                    .arg("-F,")     // comma separator
-                    .arg("-c")
-                    .arg(sql::PG_ADD_MIGRATION.replace("__VAL__", tag))
-                    .output()
-                    .map_err(Error::IoProc)?;
-    if !insert.status.success() {
-        let stderr = std::str::from_utf8(&insert.stderr).unwrap();
-        bail!(Migration <- "Error executing statement, stderr: `{}`", stderr);
-    }
+    psql_cmd(conn_str, &sql::PG_ADD_MIGRATION.replace("__VAL__", tag))?;
     Ok(())
 }
 
@@ -167,19 +138,7 @@ pub fn insert_migration_tag(conn_str: &str, tag: &str) -> Result<()> {
 // --
 #[cfg(not(feature="postgresql"))]
 pub fn remove_migration_tag(conn_str: &str, tag: &str) -> Result<()> {
-    let remove = Command::new("psql")
-                    .arg(conn_str)
-                    .arg("-t")      // no headers or footer
-                    .arg("-A")      // un-aligned output
-                    .arg("-F,")     // comma separator
-                    .arg("-c")
-                    .arg(sql::PG_DELETE_MIGRATION.replace("__VAL__", tag))
-                    .output()
-                    .map_err(Error::IoProc)?;
-    if !remove.status.success() {
-        let stderr = std::str::from_utf8(&remove.stderr).unwrap();
-        bail!(Migration <- "Error executing statement, stderr: `{}`", stderr);
-    }
+    psql_cmd(conn_str, &sql::PG_DELETE_MIGRATION.replace("__VAL__", tag))?;
     Ok(())
 }
 
@@ -223,3 +182,53 @@ pub fn run_migration(conn_str: &str, filename: &str) -> Result<()> {
     Ok(())
 }
 
+
+#[cfg(test)]
+mod test {
+    use std;
+    use super::*;
+    macro_rules! _try {
+        ($exp:expr) => {
+            match $exp {
+                Ok(v) => v,
+                Err(e) => {
+                    eprintln!("Caught: {}", e);
+                    panic!(e)
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn postgres() {
+        let conn_str = std::env::var("POSTGRES_TEST_CONN_STR").unwrap();
+
+        // no table before setup
+        let is_setup = _try!(migration_table_exists(&conn_str));
+        assert_eq!(false, is_setup);
+
+        // setup migration table
+        let was_setup = _try!(migration_setup(&conn_str));
+        assert_eq!(true, was_setup);
+        let was_setup = _try!(migration_setup(&conn_str));
+        assert_eq!(false, was_setup);
+
+        // table exists after setup
+        let is_setup = _try!(migration_table_exists(&conn_str));
+        assert!(is_setup);
+
+        // insert some tags
+        _try!(insert_migration_tag(&conn_str, "initial"));
+        _try!(insert_migration_tag(&conn_str, "alter1"));
+        _try!(insert_migration_tag(&conn_str, "alter2"));
+
+        // get applied
+        let migs = _try!(select_migrations(&conn_str));
+        assert_eq!(3, migs.len());
+
+        // remove some tags
+        _try!(remove_migration_tag(&conn_str, "alter2"));
+        let migs = _try!(select_migrations(&conn_str));
+        assert_eq!(2, migs.len());
+    }
+}
