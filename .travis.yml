@@ -11,9 +11,6 @@ env:
   global:
     - CRATE_NAME=migrant
 
-addons:
-    postgresql: 9.5
-
 matrix:
   include:
     # Linux

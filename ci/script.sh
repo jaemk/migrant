@@ -12,10 +12,10 @@ main() {
     #fi
 
     #cross test --target $TARGET
-    ./test_all.sh
+    if [ $TRAVIS_OS_NAME = linux ]; then
+        ./test_all.sh
+    fi
     cross test --target $TARGET --release
-    cross test --target $TARGET --release --features postgresql
-    cross test --target $TARGET --release --features sqlite
     cross test --target $TARGET --release --features 'sqlite postgresql'
 }
 
