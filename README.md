@@ -59,3 +59,9 @@ When run interactively (without `--no-confirm`), `setup` will be run automatical
 ### Usage as a library
 
 See [`migrant_lib`](https://github.com/jaemk/migrant/tree/master/migrant_lib) and [examples](https://github.com/jaemk/migrant/tree/master/migrant_lib/examples)
+
+### Development
+
+- Install dependencies: `sqlite3`, `libsqlite3-dev`, `postgresql`, `libpq-dev`
+- `./test_all.sh`
+
