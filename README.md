@@ -45,6 +45,8 @@ When run interactively (without `--no-confirm`), `setup` will be run automatical
 
 `migrant new initial` - Generate new up & down files with the tag `initial` under the specified `migration_location`.
 
+`migrant edit initial [--down]` - Edit the `up` [or `down`] migration file with the tag `initial`.
+
 `migrant list` - Display all available .sql files and mark those applied.
 
 `migrant apply [--down, --all, --force, --fake]` - Apply the next available migration[s].
