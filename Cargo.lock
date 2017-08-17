@@ -1,6 +1,6 @@
 [root]
 name = "migrant_lib"
-version = "0.11.2"
+version = "0.11.3"
 dependencies = [
  "chrono 0.4.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "lazy_static 0.2.8 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -446,10 +446,10 @@ dependencies = [
 
 [[package]]
 name = "migrant"
-version = "0.9.3"
+version = "0.9.4"
 dependencies = [
  "clap 2.26.0 (registry+https://github.com/rust-lang/crates.io-index)",
- "migrant_lib 0.11.2",
+ "migrant_lib 0.11.3",
  "self_update 0.4.0 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
