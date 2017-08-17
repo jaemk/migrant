@@ -16,7 +16,7 @@ main() {
         ./test_all.sh
     fi
     cross test --target $TARGET --release
-    cross test --target $TARGET --release --features 'sqlite postgresql'
+    cross test --target $TARGET --release --features 'sqlite postgresql update'
 }
 
 # we don't run the "test phase" when doing deploys
