@@ -1,17 +1,38 @@
 #[macro_use] extern crate clap;
 extern crate migrant_lib;
 
+#[cfg(feature="update")]
+extern crate self_update;
+
 use std::env;
 use std::path::PathBuf;
-use clap::{Arg, App, SubCommand};
-use migrant_lib::{Error, Config, Direction, Migrator};
+use clap::{Arg, ArgMatches, App, SubCommand};
+use migrant_lib::{Config, Direction, Migrator};
 
+
+static APP_VERSION: &'static str = crate_version!();
 
 fn main() {
     let matches = App::new("Migrant")
-        .version(crate_version!())
+        .version(APP_VERSION)
         .author("James K. <james.kominick@gmail.com>")
         .about("Postgres/SQLite migration manager")
+        .subcommand(SubCommand::with_name("self")
+                    .about("Self referential things")
+                    .subcommand(SubCommand::with_name("update")
+                        .about("Update to the latest binary release, replacing this binary")
+                        .arg(Arg::with_name("no_confirm")
+                             .help("Skip download/update confirmation")
+                             .long("no-confirm")
+                             .short("y")
+                             .required(false)
+                             .takes_value(false))
+                        .arg(Arg::with_name("quiet")
+                             .help("Suppress unnecessary download output (progress bar)")
+                             .long("quiet")
+                             .short("q")
+                             .required(false)
+                             .takes_value(false))))
         .subcommand(SubCommand::with_name("init")
             .about("Initialize project config")
             .arg(Arg::with_name("type")
@@ -73,7 +94,7 @@ fn main() {
 
     if let Err(ref e) = run(&dir, &matches) {
         match *e {
-            Error::MigrationComplete(ref s) => println!("{}", s),
+            migrant_lib::Error::MigrationComplete(ref s) => println!("{}", s),
             _ => {
                 println!("[ERROR] {}", e);
                 ::std::process::exit(1);
@@ -83,7 +104,16 @@ fn main() {
 }
 
 
-fn run(dir: &PathBuf, matches: &clap::ArgMatches) -> Result<(), Error> {
+fn run(dir: &PathBuf, matches: &clap::ArgMatches) -> Result<(), migrant_lib::Error> {
+    if let Some(self_matches) = matches.subcommand_matches("self") {
+        if let Some(update_matches) = self_matches.subcommand_matches("update") {
+            return update(update_matches)
+                .map_err(|e| migrant_lib::Error::Config(format!("{}", e)));
+        }
+        println!("migrant: see `--help`");
+        return Ok(())
+    }
+
     let config_path = migrant_lib::search_for_config(dir);
 
     if matches.is_present("init") || config_path.is_none() {
@@ -162,3 +192,39 @@ fn run(dir: &PathBuf, matches: &clap::ArgMatches) -> Result<(), Error> {
     };
     Ok(())
 }
+
+#[cfg(feature="update")]
+fn update(matches: &ArgMatches) -> Result<(), Box<std::error::Error>> {
+    let mut builder = self_update::backends::github::Update::configure()?;
+
+    builder.repo_owner("jaemk")
+        .repo_name("migrant")
+        .target(&self_update::get_target()?)
+        .bin_name("migrant")
+        .show_download_progress(true)
+        .no_confirm(matches.is_present("no_confirm"))
+        .current_version(APP_VERSION);
+
+    if matches.is_present("quiet") {
+        builder.show_output(false)
+            .show_download_progress(false);
+    }
+
+    let status = builder.build()?.update()?;
+    match status {
+        self_update::Status::UpToDate(v) => {
+            println!("Already up to date [v{}]!", v);
+        }
+        self_update::Status::Updated(v) => {
+            println!("Updated to {}!", v);
+        }
+    }
+    return Ok(());
+}
+
+
+#[cfg(not(feature="update"))]
+fn update(_: &ArgMatches) -> Result<(), Box<std::error::Error>> {
+    Err(Box::new(migrant_lib::Error::Config("This executable was not compiled with `self_update` features enabled via `--features update`".to_string())))
+}
+
