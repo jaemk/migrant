@@ -166,7 +166,7 @@ pub fn run_migration(db_path: &Path, filename: &str) -> Result<()> {
 
     let conn = Connection::open(db_path)
         .map_err(|e| format_err!(Error::Migration, "{}", e))?;
-    conn.execute(&buf, &[])
+    conn.execute_batch(&buf)
         .map_err(|e| format_err!(Error::Migration, "{}", e))?;
     Ok(())
 }

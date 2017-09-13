@@ -177,7 +177,7 @@ pub fn run_migration(conn_str: &str, filename: &str) -> Result<()> {
 
     let conn = Connection::connect(conn_str, TlsMode::None)
         .map_err(|e| format_err!(Error::Migration, "{}", e))?;
-    conn.execute(&buf, &[])
+    conn.batch_execute(&buf)
         .map_err(|e| format_err!(Error::Migration, "{}", e))?;
     Ok(())
 }
