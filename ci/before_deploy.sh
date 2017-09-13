@@ -3,6 +3,7 @@
 set -ex
 
 main() {
+    rustup self update
     local src=$(pwd) \
           stage=
 
