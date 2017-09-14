@@ -1,114 +1,68 @@
+#![recursion_limit = "1024" ]
 #[macro_use] extern crate clap;
+#[macro_use] extern crate error_chain;
 extern crate migrant_lib;
 
 #[cfg(feature="update")]
 extern crate self_update;
 
+use std::io;
+use std::fs;
 use std::env;
 use std::path::PathBuf;
-use clap::{Arg, ArgMatches, App, SubCommand};
 use migrant_lib::{Config, Direction, Migrator};
 
-
-static APP_VERSION: &'static str = crate_version!();
-
-fn main() {
-    let matches = App::new("Migrant")
-        .version(APP_VERSION)
-        .author("James K. <james.kominick@gmail.com>")
-        .about("Postgres/SQLite migration manager")
-        .subcommand(SubCommand::with_name("self")
-                    .about("Self referential things")
-                    .subcommand(SubCommand::with_name("update")
-                        .about("Update to the latest binary release, replacing this binary")
-                        .arg(Arg::with_name("no_confirm")
-                             .help("Skip download/update confirmation")
-                             .long("no-confirm")
-                             .short("y")
-                             .required(false)
-                             .takes_value(false))
-                        .arg(Arg::with_name("quiet")
-                             .help("Suppress unnecessary download output (progress bar)")
-                             .long("quiet")
-                             .short("q")
-                             .required(false)
-                             .takes_value(false))))
-        .subcommand(SubCommand::with_name("init")
-            .about("Initialize project config")
-            .arg(Arg::with_name("type")
-                 .long("type")
-                 .short("t")
-                 .takes_value(true)
-                 .help("Specify the database type (sqlite|postgres)"))
-            .arg(Arg::with_name("location")
-                 .long("location")
-                 .short("l")
-                 .takes_value(true)
-                 .help("Directory to initialize in"))
-            .arg(Arg::with_name("no-confirm")
-                 .long("no-confirm")
-                 .takes_value(false)
-                 .help("Disable interactive prompts")))
-        .subcommand(SubCommand::with_name("setup")
-            .about("Setup migration table"))
-        .subcommand(SubCommand::with_name("connect-string")
-            .about("Print out the connection string for postgres, or file-path for sqlite"))
-        .subcommand(SubCommand::with_name("list")
-            .about("List status of applied and available migrations"))
-        .subcommand(SubCommand::with_name("apply")
-            .about("Moves up or down (applies up/down.sql) one migration. Default direction is up unless specified with `-d/--down`.")
-            .arg(Arg::with_name("down")
-                .long("down")
-                .short("d")
-                .help("Applies `down.sql` migrations"))
-            .arg(Arg::with_name("all")
-                .long("all")
-                .short("a")
-                .help("Applies all available migrations"))
-            .arg(Arg::with_name("force")
-                .long("force")
-                .help("Applies the migration and treats it as if it were successful"))
-            .arg(Arg::with_name("fake")
-                .long("fake")
-                .help("Updates the `.migrant.toml` file as if the specified migration was applied")))
-        .subcommand(SubCommand::with_name("new")
-            .about("Create new migration up/down files")
-            .arg(Arg::with_name("tag")
-                 .required(true)
-                 .help("tag to use for new migration")))
-        .subcommand(SubCommand::with_name("shell")
-            .about("Open a repl connection"))
-        .subcommand(SubCommand::with_name("edit")
-            .about("Edit a migration file by tag name")
-            .arg(Arg::with_name("tag")
-                 .help("Tag name"))
-            .arg(Arg::with_name("down")
-                 .long("down")
-                 .short("d")
-                 .help("Edit the down.sql file")))
-        .subcommand(SubCommand::with_name("which-config")
-            .about("Display the path to the configuration file being used"))
-        .get_matches();
-
-    let dir = env::current_dir().expect("Unable to retrieve current directory");
-
-    if let Err(ref e) = run(&dir, &matches) {
-        match *e {
-            migrant_lib::Error::MigrationComplete(ref s) => println!("{}", s),
-            _ => {
-                println!("[ERROR] {}", e);
-                ::std::process::exit(1);
-            }
+mod cli;
+mod errors {
+    use super::*;
+    error_chain! {
+        foreign_links {
+            MigrantLib(migrant_lib::Error);
+            SelfUpdate(self_update::errors::Error) #[cfg(feature="update")];
+            Io(io::Error);
         }
     }
 }
+use errors::*;
 
 
-fn run(dir: &PathBuf, matches: &clap::ArgMatches) -> Result<(), migrant_lib::Error> {
+static APP_VERSION: &'static str = crate_version!();
+static APP_NAME: &'static str = "Migrant";
+
+
+quick_main!(my_main);
+
+
+fn my_main() -> Result<()> {
+    let matches = cli::build_cli().get_matches();
+    let dir = env::current_dir()?;
+
+    run(&dir, &matches)
+}
+
+
+fn run(dir: &PathBuf, matches: &clap::ArgMatches) -> Result<()> {
     if let Some(self_matches) = matches.subcommand_matches("self") {
         if let Some(update_matches) = self_matches.subcommand_matches("update") {
-            return update(update_matches)
-                .map_err(|e| migrant_lib::Error::Config(format!("{}", e)));
+            update(update_matches)?;
+            return Ok(())
+        }
+
+        if let Some(compl_matches) = self_matches.subcommand_matches("bash-completions") {
+            let mut out: Box<io::Write> = {
+                if let Some(install_matches) = compl_matches.subcommand_matches("install") {
+                    let install_path = install_matches.value_of("path").unwrap();
+                    let prompt = format!("** Completion file will be installed at: `{}`\n** Is this Ok? [Y/n] ", install_path);
+                    confirm(&prompt)?;
+                    let file = fs::File::create(install_path)?;
+                    Box::new(file)
+                } else {
+                    Box::new(io::stdout())
+                }
+            };
+            cli::build_cli().gen_completions_to(APP_NAME.to_lowercase(), clap::Shell::Bash, &mut out);
+            println!("** Success!");
+            return Ok(())
         }
         println!("migrant: see `--help`");
         return Ok(())
@@ -175,6 +129,29 @@ fn run(dir: &PathBuf, matches: &clap::ArgMatches) -> Result<(), migrant_lib::Err
             let config = config.reload()?;
             migrant_lib::list(&config)?;
         }
+        ("redo", Some(matches)) => {
+            let force = matches.is_present("force");
+            let fake = matches.is_present("fake");
+            let all = matches.is_present("all");
+
+            Migrator::with_config(&config)
+                .direction(Direction::Down)
+                .force(force)
+                .fake(fake)
+                .all(all)
+                .apply()?;
+            let config = config.reload()?;
+            migrant_lib::list(&config)?;
+
+            Migrator::with_config(&config)
+                .direction(Direction::Up)
+                .force(force)
+                .fake(fake)
+                .all(all)
+                .apply()?;
+            let config = config.reload()?;
+            migrant_lib::list(&config)?;
+        }
         ("shell", _) => {
             migrant_lib::shell(&config)?;
         }
@@ -193,8 +170,9 @@ fn run(dir: &PathBuf, matches: &clap::ArgMatches) -> Result<(), migrant_lib::Err
     Ok(())
 }
 
+
 #[cfg(feature="update")]
-fn update(matches: &ArgMatches) -> Result<(), Box<std::error::Error>> {
+fn update(matches: &clap::ArgMatches) -> Result<()> {
     let mut builder = self_update::backends::github::Update::configure()?;
 
     builder.repo_owner("jaemk")
@@ -224,7 +202,21 @@ fn update(matches: &ArgMatches) -> Result<(), Box<std::error::Error>> {
 
 
 #[cfg(not(feature="update"))]
-fn update(_: &ArgMatches) -> Result<(), Box<std::error::Error>> {
-    Err(Box::new(migrant_lib::Error::Config("This executable was not compiled with `self_update` features enabled via `--features update`".to_string())))
+fn update(_: &clap::ArgMatches) -> Result<()> {
+    bail!("This executable was not compiled with `self_update` features enabled via `--features update`")
+}
+
+
+/// Get confirmation on a prompt
+/// Returns `Ok` for 'yes' and `Err` for anything else
+fn confirm(s: &str) -> Result<()> {
+    use io::Write;
+    print!("{}", s);
+    io::stdout().flush()?;
+    let mut s = String::new();
+    io::stdin().read_line(&mut s)?;
+    let s = s.trim().to_lowercase();
+    if !s.is_empty() && s != "y" { bail!("Unable to confirm...") }
+    Ok(())
 }
 
