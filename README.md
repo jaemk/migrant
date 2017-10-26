@@ -6,9 +6,10 @@ Currently supports:
  * sqlite
 
 
-`migrant` will manage all migrations that live under `<project-dir>/migrations/` where `project-dir` is `.../<project-dir>/.migrant.toml`.
-The default migration location can be modified in your `.migrant.toml` file (`"migration_location"`).
-If the directory doesn't exist, it will be created the first time you create a new migration.
+`migrant` will manage all migrations that live under `<project-dir>/migrations/` where `project-dir` is the closest
+parent path that contains a `.migrant.toml` configuration file (`..../<project-dir>/.migrant.toml`).
+The default migration file location can be modified in your `.migrant.toml` file (`"migration_location"`).
+If the `migration_location` directory doesn't exist, it will be created the first time you create a new migration.
 `migrant` stores all applied migrations in a database table named `__migrant_migrations`
 
 
@@ -17,9 +18,12 @@ If the directory doesn't exist, it will be created the first time you create a n
 By default `migrant` will build without any features, falling back to using each database's `cli` commands (`psql` & `sqlite3`).
 The `postgres` and `rusqlite` database driver libraries can be activated with the `postgresql` and `sqlite` `features`.
 Both of these drivers require their dev libraries (`postgresql`: `libpq-dev`, `sqlite`: `libsqlite3-dev`).
+Self update functionality (updating to the latest GitHub release) is available behind the `update` feature.
 The binary releases are built with all features.
 
-See [releases](https://github.com/jaemk/migrant/releases) for binaries, or
+See [releases](https://github.com/jaemk/migrant/releases) for binaries. If you've installed a binary release, you can update to the latest release via `migrant self update`.
+
+Install from source/`crates.io`:
 
 ```shell
 # install without features
@@ -43,9 +47,9 @@ When run interactively (without `--no-confirm`), `setup` will be run automatical
 
 `migrant setup` - Verify database info/credentials and setup a `__migrant_migrations` table if missing.
 
-`migrant new initial` - Generate new up & down files with the tag `initial` under the specified `migration_location`.
+`migrant new <tag>` - Generate new up & down files with the given `<tag>` under the specified `migration_location`.
 
-`migrant edit initial [--down]` - Edit the `up` [or `down`] migration file with the tag `initial`.
+`migrant edit <tag> [--down]` - Edit the `up` [or `down`] migration file with the given `<tag>`.
 
 `migrant list` - Display all available .sql files and mark those applied.
 
@@ -57,10 +61,18 @@ When run interactively (without `--no-confirm`), `setup` will be run automatical
 
 `migrant connect-string` - Display either the connection-string generated from config-params or the database-path for sqlite
 
+`migrant self update` - Update to the latest version released on GitHub.
+
+`migrant self bash-completions install [--path <path]` - Generate a bash completion script and save it to the default or specified path.
+
 
 ### Usage as a library
 
-See [`migrant_lib`](https://github.com/jaemk/migrant/tree/master/migrant_lib) and [examples](https://github.com/jaemk/migrant/tree/master/migrant_lib/examples)
+See [`migrant_lib`](https://github.com/jaemk/migrant/tree/master/migrant_lib) and
+[examples](https://github.com/jaemk/migrant/tree/master/migrant_lib/examples).
+`migrant` itself is just a thin wrapper around `migrant_lib`, so the full functionality of migration management
+can be embedded in your actual project.
+
 
 ### Development
 
