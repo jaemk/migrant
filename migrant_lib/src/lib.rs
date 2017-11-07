@@ -47,7 +47,7 @@ database_type = "sqlite"
 # ex.) database_name = "db/db.db"
 database_name = ""
 
-migration_location = "migrations"  # defeault "migrations"
+migration_location = "migrations"  # default "migrations"
 "#;
 
 
