@@ -39,7 +39,8 @@ pub fn can_connect(conn_str: &str) -> Result<bool> {
                     .arg(conn_str)
                     .arg("-c")
                     .arg("")
-                    .output()?;
+                    .output()
+                    .chain_err(|| "Error running command `psql`. Is it available on your PATH?")?;
     Ok(out.status.success())
 }
 
