@@ -3,6 +3,7 @@ name = "migrant_lib"
 version = "0.11.4"
 dependencies = [
  "chrono 0.4.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "error-chain 0.11.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "lazy_static 0.2.9 (registry+https://github.com/rust-lang/crates.io-index)",
  "percent-encoding 1.0.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "postgres 0.15.1 (registry+https://github.com/rust-lang/crates.io-index)",

@@ -1,3 +1,5 @@
+#![recursion_limit = "1024"]
+#[macro_use] extern crate error_chain;
 #[macro_use] extern crate lazy_static;
 #[macro_use] extern crate serde_derive;
 extern crate serde;
@@ -28,7 +30,7 @@ use walkdir::WalkDir;
 use chrono::TimeZone;
 use regex::Regex;
 
-#[macro_use]
+#[macro_use] mod macros;
 mod errors;
 pub use errors::*;
 
@@ -82,10 +84,8 @@ lazy_static! {
 
 /// Write the provided bytes to the specified path
 fn write_to_path(path: &Path, content: &[u8]) -> Result<()> {
-    let mut file = fs::File::create(path)
-                    .map_err(Error::IoCreate)?;
-    file.write_all(content)
-        .map_err(Error::IoWrite)?;
+    let mut file = fs::File::create(path)?;
+    file.write_all(content)?;
     Ok(())
 }
 
@@ -94,10 +94,9 @@ fn write_to_path(path: &Path, content: &[u8]) -> Result<()> {
 fn open_file_in_fg(command: &str, file_path: &str) -> Result<()> {
     let mut p = Command::new(command)
         .arg(file_path)
-        .spawn()
-        .map_err(Error::IoProc)?;
-    let ret = p.wait().map_err(Error::IoProc)?;
-    if !ret.success() { bail!(ShellCommand <- "Command `{}` exited with status `{}`", command, ret) }
+        .spawn()?;
+    let ret = p.wait()?;
+    if !ret.success() { bail_fmt!(ErrorKind::ShellCommand, "Command `{}` exited with status `{}`", command, ret) }
     Ok(())
 }
 
@@ -111,10 +110,9 @@ fn encode(s: &str) -> String {
 /// Prompt the user and return their input
 fn prompt(msg: &str) -> Result<String> {
     print!("{}", msg);
-    io::stdout().flush().map_err(Error::IoWrite)?;
+    io::stdout().flush()?;
     let mut resp = String::new();
-    io::stdin().read_line(&mut resp)
-        .map_err(Error::IoRead)?;
+    io::stdin().read_line(&mut resp)?;
     Ok(resp.trim().to_string())
 }
 
@@ -158,7 +156,7 @@ impl ConfigInitializer {
             Some(db_type) => {
                 match db_type {
                     "postgres" | "sqlite" => (),
-                    e => bail!(Config <- "unsupported database type: {}", e),
+                    e => bail_fmt!(ErrorKind::Config, "unsupported database type: {}", e),
                 };
                 self.database_type = Some(db_type.to_owned());
             }
@@ -185,12 +183,12 @@ impl ConfigInitializer {
         println!(" You can specify the absolute location now, or nothing to exit");
         let ans = prompt(" >> ")?;
         if ans.is_empty() {
-            bail!(Config <- "No `{}` path provided", CONFIG_FILE)
+            bail_fmt!(ErrorKind::Config, "No `{}` path provided", CONFIG_FILE)
         }
 
         let path = PathBuf::from(ans);
         if !path.is_absolute() || path.file_name().unwrap() != CONFIG_FILE {
-            bail!(Config <- "Invalid absolute path: {}, must end in `{}`", path.display(), CONFIG_FILE);
+            bail_fmt!(ErrorKind::Config, "Invalid absolute path: {}, must end in `{}`", path.display(), CONFIG_FILE);
         }
         Ok(path)
     }
@@ -204,20 +202,20 @@ impl ConfigInitializer {
             config_path
         } else {
             ConfigInitializer::confirm_new_config_location(&config_path)
-                .map_err(|e| format_err!(Error::Config, "unable to create a `{}` config -> {}", CONFIG_FILE, e))?
+                .map_err(|e| format_err!(ErrorKind::Config, "unable to create a `{}` config -> {}", CONFIG_FILE, e))?
         };
 
         let db_type = if let Some(db_type) = self.database_type.as_ref() {
             db_type.to_owned()
         } else {
             if !self.interactive {
-                bail!(Config <- "database type must be specified if running non-interactively")
+                bail_fmt!(ErrorKind::Config, "database type must be specified if running non-interactively")
             }
             println!("\n ** Gathering database information...");
             let db_type = prompt(" database type (sqlite|postgres) >> ")?;
             match db_type.as_ref() {
                 "postgres" | "sqlite" => (),
-                e => bail!(Config <- "unsupported database type: {}", e),
+                e => bail_fmt!(ErrorKind::Config, "unsupported database type: {}", e),
             };
             db_type
         };
@@ -244,7 +242,7 @@ impl ConfigInitializer {
             println!(" -- After editing, the `setup` command will be run for you");
             let _ = prompt(&format!(" -- Press [ENTER] to open now or [CTRL+C] to exit and edit manually"))?;
             open_file_in_fg(&editor, file_path)
-                .map_err(|e| format_err!(Error::Config, "Error editing config file: {}", e))?;
+                .map_err(|e| format_err!(ErrorKind::Config, "Error editing config file: {}", e))?;
 
             println!();
             let config = Config::load_file_only(&config_path)?;
@@ -271,10 +269,10 @@ impl Config {
     /// Load config file from the given path without querying the database
     /// to check for applied migrations
     pub fn load_file_only(path: &Path) -> Result<Config> {
-        let mut file = fs::File::open(path).map_err(Error::IoOpen)?;
+        let mut file = fs::File::open(path)?;
         let mut content = String::new();
-        file.read_to_string(&mut content).map_err(Error::IoRead)?;
-        let settings = toml::from_str::<Settings>(&content).map_err(Error::TomlDe)?;
+        file.read_to_string(&mut content)?;
+        let settings = toml::from_str::<Settings>(&content)?;
         Ok(Config {
             path: path.to_owned(),
             settings: settings,
@@ -293,7 +291,7 @@ impl Config {
     /// Load the applied migrations from the database migration table
     fn load_applied(&self) -> Result<Vec<String>> {
         if !self.migration_table_exists()? {
-            bail!(Migration <- "`__migrant_migrations` table is missing, maybe try re-setting-up? -> `setup`")
+            bail_fmt!(ErrorKind::Migration, "`__migrant_migrations` table is missing, maybe try re-setting-up? -> `setup`")
         }
 
         let applied = match self.settings.database_type.as_ref() {
@@ -304,7 +302,7 @@ impl Config {
         let mut stamped = vec![];
         for tag in applied.into_iter() {
             if !FULL_TAG_RE.is_match(&tag) {
-                bail!(Migration <- "Found a non-conforming tag in the database: `{}`", tag)
+                bail_fmt!(ErrorKind::Migration, "Found a non-conforming tag in the database: `{}`", tag)
             }
             let stamp = chrono::Utc.datetime_from_str(
                 tag.split('_').next().unwrap(),
@@ -359,7 +357,7 @@ impl Config {
         match self.settings.database_type.as_ref() {
             "sqlite" => {
                 if self.settings.database_name.is_empty() {
-                    bail!(Config <- "`database_name` cannot be blank!")
+                    bail_fmt!(ErrorKind::Config, "`database_name` cannot be blank!")
                 }
                 let db_path = self.path.parent().unwrap().join(&self.settings.database_name);
                 let created = drivers::sqlite::create_file_if_missing(&db_path)?;
@@ -380,7 +378,7 @@ impl Config {
                     println!("      sudo -u postgres createuser {}", self.settings.database_user.as_ref().unwrap());
                     println!("      sudo -u postgres psql -c \"alter user {} with password '****'\"", self.settings.database_user.as_ref().unwrap());
                     println!();
-                    bail!(Config <- "Cannot connect to postgres database");
+                    bail_fmt!(ErrorKind::Config, "Cannot connect to postgres database");
                 } else {
                     println!("    - Connection confirmed ✓");
                 }
@@ -413,9 +411,9 @@ impl Config {
 
     /// Return the absolute path to the directory containing migration folders
     pub fn migration_dir(&self) -> Result<PathBuf> {
-        self.path.parent()
+        Ok(self.path.parent()
             .map(|p| p.join(&self.settings.migration_location))
-            .ok_or_else(|| format_err!(Error::PathError, "Error generating PathBuf to migration_location"))
+            .ok_or_else(|| format_err!(ErrorKind::PathError, "Error generating PathBuf to migration_location"))?)
     }
 
     /// Return the database type
@@ -428,12 +426,12 @@ impl Config {
     pub fn database_path(&self) -> Result<PathBuf> {
         match self.settings.database_type.as_ref() {
             "sqlite" => (),
-            db_t => bail!(Config <- "Cannot retrieve database-path for database-type: {}", db_t),
+            db_t => bail_fmt!(ErrorKind::Config, "Cannot retrieve database-path for database-type: {}", db_t),
         };
 
-        self.path.parent()
+        Ok(self.path.parent()
             .map(|p| p.join(&self.settings.database_name))
-            .ok_or_else(|| format_err!(Error::PathError, "Error generating PathBuf to database-path"))
+            .ok_or_else(|| format_err!(ErrorKind::PathError, "Error generating PathBuf to database-path"))?)
     }
 
     /// Generate a database connection string.
@@ -441,7 +439,7 @@ impl Config {
     pub fn connect_string(&self) -> Result<String> {
         match self.settings.database_type.as_ref() {
             "postgres" => (),
-            db_t => bail!(Config <- "Cannot generate connect-string for database-type: {}", db_t),
+            db_t => bail_fmt!(ErrorKind::Config, "Cannot generate connect-string for database-type: {}", db_t),
         };
 
         let pass = match self.settings.database_password {
@@ -453,11 +451,11 @@ impl Config {
         };
         let user = match self.settings.database_user.as_ref().and_then(|s| if s.is_empty() { None } else { Some(s) }) {
             Some(ref user) => encode(user),
-            None => bail!(Config <- "'database_user' not specified"),
+            None => bail_fmt!(ErrorKind::Config, "'database_user' not specified"),
         };
 
         let db_name = if self.settings.database_name.is_empty() {
-            bail!(Config <- "`database_name` not specified");
+            bail_fmt!(ErrorKind::Config, "`database_name` not specified");
         } else {
             encode(&self.settings.database_name)
         };
@@ -486,7 +484,7 @@ impl Config {
                 let k = encode(k);
                 let v = match *v {
                     toml::value::Value::String(ref s) => encode(s),
-                    ref v => bail!(Config <- "Database params can only be strings, found `{}={}`", k, v),
+                    ref v => bail_fmt!(ErrorKind::Config, "Database params can only be strings, found `{}={}`", k, v),
                 };
                 pairs.push((k, v));
             }
@@ -722,7 +720,8 @@ fn apply_migration(config: &Config, direction: Direction,
     let mig_dir = config.migration_dir()?;
 
     match next_available(&direction, &mig_dir, config.applied.as_slice()) {
-        None => bail!(MigrationComplete <- "No un-applied `{}` migration found in `{}/`", direction, config.settings.migration_location),
+        None => bail_fmt!(ErrorKind::MigrationComplete, "No un-applied `{}` migration found in `{}/`",
+                      direction, config.settings.migration_location),
         Some(next) => {
             print!("Applying: {:?}", next);
 
@@ -736,7 +735,7 @@ fn apply_migration(config: &Config, direction: Direction,
                         if force {
                             println!(" ** Error ** (Continuing because `--force` flag was specified)\n ** {}", e);
                         } else {
-                            bail!(Migration <- "Migration was unsucessful...\n{}", e);
+                            bail_fmt!(ErrorKind::Migration, "Migration was unsucessful...\n{}", e);
                         }
                     }
                 };
@@ -764,11 +763,8 @@ fn apply_migration(config: &Config, direction: Direction,
         let res = apply_migration(&config, direction, force, fake, all);
         match res {
             Ok(_) => (),
-            Err(error) => match error {
-                // No more migrations in this direction
-                Error::MigrationComplete(_) => (),
-                // Some actual error
-                e => return Err(e),
+            Err(error) => {
+                if !error.is_migration_complete() { return Err(error) }
             }
         }
     }
@@ -807,7 +803,7 @@ fn valid_tag(tag: &str) -> bool {
 /// Create a new migration with the given tag
 pub fn new(config: &Config, tag: &str) -> Result<()> {
     if valid_tag(tag) {
-        bail!(Migration <- "Invalid tag `{}`. Tags can contain [a-z0-9-]", tag);
+        bail_fmt!(ErrorKind::Migration, "Invalid tag `{}`. Tags can contain [a-z0-9-]", tag);
     }
     let now = chrono::Utc::now();
     let dt_string = now.format(DT_FORMAT).to_string();
@@ -815,15 +811,14 @@ pub fn new(config: &Config, tag: &str) -> Result<()> {
 
     let mig_dir = config.migration_dir()?.join(folder);
 
-    fs::create_dir_all(&mig_dir)
-        .map_err(Error::IoCreate)?;
+    fs::create_dir_all(&mig_dir)?;
 
     let up = "up.sql";
     let down = "down.sql";
     for mig in &[up, down] {
         let mut p = mig_dir.clone();
         p.push(mig);
-        let _ = fs::File::create(&p).map_err(Error::IoCreate)?;
+        let _ = fs::File::create(&p)?;
     }
     Ok(())
 }
@@ -836,15 +831,13 @@ pub fn shell(config: &Config) -> Result<()> {
             let db_path = config.database_path()?;
             let _ = Command::new("sqlite3")
                     .arg(db_path.to_str().unwrap())
-                    .spawn().unwrap().wait()
-                    .map_err(Error::IoProc)?;
+                    .spawn().expect("Failing running sqlite3").wait()?;
         }
         "postgres" => {
             let conn_str = config.connect_string()?;
             Command::new("psql")
                     .arg(&conn_str)
-                    .spawn().unwrap().wait()
-                    .map_err(Error::IoProc)?;
+                    .spawn().unwrap().wait()?;
         }
         _ => unreachable!(),
     })
@@ -863,9 +856,9 @@ fn select_from_matches<'a>(tag: &str, matches: &'a [Migration]) -> Result<&'a Mi
             println!("    {}) {}", row + 1, info);
         }
         print!("\n Please select a migration [1-{}] >> ", max);
-        io::stdout().flush().map_err(Error::IoWrite)?;
+        io::stdout().flush()?;
         let mut s = String::new();
-        io::stdin().read_line(&mut s).map_err(Error::IoRead)?;
+        io::stdin().read_line(&mut s)?;
         let n = match s.trim().parse::<usize>() {
             Err(e) => {
                 println!("\nError: {}", e);
@@ -898,7 +891,7 @@ pub fn edit(config: &Config, tag: &str, up_down: &Direction) -> Result<()> {
     let n = matches.len();
     let editor = env::var("EDITOR").unwrap_or_else(|_| "vim".to_string());
     let mig = match n {
-        0 => bail!(Config <- "No migrations found with tag: {}", tag),
+        0 => bail_fmt!(ErrorKind::Config, "No migrations found with tag: {}", tag),
         1 => &matches[0],
         _ => {
             println!("* Multiple tags found!");
@@ -914,6 +907,6 @@ pub fn edit(config: &Config, tag: &str, up_down: &Direction) -> Result<()> {
     println!("* Running: `{}`", command);
     let _ = prompt(&format!(" -- Press [ENTER] to open now or [CTRL+C] to exit and edit manually"))?;
     open_file_in_fg(&editor, file_path)
-        .map_err(|e| format_err!(Error::Migration, "Error editing migrant file: {}", e))?;
+        .map_err(|e| format_err!(ErrorKind::Migration, "Error editing migrant file: {}", e))?;
     Ok(())
 }

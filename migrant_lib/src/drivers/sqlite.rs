@@ -20,10 +20,10 @@ pub fn create_file_if_missing(path: &Path) -> Result<bool> {
     if path.exists() {
         Ok(false)
     } else {
-        let db_dir = path.parent().unwrap();
-        fs::create_dir_all(db_dir).map_err(Error::IoCreate)?;
+        let db_dir = path.parent().expect("Invalid utf8 path");
+        fs::create_dir_all(db_dir)?;
         println!("{:?}", path);
-        fs::File::create(path).map_err(Error::IoCreate)?;
+        fs::File::create(path)?;
         Ok(true)
     }
 }
@@ -35,11 +35,10 @@ fn sqlite_cmd(db_path: &str, cmd: &str) -> Result<String> {
                     .arg(&db_path)
                     .arg("-csv")
                     .arg(cmd)
-                    .output()
-                    .map_err(Error::IoProc)?;
+                    .output()?;
     if !out.status.success() {
-        let stderr = str::from_utf8(&out.stderr).unwrap();
-        bail!(Migration <- "Error executing statement, stderr: `{}`", stderr);
+        let stderr = str::from_utf8(&out.stderr)?;
+        bail_fmt!(ErrorKind::Migration, "Error executing statement, stderr: `{}`", stderr);
     }
     let stdout = String::from_utf8(out.stdout)?;
     Ok(stdout)
@@ -157,17 +156,15 @@ pub fn run_migration(db_path: &Path, filename: &str) -> Result<()> {
 
 #[cfg(feature="sqlite")]
 pub fn run_migration(db_path: &Path, filename: &str) -> Result<()> {
-    let mut file = fs::File::open(filename)
-        .map_err(Error::IoOpen)?;
+    let mut file = fs::File::open(filename)?;
     let mut buf = String::new();
-    file.read_to_string(&mut buf)
-        .map_err(Error::IoRead)?;
+    file.read_to_string(&mut buf)?;
     if buf.is_empty() { return Ok(()); }
 
     let conn = Connection::open(db_path)
-        .map_err(|e| format_err!(Error::Migration, "{}", e))?;
+        .map_err(|e| format_err!(ErrorKind::Migration, "{}", e))?;
     conn.execute_batch(&buf)
-        .map_err(|e| format_err!(Error::Migration, "{}", e))?;
+        .map_err(|e| format_err!(ErrorKind::Migration, "{}", e))?;
     Ok(())
 }
 

@@ -20,13 +20,12 @@ fn psql_cmd(conn_str: &str, cmd: &str) -> Result<String> {
                     .arg("-F,")     // comma separator
                     .arg("-c")
                     .arg(cmd)
-                    .output()
-                    .map_err(Error::IoProc)?;
+                    .output()?;
     if !out.status.success() {
-        let stderr = std::str::from_utf8(&out.stderr).unwrap();
-        bail!(Migration <- "Error executing statement, stderr: `{}`", stderr);
+        let stderr = std::str::from_utf8(&out.stderr)?;
+        bail_fmt!(ErrorKind::Migration, "Error executing statement, stderr: `{}`", stderr);
     }
-    let stdout = String::from_utf8(out.stdout).unwrap();
+    let stdout = String::from_utf8(out.stdout)?;
     Ok(stdout)
 }
 
@@ -40,8 +39,7 @@ pub fn can_connect(conn_str: &str) -> Result<bool> {
                     .arg(conn_str)
                     .arg("-c")
                     .arg("")
-                    .output()
-                    .map_err(Error::IoProc)?;
+                    .output()?;
     Ok(out.status.success())
 }
 
@@ -66,9 +64,9 @@ pub fn migration_table_exists(conn_str: &str) -> Result<bool> {
 #[cfg(feature="postgresql")]
 pub fn migration_table_exists(conn_str: &str) -> Result<bool> {
     let conn = Connection::connect(conn_str, TlsMode::None)
-        .map_err(|e| format_err!(Error::Migration, "{}", e))?;
+        .map_err(|e| format_err!(ErrorKind::Migration, "{}", e))?;
     let rows = conn.query(sql::PG_MIGRATION_TABLE_EXISTS, &[])
-        .map_err(|e| format_err!(Error::Migration, "{}", e))?;
+        .map_err(|e| format_err!(ErrorKind::Migration, "{}", e))?;
     let exists: bool = rows.iter().next().unwrap().get(0);
     Ok(exists)
 }
@@ -90,9 +88,9 @@ pub fn migration_setup(conn_str: &str) -> Result<bool> {
 pub fn migration_setup(conn_str: &str) -> Result<bool> {
     if !migration_table_exists(conn_str)? {
         let conn = Connection::connect(conn_str, TlsMode::None)
-            .map_err(|e| format_err!(Error::Migration, "{}", e))?;
+            .map_err(|e| format_err!(ErrorKind::Migration, "{}", e))?;
         conn.execute(sql::CREATE_TABLE, &[])
-            .map_err(|e| format_err!(Error::Migration, "{}", e))?;
+            .map_err(|e| format_err!(ErrorKind::Migration, "{}", e))?;
         return Ok(true)
     }
     Ok(false)
@@ -158,27 +156,24 @@ pub fn run_migration(conn_str: &str, filename: &str) -> Result<()> {
     let migrate = Command::new("psql")
             .arg(&conn_str)
             .arg("-f").arg(filename)
-            .output()
-            .map_err(Error::IoProc)?;
+            .output()?;
     if !migrate.status.success() {
-        let stderr = std::str::from_utf8(&migrate.stderr).unwrap();
-        bail!(Migration <- "Error executing statement, stderr: `{}`", stderr);
+        let stderr = std::str::from_utf8(&migrate.stderr)?;
+        bail_fmt!(ErrorKind::Migration, "Error executing statement, stderr: `{}`", stderr);
     }
     Ok(())
 }
 
 #[cfg(feature="postgresql")]
 pub fn run_migration(conn_str: &str, filename: &str) -> Result<()> {
-    let mut file = std::fs::File::open(filename)
-        .map_err(Error::IoOpen)?;
+    let mut file = std::fs::File::open(filename)?;
     let mut buf = String::new();
-    file.read_to_string(&mut buf)
-        .map_err(Error::IoRead)?;
+    file.read_to_string(&mut buf)?;
 
     let conn = Connection::connect(conn_str, TlsMode::None)
-        .map_err(|e| format_err!(Error::Migration, "{}", e))?;
+        .map_err(|e| format_err!(ErrorKind::Migration, "{}", e))?;
     conn.batch_execute(&buf)
-        .map_err(|e| format_err!(Error::Migration, "{}", e))?;
+        .map_err(|e| format_err!(ErrorKind::Migration, "{}", e))?;
     Ok(())
 }
 
