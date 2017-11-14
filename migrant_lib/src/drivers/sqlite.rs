@@ -36,7 +36,9 @@ fn sqlite_cmd(db_path: &str, cmd: &str) -> Result<String> {
                     .arg("-csv")
                     .arg(cmd)
                     .output()
-                    .chain_err(|| "Error running command `sqlite3`. Is it available on your PATH?")?;
+                    .map_err(|e| format_err!(ErrorKind::ShellCommand,
+                                             "Error running command `sqlite3`. Is it available on your PATH?\n\
+                                             Caused by: {}", e))?;
     if !out.status.success() {
         let stderr = str::from_utf8(&out.stderr)?;
         bail_fmt!(ErrorKind::Migration, "Error executing statement, stderr: `{}`", stderr);

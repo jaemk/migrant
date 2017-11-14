@@ -20,7 +20,10 @@ fn psql_cmd(conn_str: &str, cmd: &str) -> Result<String> {
                     .arg("-F,")     // comma separator
                     .arg("-c")
                     .arg(cmd)
-                    .output()?;
+                    .output()
+                    .map_err(|e| format_err!(ErrorKind::ShellCommand,
+                                             "Error running command `psql`. Is it available on your PATH?\n\
+                                             Caused by: {}", e))?;
     if !out.status.success() {
         let stderr = std::str::from_utf8(&out.stderr)?;
         bail_fmt!(ErrorKind::Migration, "Error executing statement, stderr: `{}`", stderr);
