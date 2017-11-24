@@ -253,14 +253,86 @@ impl ConfigInitializer {
 }
 
 
+pub trait MigratableClone {
+    fn clone_migratable_box(&self) -> Box<Migratable>;
+}
+impl<T> MigratableClone for T
+    where T: 'static + Migratable + Clone
+{
+    fn clone_migratable_box(&self) -> Box<Migratable> {
+        Box::new(self.clone())
+    }
+}
+
+
+pub trait Migratable: MigratableClone {
+    fn apply_up(&self) -> Result<bool>;
+    fn apply_down(&self) -> Result<bool>;
+}
+impl Clone for Box<Migratable> {
+    fn clone(&self) -> Box<Migratable> {
+        self.clone_migratable_box()
+    }
+}
+
+impl std::fmt::Debug for Box<Migratable> {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "Migratable")
+    }
+}
+
+
+pub fn noop_migration() -> Result<bool> {
+    Ok(true)
+}
+
+
+#[derive(Clone, Debug)]
+pub struct FileMigration {
+    up: Option<PathBuf>,
+    down: Option<PathBuf>,
+}
+impl FileMigration {
+    pub fn new() -> Self {
+        Self { up: None, down: None }
+    }
+    pub fn up<T: AsRef<Path>>(&mut self, up_file: T) -> &mut Self {
+        self.up = Some(up_file.as_ref().to_owned());
+        self
+    }
+    pub fn down<T: AsRef<Path>>(&mut self, down_file: T) -> &mut Self {
+        self.down = Some(down_file.as_ref().to_owned());
+        self
+    }
+    pub fn wrap(&self) -> Box<Migratable> {
+        Box::new(self.clone())
+    }
+}
+impl Migratable for FileMigration {
+    fn apply_up(&self) -> Result<bool> {
+        println!("Applying {:?}", self.up);
+        Ok(true)
+    }
+    fn apply_down(&self) -> Result<bool> {
+        println!("Applying down {:?}", self.down);
+        Ok(true)
+    }
+}
+
 #[derive(Debug, Clone)]
 /// Project configuration/settings
 pub struct Config {
     pub path: PathBuf,
     settings: Settings,
     applied: Vec<String>,
+    migrations: Option<Vec<Box<Migratable>>>,
 }
 impl Config {
+    pub fn use_migrations(&mut self, migrations: Vec<Box<Migratable>>) -> &mut Self {
+        self.migrations = Some(migrations);
+        self
+    }
+
     /// Do a full reload of the configuration file
     pub fn reload(&self) -> Result<Config> {
         Self::load(&self.path)
@@ -277,6 +349,7 @@ impl Config {
             path: path.to_owned(),
             settings: settings,
             applied: vec![],
+            migrations: None,
         })
     }
 
