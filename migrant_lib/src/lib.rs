@@ -268,6 +268,7 @@ impl<T> MigratableClone for T
 pub trait Migratable: MigratableClone {
     fn apply_up(&self) -> Result<bool>;
     fn apply_down(&self) -> Result<bool>;
+    fn tag(&self) -> &str;
 }
 impl Clone for Box<Migratable> {
     fn clone(&self) -> Box<Migratable> {
