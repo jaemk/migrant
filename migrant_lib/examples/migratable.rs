@@ -21,13 +21,11 @@ fn run() -> Result<(), Box<std::error::Error>> {
     };
 
     config.use_migrations(vec![
-        FileMigration::new()
-            .up("migrations/20171124032056_initial/up.sql")
-            .down("migrations/20171124032056_initial/down.sql")
+        FileMigration::up("migrations/20171124032056_initial/up.sql")?
+            .down("migrations/20171124032056_initial/down.sql")?
             .wrap(),
-        FileMigration::new()
-            .up("migrations/20171124032102_second/up.sql")
-            .down("migrations/20171124032102_second/down.sql")
+        FileMigration::up("migrations/20171124032102_second/up.sql")?
+            .down("migrations/20171124032102_second/down.sql")?
             .wrap(),
     ]);
 
