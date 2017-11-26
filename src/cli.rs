@@ -89,6 +89,7 @@ pub fn build_cli() -> App<'static, 'static> {
         .subcommand(SubCommand::with_name("edit")
             .about("Edit a migration file by tag name")
             .arg(Arg::with_name("tag")
+                 .required(true)
                  .help("Tag name"))
             .arg(Arg::with_name("down")
                  .long("down")
