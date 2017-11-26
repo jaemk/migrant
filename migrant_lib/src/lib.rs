@@ -26,7 +26,7 @@ use std::fmt;
 use std::env;
 
 use percent_encoding::{percent_encode, DEFAULT_ENCODE_SET};
-use chrono::TimeZone;
+use chrono::{TimeZone, Utc};
 use walkdir::WalkDir;
 use regex::Regex;
 
@@ -144,17 +144,6 @@ impl fmt::Display for Direction {
 }
 
 
-#[derive(Debug)]
-/// Migration meta data
-struct Migration {
-    stamp: chrono::DateTime<chrono::Utc>,
-    tag: String,
-    dir: PathBuf,
-    up: PathBuf,
-    down: PathBuf,
-}
-
-
 #[derive(Debug, Clone)]
 /// Migration applicator
 pub struct Migrator {
@@ -234,7 +223,7 @@ pub fn search_for_config(base: &PathBuf) -> Option<PathBuf> {
 
 
 /// Search for available migrations in the given migration directory
-fn search_for_migrations(mig_root: &PathBuf) -> Vec<Migration> {
+fn search_for_migrations(mig_root: &PathBuf) -> Result<Vec<FileMigration>> {
     // collect any .sql files into a Map<`stamp-tag`, Vec<up&down files>>
     let mut files = HashMap::new();
     for dir in WalkDir::new(mig_root) {
@@ -256,52 +245,56 @@ fn search_for_migrations(mig_root: &PathBuf) -> Vec<Migration> {
         let full_name = PathBuf::from(path);
         let mut full_name = full_name.file_name()
             .and_then(OsStr::to_str)
-            .expect(&format!("Error extracting file-name from: {:?}", full_name))
+            .ok_or_else(|| format_err!(ErrorKind::PathError, "Error extracting file-name from: {:?}", full_name))?
             .split('_');
-        let stamp = full_name.next().unwrap();
-        let tag = full_name.next().unwrap();
+        let stamp = full_name.next()
+            .ok_or_else(|| format_err!(ErrorKind::TagError, "Invalid tag format: {:?}", full_name))?;
+        let stamp = Utc.datetime_from_str(stamp, DT_FORMAT)?;
+        let tag = full_name.next()
+            .ok_or_else(|| format_err!(ErrorKind::TagError, "Invalid tag format: {:?}", full_name))?;
 
-        let mut up = PathBuf::from(path);
-        let mut down = PathBuf::from(path);
+        let mut up = None;
+        let mut down = None;
 
         for mig in migs.iter() {
             let up_down = mig.file_stem()
                 .and_then(OsStr::to_str)
-                .expect(&format!("Error extracting file-stem from {:?}", mig));
+                .ok_or_else(|| format_err!(ErrorKind::PathError, "Error extracting file-stem from: {:?}", full_name))?;
             match up_down {
-                "up" => up = mig.clone(),
-                "down" => down = mig.clone(),
+                "up" => up = Some(mig.clone()),
+                "down" => down = Some(mig.clone()),
                 _ => unreachable!(),
             };
         }
-        let migration = Migration {
-            dir: up.parent().map(PathBuf::from).unwrap(),
+        if up.is_none() {
+            bail_fmt!(ErrorKind::MigrationNotFound, "Up migration not found for tag: {}", tag)
+        }
+        if down.is_none() {
+            bail_fmt!(ErrorKind::MigrationNotFound, "Down migration not found for tag: {}", tag)
+        }
+        migrations.push(FileMigration {
             up: up,
             down: down,
-            stamp: chrono::Utc.datetime_from_str(stamp, DT_FORMAT).unwrap(),
             tag: tag.to_owned(),
-        };
-        migrations.push(migration);
+            stamp: Some(stamp),
+        });
     }
 
     // sort by timestamps chronologically
-    migrations.sort_by(|a, b| a.stamp.cmp(&b.stamp));
-    migrations
+    migrations.sort_by(|a, b| a.stamp.unwrap().cmp(&b.stamp.unwrap()));
+    Ok(migrations)
 }
 
 
 /// Return the next available up or down migration
-fn next_available(direction: &Direction, mig_dir: &PathBuf, applied: &[String]) -> Option<PathBuf> {
-    match *direction {
+fn next_available(direction: &Direction, mig_dir: &PathBuf, applied: &[String]) -> Result<Option<PathBuf>> {
+    Ok(match *direction {
         Direction::Up => {
-            let available = search_for_migrations(mig_dir);
+            let available = search_for_migrations(mig_dir)?;
             for mig in &available {
-                let tag = mig.dir.file_name()
-                    .and_then(OsStr::to_str)
-                    .map(str::to_string)
-                    .expect(&format!("Error extracting dir-name from: {:?}", mig.dir));
+                let tag = &mig.tag;
                 if !applied.contains(&tag) {
-                    return Some(mig.up.clone())
+                    return Ok(mig.up.clone())
                 }
             }
             None
@@ -316,7 +309,7 @@ fn next_available(direction: &Direction, mig_dir: &PathBuf, applied: &[String]) 
                     pb
                 })
         }
-    }
+    })
 }
 
 
@@ -342,7 +335,7 @@ fn apply_migration(config: &Config, direction: Direction,
                        force: bool, fake: bool, all: bool) -> Result<()> {
     let mig_dir = config.migration_dir()?;
 
-    match next_available(&direction, &mig_dir, config.applied.as_slice()) {
+    match next_available(&direction, &mig_dir, config.applied.as_slice())? {
         None => bail_fmt!(ErrorKind::MigrationComplete, "No un-applied `{}` migration found in `{}/`",
                       direction, config.settings.migration_location),
         Some(next) => {
@@ -399,14 +392,15 @@ fn apply_migration(config: &Config, direction: Direction,
 pub fn list(config: &Config) -> Result<()> {
     let mig_dir = config.migration_dir()?;
 
-    let available = search_for_migrations(&mig_dir);
+    let available = search_for_migrations(&mig_dir)?;
     if available.is_empty() {
         println!("No migrations found under {:?}", &mig_dir);
         return Ok(())
     }
     println!("Current Migration Status:");
     for mig in &available {
-        let tagname = mig.up.parent()
+        let tagname = mig.up.as_ref().expect("UP migration missing")
+            .parent()
             .and_then(Path::file_name)
             .and_then(OsStr::to_str)
             .map(str::to_string)
@@ -468,13 +462,13 @@ pub fn shell(config: &Config) -> Result<()> {
 
 
 /// Get user's selection of a set of migrations
-fn select_from_matches<'a>(tag: &str, matches: &'a [Migration]) -> Result<&'a Migration> {
+fn select_from_matches<'a>(tag: &str, matches: &'a [FileMigration]) -> Result<&'a FileMigration> {
     let min = 1;
     let max = matches.len();
     loop {
         println!("* Migrations matching `{}`:", tag);
         for (row, mig) in matches.iter().enumerate() {
-            let dt_string = mig.stamp.format(DT_FORMAT).to_string();
+            let dt_string = mig.stamp.expect("Timestamp missing").format(DT_FORMAT).to_string();
             let info = format!("{stamp}_{tag}", stamp=dt_string, tag=mig.tag);
             println!("    {}) {}", row + 1, info);
         }
@@ -504,7 +498,7 @@ fn select_from_matches<'a>(tag: &str, matches: &'a [Migration]) -> Result<&'a Mi
 pub fn edit(config: &Config, tag: &str, up_down: &Direction) -> Result<()> {
     let mig_dir = config.migration_dir()?;
 
-    let available = search_for_migrations(&mig_dir);
+    let available = search_for_migrations(&mig_dir)?;
     if available.is_empty() {
         println!("No migrations found under {:?}", &mig_dir);
         return Ok(())
@@ -522,8 +516,8 @@ pub fn edit(config: &Config, tag: &str, up_down: &Direction) -> Result<()> {
         }
     };
     let file = match *up_down {
-        Direction::Up   => mig.up.to_owned(),
-        Direction::Down => mig.down.to_owned(),
+        Direction::Up   => mig.up.as_ref().expect("UP migration missing").to_owned(),
+        Direction::Down => mig.down.as_ref().expect("DOWN migration missing").to_owned(),
     };
     let file_path = file.to_str().unwrap();
     let command = format!("{} {}", editor, file_path);
@@ -533,3 +527,4 @@ pub fn edit(config: &Config, tag: &str, up_down: &Direction) -> Result<()> {
         .map_err(|e| format_err!(ErrorKind::Migration, "Error editing migrant file: {}", e))?;
     Ok(())
 }
+
