@@ -82,7 +82,7 @@ migration_location = "migrations"   # default "migrations"
 
 lazy_static! {
     // For verifying new `tag` names
-    static ref TAG_RE: Regex = Regex::new(r"[^a-z0-9-]+").expect("failed to compile regex");
+    static ref BAD_TAG_RE: Regex = Regex::new(r"[^a-z0-9-]+").expect("failed to compile regex");
 
     // For verifying complete stamp+tag names
     static ref FULL_TAG_RE: Regex = Regex::new(r"[0-9]{14}_[a-z0-9-]+").expect("failed to compile regex");
@@ -223,6 +223,9 @@ pub fn search_for_config(base: &PathBuf) -> Option<PathBuf> {
 
 
 /// Search for available migrations in the given migration directory
+///
+/// Intended only for use with `FileMigration`s not managed directly in source
+/// with `Config::use_migrations`.
 fn search_for_migrations(mig_root: &PathBuf) -> Result<Vec<FileMigration>> {
     // collect any .sql files into a Map<`stamp-tag`, Vec<up&down files>>
     let mut files = HashMap::new();
@@ -287,45 +290,60 @@ fn search_for_migrations(mig_root: &PathBuf) -> Result<Vec<FileMigration>> {
 
 
 /// Return the next available up or down migration
-fn next_available(direction: &Direction, mig_dir: &PathBuf, applied: &[String]) -> Result<Option<PathBuf>> {
+fn next_available<'a>(direction: &Direction, available: &'a [Box<Migratable>], applied: &[String]) -> Result<Option<&'a Box<Migratable>>> {
     Ok(match *direction {
         Direction::Up => {
-            let available = search_for_migrations(mig_dir)?;
-            for mig in &available {
-                let tag = &mig.tag;
+            for mig in available {
+                let tag = mig.tag();
                 if !applied.contains(&tag) {
-                    return Ok(mig.up.clone())
+                    return Ok(Some(mig))
                 }
             }
             None
         }
         Direction::Down => {
-            applied.last()
-                .map(PathBuf::from)
-                .map(|mut tag| {
-                    tag.push("down.sql");
-                    let mut pb = mig_dir.clone();
-                    pb.push(tag);
-                    pb
-                })
+            match applied.last() {
+                Some(tag) => {
+                    let mig = available.iter().rev().find(|m| &m.tag() == tag);
+                    match mig {
+                        None => bail_fmt!(ErrorKind::MigrationNotFound, "Tag not found: {}", tag),
+                        Some(mig) => Some(mig),
+                    }
+                }
+                None => None,
+            }
         }
     })
 }
 
 
-/// Run a given migration file through either sqlite or postgres, returning the output
-fn runner(config: &Config, filename: &str) -> Result<()> {
-    let settings = &config.settings;
-    Ok(match settings.database_type.as_ref() {
-        "sqlite" => {
-            let db_path = config.database_path()?;
-            drivers::sqlite::run_migration(&db_path, filename)?;
+/// Database type being used
+pub enum DbKind {
+    Sqlite,
+    Postgres,
+}
+impl DbKind {
+    fn from(s: &str) -> Result<Self> {
+        Ok(match s {
+            "sqlite" => DbKind::Sqlite,
+            "postgres" => DbKind::Postgres,
+            _ => bail_fmt!(ErrorKind::InvalidDbKind, "Invalid Database Kind: {}", s),
+        })
+    }
+}
+
+
+/// Apply the migration in the specified direction
+fn run_migration(config: &Config, direction: &Direction,
+                 migration: &Box<Migratable>) -> std::result::Result<(), Box<std::error::Error>> {
+    let db_kind = DbKind::from(config.settings.database_type.as_ref())?;
+    Ok(match *direction {
+        Direction::Up => {
+            migration.apply_up(db_kind, config)?;
         }
-        "postgres" => {
-            let conn_str = config.connect_string()?;
-            drivers::pg::run_migration(&conn_str, filename)?;
+        Direction::Down => {
+            migration.apply_down(db_kind, config)?;
         }
-        _ => unreachable!(),
     })
 }
 
@@ -335,16 +353,23 @@ fn apply_migration(config: &Config, direction: Direction,
                        force: bool, fake: bool, all: bool) -> Result<()> {
     let mig_dir = config.migration_dir()?;
 
-    match next_available(&direction, &mig_dir, config.applied.as_slice())? {
-        None => bail_fmt!(ErrorKind::MigrationComplete, "No un-applied `{}` migration found in `{}/`",
-                      direction, config.settings.migration_location),
+    let migrations = match config.migrations {
+        Some(ref migrations) => migrations.clone(),
+        None => {
+            search_for_migrations(&mig_dir)?.into_iter()
+                .map(|fm| fm.boxed()).collect()
+        }
+    };
+    match next_available(&direction, migrations.as_slice(), config.applied.as_slice())? {
+        None => bail_fmt!(ErrorKind::MigrationComplete, "No un-applied `{}` migrations found", direction),
         Some(next) => {
-            print!("Applying: {:?}", next);
+            print_flush!("Applying: {}", next.description(&direction));
 
             if fake {
                 println!("  ✓ (fake)");
             } else {
-                match runner(config, next.to_str().unwrap()) {
+                // match runner(config, next.to_str().unwrap()) {
+                match run_migration(config, &direction, next) {
                     Ok(_) => println!("  ✓"),
                     Err(ref e) => {
                         println!();
@@ -357,11 +382,7 @@ fn apply_migration(config: &Config, direction: Direction,
                 };
             }
 
-            let mig_tag = next.parent()
-                .and_then(Path::file_name)
-                .and_then(OsStr::to_str)
-                .map(str::to_string)
-                .expect(&format!("Error extracting parent dir-name from: {:?}", next));
+            let mig_tag = next.tag();
             match direction {
                 Direction::Up => {
                     config.insert_migration_tag(&mig_tag)?;
@@ -390,21 +411,32 @@ fn apply_migration(config: &Config, direction: Direction,
 
 /// List the currently applied and available migrations under `migration_location`
 pub fn list(config: &Config) -> Result<()> {
-    let mig_dir = config.migration_dir()?;
+    let available = match config.migrations {
+        None => {
+            let mig_dir = config.migration_dir()?;
+            let migs = search_for_migrations(&mig_dir)?
+                .into_iter()
+                .map(|file_mig| file_mig.boxed())
+                .collect::<Vec<_>>();
+            if migs.is_empty() {
+                println!("No migrations found under {:?}", &mig_dir);
+            }
+            migs
+        }
+        Some(ref migs) => {
+            if migs.is_empty() {
+                println!("No migrations specified");
+            }
+            migs.clone()
+        }
+    };
 
-    let available = search_for_migrations(&mig_dir)?;
     if available.is_empty() {
-        println!("No migrations found under {:?}", &mig_dir);
         return Ok(())
     }
     println!("Current Migration Status:");
     for mig in &available {
-        let tagname = mig.up.as_ref().expect("UP migration missing")
-            .parent()
-            .and_then(Path::file_name)
-            .and_then(OsStr::to_str)
-            .map(str::to_string)
-            .expect(&format!("Error extracting parent dir-name from: {:?}", mig.up));
+        let tagname = mig.tag();
         let x = config.applied.contains(&tagname);
         println!(" -> [{x}] {name}", x=if x { '✓' } else { ' ' }, name=tagname);
     }
@@ -412,14 +444,17 @@ pub fn list(config: &Config) -> Result<()> {
 }
 
 
-fn valid_tag(tag: &str) -> bool {
-    TAG_RE.is_match(tag)
+fn invalid_tag(tag: &str) -> bool {
+    BAD_TAG_RE.is_match(tag)
 }
 
 
 /// Create a new migration with the given tag
+///
+/// Intended only for use with `FileMigration`s not managed directly in source
+/// with `Config::use_migrations`.
 pub fn new(config: &Config, tag: &str) -> Result<()> {
-    if valid_tag(tag) {
+    if invalid_tag(tag) {
         bail_fmt!(ErrorKind::Migration, "Invalid tag `{}`. Tags can contain [a-z0-9-]", tag);
     }
     let now = chrono::Utc::now();
@@ -495,6 +530,9 @@ fn select_from_matches<'a>(tag: &str, matches: &'a [FileMigration]) -> Result<&'
 
 
 /// Open a migration file containing `tag` in its name
+///
+/// Intended only for use with `FileMigration`s not managed directly in source
+/// with `Config::use_migrations`.
 pub fn edit(config: &Config, tag: &str, up_down: &Direction) -> Result<()> {
     let mig_dir = config.migration_dir()?;
 
@@ -512,7 +550,7 @@ pub fn edit(config: &Config, tag: &str, up_down: &Direction) -> Result<()> {
         1 => &matches[0],
         _ => {
             println!("* Multiple tags found!");
-            select_from_matches(tag, &matches)?
+            select_from_matches(tag, matches.as_slice())?
         }
     };
     let file = match *up_down {

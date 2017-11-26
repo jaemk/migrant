@@ -6,7 +6,7 @@ instead of being discovered from the file system.
 extern crate migrant_lib;
 
 use std::env;
-use migrant_lib::{Config, FileMigration};
+use migrant_lib::{Config, FileMigration, Migrator, Direction};
 
 
 fn run() -> Result<(), Box<std::error::Error>> {
@@ -17,20 +17,44 @@ fn run() -> Result<(), Box<std::error::Error>> {
                 .initialize()?;
             return Ok(())
         }
-        Some(p) => Config::load(&p)?
+        Some(p) => Config::load_file_only(&p)?
     };
 
     config.use_migrations(vec![
-        FileMigration::new("initial")
-            .up("migrations/20171124032056_initial/up.sql")?
-            .down("migrations/20171124032056_initial/down.sql")?
-            .wrap(),
-        FileMigration::new("second")
-            .up("migrations/20171124032102_second/up.sql")?
-            .down("migrations/20171124032102_second/down.sql")?
-            .wrap(),
-    ]);
+        FileMigration::with_tag("initial")?
+            .up("migrations/initial/up.sql")?
+            .down("migrations/initial/down.sql")?
+            .boxed(),
+        FileMigration::with_tag("second")?
+            .up("migrations/second/up.sql")?
+            .down("migrations/second/down.sql")?
+            .boxed(),
+    ])?;
+    let config = config.reload()?;
 
+    println!("Applying migrations...");
+    let res = Migrator::with_config(&config)
+        .all(true)
+        .apply();
+    match res {
+        Err(ref e) if e.is_migration_complete() => (),
+        res => res?,
+    }
+
+    let config = config.reload()?;
+    migrant_lib::list(&config)?;
+
+    println!("Unapplying migrations...");
+    let res = Migrator::with_config(&config)
+        .all(true)
+        .direction(Direction::Down)
+        .apply();
+    match res {
+        Err(ref e) if e.is_migration_complete() => (),
+        res => res?,
+    }
+
+    let config = config.reload()?;
     migrant_lib::list(&config)?;
     Ok(())
 }

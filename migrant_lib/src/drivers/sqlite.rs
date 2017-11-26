@@ -150,14 +150,15 @@ pub fn remove_migration_tag(db_path: &str, tag: &str) -> Result<()> {
 // Apply migration file to database
 // --
 #[cfg(not(feature="sqlite"))]
-pub fn run_migration(db_path: &Path, filename: &str) -> Result<()> {
-    let db_path = db_path.to_str().unwrap();
+pub fn run_migration(db_path: &Path, filename: &Path) -> Result<()> {
+    let db_path = db_path.to_str().ok_or_else(|| format_err!(ErrorKind::PathError, "Invalid db path: {:?}", db_path))?;
+    let filename = filename.to_str().ok_or_else(|| format_err!(ErrorKind::PathError, "Invalid file path: {:?}", filename))?;
     sqlite_cmd(db_path, &format!(".read {}", filename))?;
     Ok(())
 }
 
 #[cfg(feature="sqlite")]
-pub fn run_migration(db_path: &Path, filename: &str) -> Result<()> {
+pub fn run_migration(db_path: &Path, filename: &Path) -> Result<()> {
     let mut file = fs::File::open(filename)?;
     let mut buf = String::new();
     file.read_to_string(&mut buf)?;

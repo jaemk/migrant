@@ -1,5 +1,5 @@
 use std::fmt;
-use errors::*;
+use {DbKind, Config, Direction};
 
 
 pub trait MigratableClone {
@@ -15,9 +15,21 @@ impl<T> MigratableClone for T
 
 
 pub trait Migratable: MigratableClone {
-    fn apply_up(&self) -> Result<bool>;
-    fn apply_down(&self) -> Result<bool>;
-    fn tag(&self) -> Result<String>;
+    fn apply_up(&self, DbKind, &Config) -> Result<(), Box<::std::error::Error>> {
+        print_flush!("(empty)");
+        Ok(())
+    }
+
+    fn apply_down(&self, DbKind, &Config) -> Result<(), Box<::std::error::Error>> {
+        print_flush!("(empty)");
+        Ok(())
+    }
+
+    fn tag(&self) -> String;
+
+    fn description(&self, &Direction) -> String {
+        self.tag()
+    }
 }
 impl Clone for Box<Migratable> {
     fn clone(&self) -> Box<Migratable> {
@@ -27,8 +39,7 @@ impl Clone for Box<Migratable> {
 
 impl fmt::Debug for Box<Migratable> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let tag = self.tag().unwrap_or_else(|e| format!("<Invalid Tag: {}>", e));
-        write!(f, "Migration: {}", tag)
+        write!(f, "Migration: {}", self.tag())
     }
 }
 

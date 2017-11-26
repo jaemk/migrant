@@ -1,5 +1,6 @@
 /// Postgres database functions using shell commands and db drivers
 use std;
+use std::path::Path;
 use super::*;
 
 #[cfg(feature="postgresql")]
@@ -155,7 +156,8 @@ pub fn remove_migration_tag(conn_str: &str, tag: &str) -> Result<()> {
 // Apply migration to database
 // --
 #[cfg(not(feature="postgresql"))]
-pub fn run_migration(conn_str: &str, filename: &str) -> Result<()> {
+pub fn run_migration(conn_str: &str, filename: &Path) -> Result<()> {
+    let filename = filename.to_str().ok_or_else(|| format_err!(ErrorKind::PathError, "Invalid file path: {:?}", filename))?;
     let migrate = Command::new("psql")
             .arg(&conn_str)
             .arg("-f").arg(filename)
@@ -168,7 +170,7 @@ pub fn run_migration(conn_str: &str, filename: &str) -> Result<()> {
 }
 
 #[cfg(feature="postgresql")]
-pub fn run_migration(conn_str: &str, filename: &str) -> Result<()> {
+pub fn run_migration(conn_str: &str, filename: &Path) -> Result<()> {
     let mut file = std::fs::File::open(filename)?;
     let mut buf = String::new();
     file.read_to_string(&mut buf)?;

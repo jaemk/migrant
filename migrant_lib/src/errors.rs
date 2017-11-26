@@ -51,6 +51,10 @@ error_chain! {
             description("TagError")
             display("TagError: {}", s)
         }
+        InvalidDbKind(s: String) {
+            description("InvalidDbKind")
+            display("InvalidDbKind: {}", s)
+        }
     }
 }
 

@@ -1,9 +1,22 @@
 /*!
 Macros
 
-For working with
-    - `error_chain`
 */
+
+
+macro_rules! print_flush {
+    ($lit:expr) => {
+        print_flush!($lit,)
+    };
+    ($lit:expr, $($arg:expr),*) => {
+        {
+            use ::std::io::Write;
+            print!($lit, $($arg),*);
+            ::std::io::stdout().flush().expect("Failed Flushing stdout");
+        }
+    }
+}
+
 
 // -------------
 // error-chain

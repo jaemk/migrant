@@ -2,6 +2,7 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::env;
 use std::fs;
+use std::collections::HashSet;
 
 use toml;
 use url;
@@ -9,7 +10,7 @@ use chrono::{self, TimeZone};
 
 use drivers;
 use {
-    Migratable, encode, prompt, open_file_in_fg, write_to_path,
+    Migratable, encode, prompt, open_file_in_fg, write_to_path, invalid_tag,
     FULL_TAG_RE, DT_FORMAT, CONFIG_FILE,
     PG_CONFIG_TEMPLATE, SQLITE_CONFIG_TEMPLATE,
 };
@@ -161,14 +162,50 @@ pub struct Config {
     pub(crate) migrations: Option<Vec<Box<Migratable>>>,
 }
 impl Config {
-    pub fn use_migrations(&mut self, migrations: Vec<Box<Migratable>>) -> &mut Self {
+    pub fn use_migrations(&mut self, migrations: Vec<Box<Migratable>>) -> Result<&mut Self> {
+        let mut set = HashSet::new();
+        for mig in &migrations {
+            let tag = mig.tag();
+            if set.contains(&tag) {
+                bail_fmt!(ErrorKind::TagError, "Tags must be unique. Found duplicate: {}", tag)
+            }
+            set.insert(tag);
+        }
         self.migrations = Some(migrations);
-        self
+        Ok(self)
     }
 
-    /// Do a full reload of the configuration file
+    /// Migrations are explicitly defined
+    pub fn is_explicit(&self) -> bool {
+        self.migrations.is_some()
+    }
+
+    /// Check that migration tags conform to naming requirements.
+    /// If migrations are explicitly defined (with `use_migrations`), then
+    /// tags may only contain [a-z0-9-]. If migrations are managed by `migrant`,
+    /// not specified with `use_migrations` and instead created by `migrant_lib::new`,
+    /// then they must follow [0-9]{14}_[a-z0-9-] (<timestamp>_<name>).
+    fn check_saved_tag(&self, tag: &str) -> Result<()> {
+        if self.is_explicit() {
+            if invalid_tag(tag) {
+                bail_fmt!(ErrorKind::Migration, "Found a non-conforming tag in the database: `{}`. \
+                                                 Managed tags may contain [a-z0-9-]", tag)
+            }
+        } else if !FULL_TAG_RE.is_match(&tag) {
+            bail_fmt!(ErrorKind::Migration, "Found a non-conforming tag in the database: `{}`. \
+                                             Generated tags must follow [0-9]{{14}}_[a-z0-9-]", tag)
+        }
+        Ok(())
+    }
+
+    /// Do a full reload of the configuration file, keeping track of
+    /// manually specified `migrations`
     pub fn reload(&self) -> Result<Config> {
-        Self::load(&self.path)
+        let mut config = Config::load_file_only(&self.path)?;
+        config.migrations = self.migrations.clone();
+        let applied = config.load_applied()?;
+        config.applied = applied;
+        Ok(config)
     }
 
     /// Load config file from the given path without querying the database
@@ -205,20 +242,22 @@ impl Config {
             "postgres"  => drivers::pg::select_migrations(&self.connect_string()?)?,
             _ => unreachable!(),
         };
-        let mut stamped = vec![];
+        let mut tags = vec![];
         for tag in applied.into_iter() {
-            if !FULL_TAG_RE.is_match(&tag) {
-                bail_fmt!(ErrorKind::Migration, "Found a non-conforming tag in the database: `{}`", tag)
-            }
-            let stamp = chrono::Utc.datetime_from_str(
-                tag.split('_').next().unwrap(),
-                DT_FORMAT
-            ).unwrap();
-            stamped.push((stamp, tag));
+            self.check_saved_tag(&tag)?;
+            tags.push(tag);
         }
-        stamped.sort_by(|a, b| a.0.cmp(&b.0));
-        let applied = stamped.into_iter().map(|tup| tup.1).collect::<Vec<_>>();
-        Ok(applied)
+        let tags = if self.is_explicit() { tags } else {
+            let mut stamped = tags.into_iter().map(|tag| {
+                let stamp = tag.split('_').next()
+                    .ok_or_else(|| format_err!(ErrorKind::TagError, "Invalid tag format: {:?}", tag))?;
+                let stamp = chrono::Utc.datetime_from_str(stamp, DT_FORMAT)?;
+                Ok((stamp, tag.clone()))
+            }).collect::<Result<Vec<_>>>()?;
+            stamped.sort_by(|a, b| a.0.cmp(&b.0));
+            stamped.into_iter().map(|tup| tup.1).collect::<Vec<_>>()
+        };
+        Ok(tags)
     }
 
 
