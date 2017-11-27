@@ -34,14 +34,17 @@ use regex::Regex;
 mod errors;
 mod drivers;
 mod migratable;
+mod connection;
 mod config;
 mod migration;
+
+pub mod types;
 
 pub use errors::*;
 pub use migratable::Migratable;
 pub use config::{ConfigInitializer, Config};
-pub use migration::{FileMigration};
-
+pub use migration::{FileMigration, FnMigration};
+pub use connection::DbConn;
 
 
 static CONFIG_FILE: &'static str = ".migrant.toml";

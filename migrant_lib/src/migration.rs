@@ -3,7 +3,10 @@ use std::path::{Path, PathBuf};
 use chrono::{DateTime, Utc};
 
 use drivers;
-use {Migratable, Config, DbKind, invalid_tag, Direction, DT_FORMAT};
+use migratable::Migratable;
+use config::Config;
+use connection::DbConn;
+use {DbKind, invalid_tag, Direction, DT_FORMAT};
 use errors::*;
 
 
@@ -105,4 +108,72 @@ impl Migratable for FileMigration {
     }
 }
 
+
+#[derive(Clone, Debug)]
+pub struct FnMigration<T, U> {
+    pub tag: String,
+    pub up: Option<T>,
+    pub down: Option<U>,
+}
+
+impl<T, U> FnMigration<T, U>
+    where T: 'static + Clone + Fn(DbConn) -> std::result::Result<(), Box<std::error::Error>>,
+          U: 'static + Clone + Fn(DbConn) -> std::result::Result<(), Box<std::error::Error>>
+{
+    pub fn with_tag(tag: &str) -> Result<Self> {
+        if invalid_tag(tag) {
+            bail_fmt!(ErrorKind::Migration, "Invalid tag `{}`. Tags can contain [a-z0-9-]", tag);
+        }
+        Ok(Self {
+            tag: tag.to_owned(),
+            up: None,
+            down: None,
+        })
+    }
+
+    pub fn up(&mut self, f_up: T) -> &mut Self {
+        self.up = Some(f_up);
+        self
+    }
+
+    pub fn down(&mut self, f_down: U) -> &mut Self {
+        self.down = Some(f_down);
+        self
+    }
+
+    pub fn boxed(&self) -> Box<Migratable> {
+        Box::new(self.clone())
+    }
+}
+
+impl<T, U> Migratable for FnMigration<T, U>
+    where T: 'static + Clone + Fn(DbConn) -> std::result::Result<(), Box<std::error::Error>>,
+          U: 'static + Clone + Fn(DbConn) -> std::result::Result<(), Box<std::error::Error>>
+{
+    fn apply_up(&self, _: DbKind, config: &Config) -> std::result::Result<(), Box<::std::error::Error>> {
+        if let Some(ref up) = self.up {
+            up(DbConn::new(config))?;
+        } else {
+            print_flush!("(empty) ...");
+        }
+        Ok(())
+    }
+
+    fn apply_down(&self, _: DbKind, config: &Config) -> std::result::Result<(), Box<::std::error::Error>> {
+        if let Some(ref down) = self.down {
+            down(DbConn::new(config))?;
+        } else {
+            print_flush!("(empty) ...");
+        }
+        Ok(())
+    }
+
+    fn tag(&self) -> String {
+        self.tag.to_owned()
+    }
+
+    fn description(&self, _: &Direction) -> String {
+        self.tag()
+    }
+}
 
