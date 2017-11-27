@@ -1,6 +1,6 @@
 [root]
 name = "migrant_lib"
-version = "0.13.0"
+version = "0.13.1"
 dependencies = [
  "chrono 0.4.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "error-chain 0.11.0 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -492,11 +492,11 @@ dependencies = [
 
 [[package]]
 name = "migrant"
-version = "0.9.9"
+version = "0.9.10"
 dependencies = [
  "clap 2.27.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "error-chain 0.11.0 (registry+https://github.com/rust-lang/crates.io-index)",
- "migrant_lib 0.13.0",
+ "migrant_lib 0.13.1",
  "self_update 0.4.1 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
