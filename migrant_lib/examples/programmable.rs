@@ -13,8 +13,21 @@ use migrant_lib::{Config, FileMigration, FnMigration, Migrator, Direction};
 mod migrations {
     use super::*;
     pub struct Custom;
+    #[cfg(not(feature="sqlite"))]
     impl Custom {
-        /// Postgres
+        pub fn up(_: migrant_lib::DbConn) -> Result<(), Box<std::error::Error>> {
+            print!(" <Up!>");
+            Ok(())
+        }
+        pub fn down(_: migrant_lib::DbConn) -> Result<(), Box<std::error::Error>> {
+            print!(" <Down!>");
+            Ok(())
+        }
+    }
+
+    #[cfg(feature="sqlite")]
+    impl Custom {
+        // Postgres
         // pub fn up(conn: migrant_lib::DbConn) -> Result<(), Box<std::error::Error>> {
         //     let conn = conn.pg_connection()?;
         //     let rows = conn.query("select random() * 100 from generate_series(1,1)", &[])?;

@@ -210,7 +210,8 @@ impl Config {
 
     /// Load config file from the given path without querying the database
     /// to check for applied migrations
-    pub fn load_file_only(path: &Path) -> Result<Config> {
+    pub fn load_file_only<T: AsRef<Path>>(path: T) -> Result<Config> {
+        let path = path.as_ref();
         let mut file = fs::File::open(path)?;
         let mut content = String::new();
         file.read_to_string(&mut content)?;
@@ -224,7 +225,8 @@ impl Config {
     }
 
     /// Load config file from the given path and query the database to load up applied migrations
-    pub fn load(path: &Path) -> Result<Config> {
+    pub fn load<T: AsRef<Path>>(path: T) -> Result<Config> {
+        let path = path.as_ref();
         let mut config = Config::load_file_only(path)?;
         let applied = config.load_applied()?;
         config.applied = applied;
