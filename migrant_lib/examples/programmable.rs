@@ -62,18 +62,21 @@ mod migrations {
 fn run() -> Result<(), Box<std::error::Error>> {
     let dir = env::current_dir().unwrap();
     let mut config = match migrant_lib::search_for_config(&dir) {
-        // setup a migrant configuration if it doesn't exist
+        // Setup a migrant configuration if it doesn't exist
         None => {
             Config::init_in(&dir)
                 .initialize()?;
             return Ok(())
         }
 
-        // load config file, but don't ping the database for applied migrations
+        // Load config file, but don't ping the database for applied migrations.
+        // We need to define our migrations first so our `Config` knows
+        // that we're using explicitly defined migrations (with arbitrary tags)
+        // instead of auto-generated migrations (with a strict tag format).
         Some(p) => Config::load_file_only(&p)?
     };
 
-    // define migrations
+    // Define migrations
     config.use_migrations(vec![
         FileMigration::with_tag("initial")?
             .up("migrations/initial/up.sql")?
@@ -88,7 +91,7 @@ fn run() -> Result<(), Box<std::error::Error>> {
             .down(migrations::Custom::down)
             .boxed(),
     ])?;
-    // reload config, ping the database for applied migrations
+    // Reload config, ping the database for applied migrations
     let config = config.reload()?;
 
     println!("Applying migrations...");
