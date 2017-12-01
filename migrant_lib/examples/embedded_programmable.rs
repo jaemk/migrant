@@ -13,7 +13,7 @@ use migrant_lib::{Config, FileMigration, EmbeddedFileMigration, FnMigration, Mig
 mod migrations {
     use super::*;
     pub struct Custom;
-    #[cfg(not(any(feature="sqlite", feature="postgresql")))]
+    #[cfg(any( not(any(feature="sqlite", feature="postgresql")), all(feature="sqlite", feature="postgresql")))]
     impl Custom {
         pub fn up(_: migrant_lib::DbConn) -> Result<(), Box<std::error::Error>> {
             print!(" <[Up] Hint: Use a (only one) database specific feature!>");
@@ -25,7 +25,7 @@ mod migrations {
         }
     }
 
-    #[cfg(feature="sqlite")]
+    #[cfg(all(feature="sqlite", not(feature="postgresql")))]
     impl Custom {
         /// Sqlite
         pub fn up(conn: migrant_lib::DbConn) -> Result<(), Box<std::error::Error>> {
@@ -42,7 +42,7 @@ mod migrations {
         }
     }
 
-    #[cfg(feature="postgresql")]
+    #[cfg(all(feature="postgresql", not(feature="sqlite")))]
     impl Custom {
         /// Postgres
         pub fn up(conn: migrant_lib::DbConn) -> Result<(), Box<std::error::Error>> {
