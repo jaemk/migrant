@@ -1,3 +1,4 @@
+use std;
 use std::fs;
 use std::path::Path;
 use super::*;
@@ -34,6 +35,7 @@ fn sqlite_cmd(db_path: &str, cmd: &str) -> Result<String> {
     let out = Command::new("sqlite3")
                     .arg(&db_path)
                     .arg("-csv")
+                    .arg("-bail")
                     .arg(cmd)
                     .output()
                     .chain_err(|| format_err!(ErrorKind::ShellCommand,
@@ -167,6 +169,23 @@ pub fn run_migration(db_path: &Path, filename: &Path) -> Result<()> {
     let conn = Connection::open(db_path)
         .map_err(|e| format_err!(ErrorKind::Migration, "{}", e))?;
     conn.execute_batch(&buf)
+        .map_err(|e| format_err!(ErrorKind::Migration, "{}", e))?;
+    Ok(())
+}
+
+
+#[cfg(not(feature="sqlite"))]
+pub fn run_migration_str(_db_path: &Path, _stmt: &str) -> Result<connection::markers::SqliteFeatureRequired> {
+    panic!("\n** Migrant ERROR: `sqlite` feature required **");
+}
+
+#[cfg(feature="sqlite")]
+pub fn run_migration_str(db_path: &Path, stmt: &str) -> Result<()> {
+    if stmt.is_empty() { return Ok(()); }
+
+    let conn = Connection::open(db_path)
+        .map_err(|e| format_err!(ErrorKind::Migration, "{}", e))?;
+    conn.execute_batch(stmt)
         .map_err(|e| format_err!(ErrorKind::Migration, "{}", e))?;
     Ok(())
 }

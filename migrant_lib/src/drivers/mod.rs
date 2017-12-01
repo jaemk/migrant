@@ -1,4 +1,5 @@
 use super::errors::*;
+use super::connection;
 
 mod sql {
     pub static CREATE_TABLE: &'static str = "create table __migrant_migrations(tag text unique);";

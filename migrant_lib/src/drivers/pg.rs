@@ -163,7 +163,9 @@ pub fn run_migration(conn_str: &str, filename: &Path) -> Result<()> {
             .arg(&conn_str)
             .arg("-v").arg("ON_ERROR_STOP=1")
             .arg("-f").arg(filename)
-            .output()?;
+            .output()
+            .chain_err(|| format_err!(ErrorKind::ShellCommand,
+                                      "Error running command `psql`. Is it available on your PATH?"))?;
     if !migrate.status.success() {
         let stderr = std::str::from_utf8(&migrate.stderr)?;
         bail_fmt!(ErrorKind::Migration, "Error executing statement, stderr: `{}`", stderr);
@@ -180,6 +182,21 @@ pub fn run_migration(conn_str: &str, filename: &Path) -> Result<()> {
     let conn = Connection::connect(conn_str, TlsMode::None)
         .map_err(|e| format_err!(ErrorKind::Migration, "{}", e))?;
     conn.batch_execute(&buf)
+        .map_err(|e| format_err!(ErrorKind::Migration, "{}", e))?;
+    Ok(())
+}
+
+
+#[cfg(not(feature="postgresql"))]
+pub fn run_migration_str(_conn_str: &str, _stmt: &str) -> Result<connection::markers::PostgresqlFeatureRequired> {
+    panic!("\n** Migrant ERROR: `postgresql` feature required **");
+}
+
+#[cfg(feature="postgresql")]
+pub fn run_migration_str(conn_str: &str, stmt: &str) -> Result<()> {
+    let conn = Connection::connect(conn_str, TlsMode::None)
+        .map_err(|e| format_err!(ErrorKind::Migration, "{}", e))?;
+    conn.batch_execute(stmt)
         .map_err(|e| format_err!(ErrorKind::Migration, "{}", e))?;
     Ok(())
 }

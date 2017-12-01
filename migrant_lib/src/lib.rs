@@ -103,7 +103,7 @@ pub mod types;
 pub use errors::*;
 pub use migratable::Migratable;
 pub use config::{ConfigInitializer, Config};
-pub use migration::{FileMigration, FnMigration};
+pub use migration::{FileMigration, EmbeddedFileMigration, FnMigration};
 pub use connection::DbConn;
 
 

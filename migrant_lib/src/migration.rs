@@ -110,6 +110,86 @@ impl Migratable for FileMigration {
 
 
 #[derive(Clone, Debug)]
+pub struct EmbeddedFileMigration {
+    pub tag: String,
+    pub up: Option<&'static str>,
+    pub down: Option<&'static str>,
+}
+impl EmbeddedFileMigration {
+    pub fn with_tag(tag: &str) -> Result<Self> {
+        if invalid_tag(tag) {
+            bail_fmt!(ErrorKind::Migration, "Invalid tag `{}`. Tags can contain [a-z0-9-]", tag);
+        }
+        Ok(Self {
+            tag: tag.to_owned(),
+            up: None,
+            down: None,
+        })
+    }
+
+    pub fn up(&mut self, stmt: &'static str) -> &mut Self {
+        self.up = Some(stmt);
+        self
+    }
+
+    pub fn down(&mut self, stmt: &'static str) -> &mut Self {
+        self.down = Some(stmt);
+        self
+    }
+
+    pub fn boxed(&self) -> Box<Migratable> {
+        Box::new(self.clone())
+    }
+}
+
+impl Migratable for EmbeddedFileMigration {
+    fn apply_up(&self, db_kind: DbKind, config: &Config) -> std::result::Result<(), Box<std::error::Error>> {
+        if let Some(ref up) = self.up {
+            #[cfg(any(feature="postgresql", feature="sqlite"))]
+            match db_kind {
+                DbKind::Sqlite => {
+                    let db_path = config.database_path()?;
+                    drivers::sqlite::run_migration_str(&db_path, up)?;
+                }
+                DbKind::Postgres => {
+                    let conn_str = config.connect_string()?;
+                    drivers::pg::run_migration_str(&conn_str, up)?;
+                }
+            }
+            #[cfg(not(any(feature="postgresql", feature="sqlite")))]
+            panic!("** Migrant ERROR: Database specific feature required to run embedded-file migration **");
+        } else {
+            print_flush!("(empty) ...");
+        }
+        Ok(())
+    }
+    fn apply_down(&self, db_kind: DbKind, config: &Config) -> std::result::Result<(), Box<std::error::Error>> {
+        if let Some(ref down) = self.down {
+            match db_kind {
+                DbKind::Sqlite => {
+                    let db_path = config.database_path()?;
+                    drivers::sqlite::run_migration_str(&db_path, down)?;
+                }
+                DbKind::Postgres => {
+                    let conn_str = config.connect_string()?;
+                    drivers::pg::run_migration_str(&conn_str, down)?;
+                }
+            }
+        } else {
+            print_flush!("(empty) ...");
+        }
+        Ok(())
+    }
+    fn tag(&self) -> String {
+        self.tag.to_owned()
+    }
+    fn description(&self, _: &Direction) -> String {
+        self.tag()
+    }
+}
+
+
+#[derive(Clone, Debug)]
 pub struct FnMigration<T, U> {
     pub tag: String,
     pub up: Option<T>,
