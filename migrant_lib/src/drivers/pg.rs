@@ -16,6 +16,7 @@ use std::process::Command;
 fn psql_cmd(conn_str: &str, cmd: &str) -> Result<String> {
     let out = Command::new("psql")
                     .arg(conn_str)
+                    .arg("-v").arg("ON_ERROR_STOP=1")
                     .arg("-t")      // no headers or footer
                     .arg("-A")      // un-aligned output
                     .arg("-F,")     // comma separator
@@ -160,6 +161,7 @@ pub fn run_migration(conn_str: &str, filename: &Path) -> Result<()> {
     let filename = filename.to_str().ok_or_else(|| format_err!(ErrorKind::PathError, "Invalid file path: {:?}", filename))?;
     let migrate = Command::new("psql")
             .arg(&conn_str)
+            .arg("-v").arg("ON_ERROR_STOP=1")
             .arg("-f").arg(filename)
             .output()?;
     if !migrate.status.success() {
