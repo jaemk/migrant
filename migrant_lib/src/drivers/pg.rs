@@ -220,21 +220,22 @@ mod test {
 
     #[test]
     fn postgres() {
-        let conn_str = std::env::var("POSTGRES_TEST_CONN_STR").unwrap();
+        let conn_str = std::env::var("POSTGRES_TEST_CONN_STR")
+            .expect("POSTGRES_TEST_CONN_STR env variable required");
 
         // no table before setup
         let is_setup = _try!(migration_table_exists(&conn_str));
-        assert_eq!(false, is_setup);
+        assert_eq!(false, is_setup, "Assert migration table does not exist");
 
         // setup migration table
         let was_setup = _try!(migration_setup(&conn_str));
-        assert_eq!(true, was_setup);
+        assert_eq!(true, was_setup, "Assert `migration_setup` initializes migration table");
         let was_setup = _try!(migration_setup(&conn_str));
-        assert_eq!(false, was_setup);
+        assert_eq!(false, was_setup, "Assert `migration_setup` is idempotent");
 
         // table exists after setup
         let is_setup = _try!(migration_table_exists(&conn_str));
-        assert!(is_setup);
+        assert!(is_setup, "Assert migration table exists");
 
         // insert some tags
         _try!(insert_migration_tag(&conn_str, "initial"));
@@ -243,11 +244,15 @@ mod test {
 
         // get applied
         let migs = _try!(select_migrations(&conn_str));
-        assert_eq!(3, migs.len());
+        assert_eq!(3, migs.len(), "Assert 3 migrations applied");
 
         // remove some tags
         _try!(remove_migration_tag(&conn_str, "alter2"));
         let migs = _try!(select_migrations(&conn_str));
-        assert_eq!(2, migs.len());
+        assert_eq!(2, migs.len(), "Assert 2 migrations applied");
+
+        _try!(remove_migration_tag(&conn_str, "alter1"));
+        _try!(remove_migration_tag(&conn_str, "initial"));
+        assert_eq!(0, migs.len(), "Assert all migrations removed");
     }
 }
