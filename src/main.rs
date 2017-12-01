@@ -101,19 +101,25 @@ fn run(dir: &PathBuf, matches: &clap::ArgMatches) -> Result<()> {
         return Ok(())
     }
 
-    // load applied migrations from the database
-    let config = config.reload()?;
-
     match matches.subcommand() {
         ("list", _) => {
+            // load applied migrations from the database
+            let config = config.reload()?;
+
             migrant_lib::list(&config)?;
         }
         ("new", Some(matches)) => {
+            // load applied migrations from the database
+            let config = config.reload()?;
+
             let tag = matches.value_of("tag").unwrap();
             migrant_lib::new(&config, tag)?;
             migrant_lib::list(&config)?;
         }
         ("apply", Some(matches)) => {
+            // load applied migrations from the database
+            let config = config.reload()?;
+
             let force = matches.is_present("force");
             let fake = matches.is_present("fake");
             let all = matches.is_present("all");
@@ -130,6 +136,9 @@ fn run(dir: &PathBuf, matches: &clap::ArgMatches) -> Result<()> {
             migrant_lib::list(&config)?;
         }
         ("redo", Some(matches)) => {
+            // load applied migrations from the database
+            let config = config.reload()?;
+
             let force = matches.is_present("force");
             let fake = matches.is_present("fake");
             let all = matches.is_present("all");
