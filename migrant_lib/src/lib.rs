@@ -546,13 +546,19 @@ pub fn shell(config: &Config) -> Result<()> {
             let db_path = config.database_path()?;
             let _ = Command::new("sqlite3")
                     .arg(db_path.to_str().unwrap())
-                    .spawn().expect("Failing running sqlite3").wait()?;
+                    .spawn()
+                    .chain_err(|| format_err!(ErrorKind::ShellCommand,
+                                              "Error running command `sqlite3`. Is it available on your PATH?"))?
+                    .wait()?;
         }
         "postgres" => {
             let conn_str = config.connect_string()?;
             Command::new("psql")
                     .arg(&conn_str)
-                    .spawn().unwrap().wait()?;
+                    .spawn()
+                    .chain_err(|| format_err!(ErrorKind::ShellCommand,
+                                              "Error running command `psql`. Is it available on your PATH?"))?
+                    .wait()?;
         }
         _ => unreachable!(),
     })
