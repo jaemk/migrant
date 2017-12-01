@@ -7,52 +7,55 @@ option of creating programmable migrations in rust!
 extern crate migrant_lib;
 
 use std::env;
-use migrant_lib::{Config, FileMigration, FnMigration, Migrator, Direction};
+use migrant_lib::{Config, FileMigration, EmbeddedFileMigration, FnMigration, Migrator, Direction};
 
 
 mod migrations {
     use super::*;
     pub struct Custom;
-    #[cfg(not(feature="sqlite"))]
+    #[cfg(not(any(feature="sqlite", feature="postgresql")))]
     impl Custom {
         pub fn up(_: migrant_lib::DbConn) -> Result<(), Box<std::error::Error>> {
-            print!(" <Up!>");
+            print!(" <[Up] Hint: Use a (only one) database specific feature!>");
             Ok(())
         }
         pub fn down(_: migrant_lib::DbConn) -> Result<(), Box<std::error::Error>> {
-            print!(" <Down!>");
+            print!(" <[Down] Hint: Use a (only one) database specific feature!>");
             Ok(())
         }
     }
 
     #[cfg(feature="sqlite")]
     impl Custom {
-        // Postgres
-        // pub fn up(conn: migrant_lib::DbConn) -> Result<(), Box<std::error::Error>> {
-        //     let conn = conn.pg_connection()?;
-        //     let rows = conn.query("select random() * 100 from generate_series(1,1)", &[])?;
-        //     for row in &rows {
-        //         let n: f32 = row.get(0);
-        //         print!(" <{:?}>", n);
-        //     }
-        //     Ok(())
-        // }
-        // pub fn down(conn: migrant_lib::DbConn) -> Result<(), Box<std::error::Error>> {
-        //     let _conn = conn.pg_connection()?;
-        //     Ok(())
-        // }
-
         /// Sqlite
         pub fn up(conn: migrant_lib::DbConn) -> Result<(), Box<std::error::Error>> {
             let conn = conn.sqlite_connection()?;
             conn.query_row("select abs(random() % 100)", &[], |row| {
                 let n: u32 = row.get(0);
-                print!(" <{:?}>", n);
+                print!(" <random number: {:?}>", n);
             })?;
             Ok(())
         }
         pub fn down(conn: migrant_lib::DbConn) -> Result<(), Box<std::error::Error>> {
             let _conn = conn.sqlite_connection()?;
+            Ok(())
+        }
+    }
+
+    #[cfg(feature="postgresql")]
+    impl Custom {
+        /// Postgres
+        pub fn up(conn: migrant_lib::DbConn) -> Result<(), Box<std::error::Error>> {
+            let conn = conn.pg_connection()?;
+            let rows = conn.query("select (select random() * 100 from generate_series(1,1))::int", &[])?;
+            for row in &rows {
+                let n: i32 = row.get(0);
+                print!(" <random number: {:?}>", n);
+            }
+            Ok(())
+        }
+        pub fn down(conn: migrant_lib::DbConn) -> Result<(), Box<std::error::Error>> {
+            let _conn = conn.pg_connection()?;
             Ok(())
         }
     }
@@ -78,9 +81,9 @@ fn run() -> Result<(), Box<std::error::Error>> {
 
     // Define migrations
     config.use_migrations(vec![
-        FileMigration::with_tag("initial")?
-            .up("migrations/initial/up.sql")?
-            .down("migrations/initial/down.sql")?
+        EmbeddedFileMigration::with_tag("initial")?
+            .up(include_str!("../migrations/initial/up.sql"))
+            .down(include_str!("../migrations/initial/down.sql"))
             .boxed(),
         FileMigration::with_tag("second")?
             .up("migrations/second/up.sql")?
