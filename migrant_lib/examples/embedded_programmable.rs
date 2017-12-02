@@ -7,7 +7,7 @@ option of creating programmable migrations in rust!
 extern crate migrant_lib;
 
 use std::env;
-use migrant_lib::{Config, FileMigration, EmbeddedFileMigration, FnMigration, Migrator, Direction};
+use migrant_lib::{Config, FileMigration, EmbeddedMigration, FnMigration, Migrator, Direction};
 
 
 mod migrations {
@@ -81,7 +81,7 @@ fn run() -> Result<(), Box<std::error::Error>> {
 
     // Define migrations
     config.use_migrations(vec![
-        EmbeddedFileMigration::with_tag("initial")?
+        EmbeddedMigration::with_tag("initial")?
             .up(include_str!("../migrations/initial/up.sql"))
             .down(include_str!("../migrations/initial/down.sql"))
             .boxed(),

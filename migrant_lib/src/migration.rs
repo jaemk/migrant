@@ -110,12 +110,12 @@ impl Migratable for FileMigration {
 
 
 #[derive(Clone, Debug)]
-pub struct EmbeddedFileMigration {
+pub struct EmbeddedMigration {
     pub tag: String,
     pub up: Option<&'static str>,
     pub down: Option<&'static str>,
 }
-impl EmbeddedFileMigration {
+impl EmbeddedMigration {
     pub fn with_tag(tag: &str) -> Result<Self> {
         if invalid_tag(tag) {
             bail_fmt!(ErrorKind::Migration, "Invalid tag `{}`. Tags can contain [a-z0-9-]", tag);
@@ -127,22 +127,25 @@ impl EmbeddedFileMigration {
         })
     }
 
+    /// Statement to use for `up` migrations
     pub fn up(&mut self, stmt: &'static str) -> &mut Self {
         self.up = Some(stmt);
         self
     }
 
+    /// Statement to use for `down` migrations
     pub fn down(&mut self, stmt: &'static str) -> &mut Self {
         self.down = Some(stmt);
         self
     }
 
+    /// Box this migration up so it can be stored with other migrations
     pub fn boxed(&self) -> Box<Migratable> {
         Box::new(self.clone())
     }
 }
 
-impl Migratable for EmbeddedFileMigration {
+impl Migratable for EmbeddedMigration {
     fn apply_up(&self, db_kind: DbKind, config: &Config) -> std::result::Result<(), Box<std::error::Error>> {
         if let Some(ref up) = self.up {
             #[cfg(any(feature="postgresql", feature="sqlite"))]

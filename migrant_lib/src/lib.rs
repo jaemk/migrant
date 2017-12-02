@@ -10,7 +10,7 @@
 
 ```rust,no_run
 # extern crate migrant_lib;
-# use migrant_lib::{Config, FileMigration, FnMigration, DbConn};
+# use migrant_lib::{Config, FileMigration, EmbeddedMigration, FnMigration, DbConn};
 # fn run() -> Result<(), Box<std::error::Error>> {
 # let mut config = Config::load_file_only("path")?;
 fn up(_: DbConn) -> Result<(), Box<std::error::Error>> {
@@ -28,9 +28,9 @@ config.use_migrations(vec![
         .up("migrations/initial/up.sql")?
         .down("migrations/initial/down.sql")?
         .boxed(),
-    FileMigration::with_tag("second")?
-        .up("migrations/second/up.sql")?
-        .down("migrations/second/down.sql")?
+    EmbeddedMigration::with_tag("second")?
+        .up(include_str!("../migrations/second/up.sql"))
+        .down(include_str!("../migrations/second/down.sql"))
         .boxed(),
     FnMigration::with_tag("custom")?
         .up(up)
@@ -103,7 +103,7 @@ pub mod types;
 pub use errors::*;
 pub use migratable::Migratable;
 pub use config::{ConfigInitializer, Config};
-pub use migration::{FileMigration, EmbeddedFileMigration, FnMigration};
+pub use migration::{FileMigration, EmbeddedMigration, FnMigration};
 pub use connection::DbConn;
 
 
