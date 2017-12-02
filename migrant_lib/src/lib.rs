@@ -118,7 +118,7 @@ database_type = "sqlite"
 
 # required: relative path to your database file from this config file dir: `__CONFIG_DIR__/`
 # ex.) database_name = "db/db.db"
-database_name = ""
+database_name = "__DB_NAME__"
 
 migration_location = "migrations"  # default "migrations"
 "#;
@@ -128,7 +128,7 @@ static PG_CONFIG_TEMPLATE: &'static str = r#"
 # required, do not edit
 database_type = "postgres"
 
-database_name = ""      # required
+database_name = "__DB_NAME__"      # required
 database_user = ""      # required
 database_password = ""
 

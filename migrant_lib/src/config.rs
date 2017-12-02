@@ -23,6 +23,7 @@ pub struct ConfigInitializer {
     dir: PathBuf,
     database_type: Option<String>,
     interactive: bool,
+    database_name: Option<String>,
 
 }
 impl ConfigInitializer {
@@ -32,6 +33,7 @@ impl ConfigInitializer {
             dir: dir.to_owned(),
             database_type: None,
             interactive: true,
+            database_name: None,
         }
     }
 
@@ -79,6 +81,12 @@ impl ConfigInitializer {
         Ok(path)
     }
 
+    /// Specify database name to pre-populate config file with
+    pub fn database_name(mut self, name: &str) -> Self {
+        self.database_name = Some(name.to_string());
+        self
+    }
+
     /// Generate a template config file using provided parameters or prompting the user.
     /// If running interactively, the file will be opened for editing and `Config::setup`
     /// will be run automatically.
@@ -109,10 +117,14 @@ impl ConfigInitializer {
         println!("\n ** Writing {} config template to {:?}", db_type, config_path);
         match db_type.as_ref() {
             "postgres" => {
-                write_to_path(&config_path, PG_CONFIG_TEMPLATE.as_bytes())?;
+                let content = PG_CONFIG_TEMPLATE
+                    .replace("__DB_NAME__", &self.database_name.unwrap_or_else(|| String::new()));
+                write_to_path(&config_path, content.as_bytes())?;
             }
             "sqlite" => {
-                let content = SQLITE_CONFIG_TEMPLATE.replace("__CONFIG_DIR__", config_path.parent().unwrap().to_str().unwrap());
+                let content = SQLITE_CONFIG_TEMPLATE
+                    .replace("__CONFIG_DIR__", config_path.parent().unwrap().to_str().unwrap())
+                    .replace("__DB_NAME__", &self.database_name.unwrap_or_else(|| String::new()));
                 write_to_path(&config_path, content.as_bytes())?;
             }
             _ => unreachable!(),
