@@ -25,9 +25,9 @@ config.use_migrations(vec![
         .up("migrations/initial/up.sql")?
         .down("migrations/initial/down.sql")?
         .boxed(),
-    EmbeddedFileMigration::with_tag("second")?
-        .up(include_str!("../migrations/second/up.sql"))?
-        .down(include_str!("../migrations/second/down.sql"))?
+    EmbeddedMigration::with_tag("second")?
+        .up(include_str!("../migrations/second/up.sql"))
+        .down(include_str!("../migrations/second/down.sql"))
         .boxed(),
     FnMigration::with_tag("custom")?
         .up(up)
