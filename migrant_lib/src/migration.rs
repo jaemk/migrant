@@ -1,3 +1,7 @@
+/*!
+Embedded / programmable migrations
+
+*/
 use std;
 use std::path::{Path, PathBuf};
 use chrono::{DateTime, Utc};
@@ -10,6 +14,9 @@ use {DbKind, invalid_tag, Direction, DT_FORMAT};
 use errors::*;
 
 
+/// Define a migration that uses files
+///
+/// Files defined in this migration must be present at run-time
 #[derive(Clone, Debug)]
 pub struct FileMigration {
     pub tag: String,
@@ -18,6 +25,9 @@ pub struct FileMigration {
     pub stamp: Option<DateTime<Utc>>,
 }
 impl FileMigration {
+    /// Create a new `FileMigration` with a given tag
+    ///
+    /// Tags may contain [a-z0-9-]
     pub fn with_tag(tag: &str) -> Result<Self> {
         if invalid_tag(tag) {
             bail_fmt!(ErrorKind::Migration, "Invalid tag `{}`. Tags can contain [a-z0-9-]", tag);
@@ -37,6 +47,7 @@ impl FileMigration {
         Ok(())
     }
 
+    /// Define the file to use for running `up` migrations
     pub fn up<T: AsRef<Path>>(&mut self, up_file: T) -> Result<&mut Self> {
         let path = up_file.as_ref();
         Self::check_path(path)?;
@@ -44,6 +55,7 @@ impl FileMigration {
         Ok(self)
     }
 
+    /// Define the file to use for running `down` migrations
     pub fn down<T: AsRef<Path>>(&mut self, down_file: T) -> Result<&mut Self> {
         let path = down_file.as_ref();
         Self::check_path(path)?;
@@ -51,6 +63,7 @@ impl FileMigration {
         Ok(self)
     }
 
+    /// Box this migration up so it can be stored with other migrations
     pub fn boxed(&self) -> Box<Migratable> {
         Box::new(self.clone())
     }
@@ -109,6 +122,21 @@ impl Migratable for FileMigration {
 }
 
 
+/// Define an embedded migration
+///
+/// Statements provided to `EmbeddedMigration` will be embedded in
+/// the executable so no files are required at run-time. The
+/// standard `include_str!` macro can be used to embed contents of files
+/// Database specific features (`postgresql`/`sqlite`) are required to use
+/// this functionality.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// EmbeddedMigration::with_tag("initial")?
+///     .up(include_str!("../migrations/initial/up.sql"))
+///     .down(include_str!("../migrations/initial/down.sql"))
+/// ```
 #[derive(Clone, Debug)]
 pub struct EmbeddedMigration {
     pub tag: String,
@@ -116,6 +144,9 @@ pub struct EmbeddedMigration {
     pub down: Option<&'static str>,
 }
 impl EmbeddedMigration {
+    /// Create a new `EmbeddedMigration` with the given tag
+    ///
+    /// Tags may contain [a-z0-9-]
     pub fn with_tag(tag: &str) -> Result<Self> {
         if invalid_tag(tag) {
             bail_fmt!(ErrorKind::Migration, "Invalid tag `{}`. Tags can contain [a-z0-9-]", tag);
@@ -192,6 +223,11 @@ impl Migratable for EmbeddedMigration {
 }
 
 
+/// Define a programmable migration
+///
+/// `FnMigration`s have full database access. Database specific
+/// features (`postgresql`/`sqlite`) are required to use this functionality.
+/// A full re-export of database specific crates are available in `migrant_lib::types`
 #[derive(Clone, Debug)]
 pub struct FnMigration<T, U> {
     pub tag: String,
@@ -203,6 +239,9 @@ impl<T, U> FnMigration<T, U>
     where T: 'static + Clone + Fn(DbConn) -> std::result::Result<(), Box<std::error::Error>>,
           U: 'static + Clone + Fn(DbConn) -> std::result::Result<(), Box<std::error::Error>>
 {
+    /// Create a new `FnMigration` with the given tag
+    ///
+    /// Tags may contain [a-z0-9-]
     pub fn with_tag(tag: &str) -> Result<Self> {
         if invalid_tag(tag) {
             bail_fmt!(ErrorKind::Migration, "Invalid tag `{}`. Tags can contain [a-z0-9-]", tag);
@@ -214,16 +253,19 @@ impl<T, U> FnMigration<T, U>
         })
     }
 
+    /// Function to use for `up` migrations
     pub fn up(&mut self, f_up: T) -> &mut Self {
         self.up = Some(f_up);
         self
     }
 
+    /// Function to use for `down` migrations
     pub fn down(&mut self, f_down: U) -> &mut Self {
         self.down = Some(f_down);
         self
     }
 
+    /// Box this migration up so it can be stored with other migrations
     pub fn boxed(&self) -> Box<Migratable> {
         Box::new(self.clone())
     }

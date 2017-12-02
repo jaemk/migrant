@@ -14,19 +14,24 @@ impl<T> MigratableClone for T
 }
 
 
+/// A type that can be used to define database migrations
 pub trait Migratable: MigratableClone {
+    /// Define functionality that runs for `up` migrations
     fn apply_up(&self, DbKind, &Config) -> Result<(), Box<::std::error::Error>> {
         print_flush!("(empty)");
         Ok(())
     }
 
+    /// Define functionality that runs for `down` migrations
     fn apply_down(&self, DbKind, &Config) -> Result<(), Box<::std::error::Error>> {
         print_flush!("(empty)");
         Ok(())
     }
 
+    /// A unique identifying tag
     fn tag(&self) -> String;
 
+    /// Option migration description. Defaults to `Migratable::tag`
     fn description(&self, &Direction) -> String {
         self.tag()
     }

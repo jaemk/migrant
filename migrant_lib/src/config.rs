@@ -162,6 +162,34 @@ pub struct Config {
     pub(crate) migrations: Option<Vec<Box<Migratable>>>,
 }
 impl Config {
+    /// Define an explicit set of `Migratable` migrations to use.
+    ///
+    /// When using explicit migrations, make sure they are defined on the `Config`
+    /// instance before applied migrations are loaded from the database. This is
+    /// required because tag format requirements are stricter for implicit
+    /// (file-system based) migrations are stricter, requiring a timestamp to
+    /// maintain a deterministic order.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let mut config = Config::load_file_only(&p)?;
+    /// config.use_migrations(vec![
+    ///     EmbeddedMigration::with_tag("initial")?
+    ///         .up(include_str!("../migrations/initial/up.sql"))
+    ///         .down(include_str!("../migrations/initial/down.sql"))
+    ///         .boxed(),
+    ///     FileMigration::with_tag("second")?
+    ///         .up("migrations/second/up.sql")?
+    ///         .down("migrations/second/down.sql")?
+    ///         .boxed(),
+    ///     FnMigration::with_tag("custom")?
+    ///         .up(migrations::Custom::up)
+    ///         .down(migrations::Custom::down)
+    ///         .boxed(),
+    /// ])?;
+    /// let config = config.reload()?;
+    /// ```
     pub fn use_migrations(&mut self, migrations: Vec<Box<Migratable>>) -> Result<&mut Self> {
         let mut set = HashSet::new();
         for mig in &migrations {
