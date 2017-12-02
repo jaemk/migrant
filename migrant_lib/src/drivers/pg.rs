@@ -253,6 +253,7 @@ mod test {
 
         _try!(remove_migration_tag(&conn_str, "alter1"));
         _try!(remove_migration_tag(&conn_str, "initial"));
+        let migs = _try!(select_migrations(&conn_str));
         assert_eq!(0, migs.len(), "Assert all migrations removed");
     }
 }
