@@ -177,17 +177,17 @@ impl EmbeddedMigration {
 }
 
 impl Migratable for EmbeddedMigration {
-    fn apply_up(&self, db_kind: DbKind, config: &Config) -> std::result::Result<(), Box<std::error::Error>> {
-        if let Some(ref up) = self.up {
+    fn apply_up(&self, _db_kind: DbKind, _config: &Config) -> std::result::Result<(), Box<std::error::Error>> {
+        if let Some(ref _up) = self.up {
             #[cfg(any(feature="postgresql", feature="sqlite"))]
-            match db_kind {
+            match _db_kind {
                 DbKind::Sqlite => {
-                    let db_path = config.database_path()?;
-                    drivers::sqlite::run_migration_str(&db_path, up)?;
+                    let db_path = _config.database_path()?;
+                    drivers::sqlite::run_migration_str(&db_path, _up)?;
                 }
                 DbKind::Postgres => {
-                    let conn_str = config.connect_string()?;
-                    drivers::pg::run_migration_str(&conn_str, up)?;
+                    let conn_str = _config.connect_string()?;
+                    drivers::pg::run_migration_str(&conn_str, _up)?;
                 }
             }
             #[cfg(not(any(feature="postgresql", feature="sqlite")))]
