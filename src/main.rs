@@ -68,7 +68,7 @@ fn run(dir: &PathBuf, matches: &clap::ArgMatches) -> Result<()> {
         return Ok(())
     }
 
-    let config_path = migrant_lib::search_for_config(dir);
+    let config_path = migrant_lib::search_for_settings_file(dir);
 
     if matches.is_present("init") || config_path.is_none() {
         let config = if let Some(init_matches) = matches.subcommand_matches("init") {
@@ -85,7 +85,7 @@ fn run(dir: &PathBuf, matches: &clap::ArgMatches) -> Result<()> {
     }
 
     let config_path = config_path.unwrap();    // absolute path of `.migrant` file
-    let config = Config::load_file_only(&config_path)?;
+    let config = Config::from_settings_file(&config_path)?;
 
     if matches.is_present("setup") {
         config.setup()?;
