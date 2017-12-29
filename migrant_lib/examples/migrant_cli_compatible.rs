@@ -12,14 +12,15 @@ use migrant_lib::Config;
 
 fn run() -> Result<(), migrant_lib::Error> {
     let dir = env::current_dir().unwrap();
-    let config = match migrant_lib::search_for_config(&dir) {
+    let config = match migrant_lib::search_for_settings_file(&dir) {
         None => {
             Config::init_in(&dir)
                 .initialize()?;
             return Ok(())
         }
-        Some(p) => Config::load(&p)?
+        Some(p) => Config::from_settings_file(&p)?
     };
+    config.reload()?;
 
     // This will fail if no migration files are present!
     // Run all available `up` migrations

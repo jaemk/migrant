@@ -3,11 +3,14 @@ When using migrant as a library, migrations can be defined in the source code
 instead of being discovered from the file system. This also provides the
 option of creating programmable migrations in rust!
 
+This example shows functionality for both sqlite and postgres databases, but
+has a `Settings` object configured to run only for sqlite.
+This should be run with `cargo run --example embedded_programmable`
+
 */
 extern crate migrant_lib;
 
-use std::env;
-use migrant_lib::{Config, FileMigration, EmbeddedMigration, FnMigration, Migrator, Direction};
+use migrant_lib::{Config, Settings, DbType, FileMigration, EmbeddedMigration, FnMigration, Migrator, Direction};
 
 
 mod migrations {
@@ -62,22 +65,31 @@ mod migrations {
 }
 
 
-fn run() -> Result<(), Box<std::error::Error>> {
-    let dir = env::current_dir().unwrap();
-    let mut config = match migrant_lib::search_for_config(&dir) {
-        // Setup a migrant configuration if it doesn't exist
-        None => {
-            Config::init_in(&dir)
-                .initialize()?;
-            return Ok(())
-        }
+/// Migrant will normally handle creating a database file if it's missing.
+/// This is just so we can use `Path::canonicalize` to get the absolute
+/// path since it can't be hardcoded for this example.
+pub fn create_file_if_missing(path: &std::path::Path) -> Result<bool, Box<std::error::Error>> {
+    if path.exists() {
+        Ok(false)
+    } else {
+        let db_dir = path.parent()
+            .ok_or_else(|| format!("Unable to determine parent path: {:?}", path))?;
+        std::fs::create_dir_all(db_dir)?;
+        std::fs::File::create(path)?;
+        Ok(true)
+    }
+}
 
-        // Load config file, but don't ping the database for applied migrations.
-        // We need to define our migrations first so our `Config` knows
-        // that we're using explicitly defined migrations (with arbitrary tags)
-        // instead of auto-generated migrations (with a strict tag format).
-        Some(p) => Config::load_file_only(&p)?
-    };
+
+fn run() -> Result<(), Box<std::error::Error>> {
+    let path = std::path::Path::new("db/db.db");
+    create_file_if_missing(path)?;
+    let path = path.canonicalize()?;
+    let mut settings = Settings::with_db_type(DbType::Sqlite);
+    settings.database_path(&path)?;
+
+    let mut config = Config::with_settings(&settings);
+    config.setup()?;
 
     // Define migrations
     config.use_migrations(vec![
@@ -94,6 +106,7 @@ fn run() -> Result<(), Box<std::error::Error>> {
             .down(migrations::Custom::down)
             .boxed(),
     ])?;
+
     // Reload config, ping the database for applied migrations
     let config = config.reload()?;
 
