@@ -26,6 +26,7 @@ serde_derive = "1"
 toml = "0.4"
 percent-encoding = "1"
 url = "1"
+log = "0.4"
 postgres = {version = "0.15", optional = true}
 rusqlite = {version = "0.13", optional = true, features = ["bundled"] }
 

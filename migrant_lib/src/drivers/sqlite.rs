@@ -20,10 +20,12 @@ pub fn create_file_if_missing(path: &Path) -> Result<bool> {
     if path.exists() {
         Ok(false)
     } else {
-        let db_dir = path.parent().expect("Invalid utf8 path");
-        fs::create_dir_all(db_dir)?;
-        println!("{:?}", path);
-        fs::File::create(path)?;
+        let db_dir = path.parent()
+            .ok_or_else(|| format_err!(ErrorKind::PathError, "Unable to determine parent path: {:?}", path))?;
+        fs::create_dir_all(db_dir)
+            .chain_err(|| format!("Failed creating database directory: {:?}", db_dir))?;
+        fs::File::create(path)
+            .chain_err(|| format!("Failed creating database file: {:?}", path))?;
         Ok(true)
     }
 }

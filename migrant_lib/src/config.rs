@@ -2,7 +2,7 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::env;
 use std::fs;
-use std::collections::HashSet;
+use std::collections::{HashSet, HashMap};
 
 use toml;
 use url;
@@ -10,7 +10,7 @@ use chrono::{self, TimeZone};
 
 use drivers;
 use {
-    Migratable, encode, prompt, open_file_in_fg, write_to_path, invalid_tag,
+    Migratable, encode, prompt, open_file_in_fg, write_to_path, invalid_tag, DbType,
     FULL_TAG_RE, DT_FORMAT, CONFIG_FILE,
     PG_CONFIG_TEMPLATE, SQLITE_CONFIG_TEMPLATE,
 };
@@ -24,7 +24,6 @@ pub struct ConfigInitializer {
     database_type: Option<String>,
     interactive: bool,
     database_name: Option<String>,
-
 }
 impl ConfigInitializer {
     /// Start a new `ConfigInitializer`
@@ -124,7 +123,7 @@ impl ConfigInitializer {
             "sqlite" => {
                 let content = SQLITE_CONFIG_TEMPLATE
                     .replace("__CONFIG_DIR__", config_path.parent().unwrap().to_str().unwrap())
-                    .replace("__DB_NAME__", &self.database_name.unwrap_or_else(|| String::new()));
+                    .replace("__DB_PATH__", &self.database_name.unwrap_or_else(|| String::new()));
                 write_to_path(&config_path, content.as_bytes())?;
             }
             _ => unreachable!(),
@@ -143,7 +142,7 @@ impl ConfigInitializer {
                 .map_err(|e| format_err!(ErrorKind::Config, "Error editing config file: {}", e))?;
 
             println!();
-            let config = Config::load_file_only(&config_path)?;
+            let config = Config::from_settings_file(&config_path)?;
             let _setup = config.setup()?;
         }
         Ok(())
@@ -151,25 +150,110 @@ impl ConfigInitializer {
 }
 
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
-/// Settings that are serialized and saved in a project `.migrant.toml` config file
-pub(crate) struct Settings {
+#[derive(Deserialize, Debug, Clone)]
+/// Settings that are serialized and saved in a project `Migrant.toml` config file
+pub struct Settings {
     pub(crate) database_type: String,
-    pub(crate) database_name: String,
+    pub(crate) migration_location: Option<String>,
+    pub(crate) database_path: Option<String>,
+    pub(crate) database_name: Option<String>,
     pub(crate) database_host: Option<String>,
     pub(crate) database_port: Option<String>,
     pub(crate) database_user: Option<String>,
     pub(crate) database_password: Option<String>,
-    pub(crate) migration_location: String,
-    pub(crate) database_params: Option<toml::value::Table>,
+    // pub(crate) database_params: Option<toml::value::Table>,
+    pub(crate) database_params: Option<HashMap<String, String>>,
+}
+impl Settings {
+    /// Initialize from a serialized settings file
+    pub fn from_file<T: AsRef<Path>>(path: T) -> Result<Self> {
+        let mut f = fs::File::open(path.as_ref())?;
+        let mut content = String::new();
+        f.read_to_string(&mut content)?;
+        let settings = toml::from_str::<Settings>(&content)?;
+        Ok(settings)
+    }
+
+    /// Initialize an empty `Settings` to be configured
+    pub fn with_db_type(db_type: DbType) -> Self {
+        Self {
+            database_type: db_type.to_string(),
+            migration_location: None,
+            database_path: None,
+            database_name: None,
+            database_host: None,
+            database_port: None,
+            database_user: None,
+            database_password: None,
+            database_params: None,
+        }
+    }
+
+    /// Set directory to look for migration files.
+    pub fn migration_location<T: AsRef<Path>>(&mut self, p: T) -> Result<&mut Self> {
+        let p = p.as_ref();
+        let s = p.to_str().ok_or_else(|| format_err!(ErrorKind::PathError, "Unicode path error: {:?}", p))?;
+        self.migration_location = Some(s.to_owned());
+        Ok(self)
+    }
+
+    /// Set the path to look for a database file. Note, this is only used for sqlite
+    /// and is the only property that is used/required for connecting to sqlite databases.
+    pub fn database_path<T: AsRef<Path>>(&mut self, p: T) -> Result<&mut Self> {
+        let p = p.as_ref();
+        if ! p.is_absolute() { bail_fmt!(ErrorKind::Config, "Explicit settings database path must be absolute: {:?}", p) }
+        let s = p.to_str().ok_or_else(|| format_err!(ErrorKind::PathError, "Unicode path error: {:?}", p))?;
+        self.database_path = Some(s.to_owned());
+        Ok(self)
+    }
+
+    /// Set the database name.
+    pub fn database_name(&mut self, name: &str) -> &mut Self {
+        self.database_name = Some(name.into());
+        self
+    }
+
+    /// Set the database host.
+    pub fn database_host(&mut self, host: &str) -> &mut Self {
+        self.database_host = Some(host.into());
+        self
+    }
+
+    /// Set the database port.
+    pub fn database_port(&mut self, port: u16) -> &mut Self {
+        self.database_port = Some(port.to_string());
+        self
+    }
+
+    /// Set the database user.
+    pub fn database_user(&mut self, user: &str) -> &mut Self {
+        self.database_user = Some(user.into());
+        self
+    }
+
+    /// Set the database password.
+    pub fn database_password(&mut self, pass: &str) -> &mut Self {
+        self.database_password = Some(pass.into());
+        self
+    }
+
+    /// Set a collection of database connection parameters.
+    pub fn database_params(&mut self, params: &[(&str, &str)]) -> &mut Self {
+        let mut map = HashMap::new();
+        for &(k, v) in params.iter() {
+            map.insert(k.to_string(), v.to_string());
+        }
+        self.database_params = Some(map);
+        self
+    }
 }
 
 
 #[derive(Debug, Clone)]
 /// Project configuration/settings
 pub struct Config {
-    pub path: PathBuf,
     pub(crate) settings: Settings,
+    pub(crate) settings_path: Option<PathBuf>,
     pub(crate) applied: Vec<String>,
     pub(crate) migrations: Option<Vec<Box<Migratable>>>,
 }
@@ -179,13 +263,37 @@ impl Config {
     /// When using explicit migrations, make sure they are defined on the `Config`
     /// instance before applied migrations are loaded from the database. This is
     /// required because tag format requirements are stricter for implicit
-    /// (file-system based) migrations are stricter, requiring a timestamp to
+    /// (file-system based) migrations, requiring a timestamp to
     /// maintain a deterministic order.
     ///
     /// # Example
     ///
-    /// ```rust,ignore
-    /// let mut config = Config::load_file_only(&p)?;
+    /// ```rust,no_run
+    /// extern crate migrant_lib;
+    /// use migrant_lib::{
+    ///     Config, search_for_settings_file,
+    ///     EmbeddedMigration, FileMigration, FnMigration
+    /// };
+    ///
+    /// # fn run() -> Result<(), Box<std::error::Error>> {
+    /// mod migrations {
+    ///     use super::*;
+    ///     pub struct Custom;
+    ///     impl Custom {
+    ///         pub fn up(_: migrant_lib::DbConn) -> Result<(), Box<std::error::Error>> {
+    ///             print!(" <[Up!]>");
+    ///             Ok(())
+    ///         }
+    ///         pub fn down(_: migrant_lib::DbConn) -> Result<(), Box<std::error::Error>> {
+    ///             print!(" <[Down!]>");
+    ///             Ok(())
+    ///         }
+    ///     }
+    /// }
+    ///
+    /// let p = search_for_settings_file(&std::env::current_dir()?)
+    ///     .ok_or_else(|| "Settings file not found")?;
+    /// let mut config = Config::from_settings_file(&p)?;
     /// config.use_migrations(vec![
     ///     EmbeddedMigration::with_tag("initial")?
     ///         .up(include_str!("../migrations/initial/up.sql"))
@@ -201,6 +309,9 @@ impl Config {
     ///         .boxed(),
     /// ])?;
     /// let config = config.reload()?;
+    /// # Ok(())
+    /// # }
+    /// # fn main() { run().unwrap(); }
     /// ```
     pub fn use_migrations(&mut self, migrations: Vec<Box<Migratable>>) -> Result<&mut Self> {
         let mut set = HashSet::new();
@@ -238,10 +349,14 @@ impl Config {
         Ok(())
     }
 
-    /// Do a full reload of the configuration file, keeping track of
-    /// manually specified `migrations`
+    /// Do a full reload of the configuration file (only if a settings file is being used) and
+    /// query the database to load applied migrations, keeping track of
+    /// manually specified `migrations`.
     pub fn reload(&self) -> Result<Config> {
-        let mut config = Config::load_file_only(&self.path)?;
+        let mut config = match self.settings_path.as_ref() {
+            Some(path) => Config::from_settings_file(path)?,
+            None => self.clone(),
+        };
         config.migrations = self.migrations.clone();
         let applied = config.load_applied()?;
         config.applied = applied;
@@ -250,27 +365,26 @@ impl Config {
 
     /// Load config file from the given path without querying the database
     /// to check for applied migrations
-    pub fn load_file_only<T: AsRef<Path>>(path: T) -> Result<Config> {
+    pub fn from_settings_file<T: AsRef<Path>>(path: T) -> Result<Config> {
         let path = path.as_ref();
-        let mut file = fs::File::open(path)?;
-        let mut content = String::new();
-        file.read_to_string(&mut content)?;
-        let settings = toml::from_str::<Settings>(&content)?;
+        let settings = Settings::from_file(path)?;
         Ok(Config {
-            path: path.to_owned(),
+            settings_path: Some(path.to_owned()),
             settings: settings,
             applied: vec![],
             migrations: None,
         })
     }
 
-    /// Load config file from the given path and query the database to load up applied migrations
-    pub fn load<T: AsRef<Path>>(path: T) -> Result<Config> {
-        let path = path.as_ref();
-        let mut config = Config::load_file_only(path)?;
-        let applied = config.load_applied()?;
-        config.applied = applied;
-        Ok(config)
+    /// Initialize a `Config` using an explicitly created `Settings` object.
+    /// This alleviates the need for a settings file.
+    pub fn with_settings(s: &Settings) -> Config {
+        Config {
+            settings: s.clone(),
+            settings_path: None,
+            applied: vec![],
+            migrations: None,
+        }
     }
 
     /// Load the applied migrations from the database migration table
@@ -280,7 +394,7 @@ impl Config {
         }
 
         let applied = match self.settings.database_type.as_ref() {
-            "sqlite"    => drivers::sqlite::select_migrations(&self.settings.database_name)?,
+            "sqlite"    => drivers::sqlite::select_migrations(&self.database_path_string()?)?,
             "postgres"  => drivers::pg::select_migrations(&self.connect_string()?)?,
             _ => unreachable!(),
         };
@@ -306,7 +420,7 @@ impl Config {
     /// Check if a __migrant_migrations table exists
     pub(crate) fn migration_table_exists(&self) -> Result<bool> {
         match self.settings.database_type.as_ref() {
-            "sqlite"    => drivers::sqlite::migration_table_exists(self.settings.database_name.as_str()),
+            "sqlite"    => drivers::sqlite::migration_table_exists(&self.database_path_string()?),
             "postgres"  => drivers::pg::migration_table_exists(&self.connect_string()?),
             _ => unreachable!()
         }
@@ -315,7 +429,7 @@ impl Config {
     /// Insert given tag into database migration table
     pub(crate) fn insert_migration_tag(&self, tag: &str) -> Result<()> {
         match self.settings.database_type.as_ref() {
-            "sqlite"    => drivers::sqlite::insert_migration_tag(&self.settings.database_name, tag)?,
+            "sqlite"    => drivers::sqlite::insert_migration_tag(&self.database_path_string()?, tag)?,
             "postgres"  => drivers::pg::insert_migration_tag(&self.connect_string()?, tag)?,
             _ => unreachable!(),
         };
@@ -325,7 +439,7 @@ impl Config {
     /// Remove a given tag from the database migration table
     pub(crate) fn delete_migration_tag(&self, tag: &str) -> Result<()> {
         match self.settings.database_type.as_ref() {
-            "sqlite"    => drivers::sqlite::remove_migration_tag(&self.settings.database_name, tag)?,
+            "sqlite"    => drivers::sqlite::remove_migration_tag(&self.database_path_string()?, tag)?,
             "postgres"  => drivers::pg::remove_migration_tag(&self.connect_string()?, tag)?,
             _ => unreachable!(),
         };
@@ -340,43 +454,43 @@ impl Config {
     /// - Confirm the database can be accessed
     /// - Setup the database migrations table if it doesn't exist yet
     pub fn setup(&self) -> Result<bool> {
-        println!(" ** Confirming database credentials...");
+        debug!(" ** Confirming database credentials...");
         match self.settings.database_type.as_ref() {
             "sqlite" => {
-                if self.settings.database_name.is_empty() {
-                    bail_fmt!(ErrorKind::Config, "`database_name` cannot be blank!")
+                if self.settings.database_path.is_none() {
+                    bail_fmt!(ErrorKind::Config, "`database_path` is required!")
                 }
-                let db_path = self.path.parent().unwrap().join(&self.settings.database_name);
+                let db_path = self.database_path()?;
                 let created = drivers::sqlite::create_file_if_missing(&db_path)?;
-                println!("    - checking if db file already exists...");
+                debug!("    - checking if db file already exists...");
                 if created {
-                    println!("    - db not found... creating now... ✓")
+                    debug!("    - db not found... creating now... ✓")
                 } else {
-                    println!("    - db already exists ✓");
+                    debug!("    - db already exists ✓");
                 }
             }
             "postgres" => {
                 let conn_str = self.connect_string()?;
                 let can_connect = drivers::pg::can_connect(&conn_str)?;
                 if !can_connect {
-                    println!(" ERROR: Unable to connect to {}", conn_str);
-                    println!("        Please initialize your database and user and then run `setup`");
-                    println!("\n  ex) sudo -u postgres createdb {}", &self.settings.database_name);
-                    println!("      sudo -u postgres createuser {}", self.settings.database_user.as_ref().unwrap());
-                    println!("      sudo -u postgres psql -c \"alter user {} with password '****'\"", self.settings.database_user.as_ref().unwrap());
-                    println!();
-                    bail_fmt!(ErrorKind::Config, "Cannot connect to postgres database");
+                    debug!(" ERROR: Unable to connect to {}", conn_str);
+                    debug!("        Please initialize your database and user and then run `setup`");
+                    debug!("\n  ex) sudo -u postgres createdb {}", self.settings.database_name.as_ref().unwrap());
+                    debug!("      sudo -u postgres createuser {}", self.settings.database_user.as_ref().unwrap());
+                    debug!("      sudo -u postgres psql -c \"alter user {} with password '****'\"", self.settings.database_user.as_ref().unwrap());
+                    debug!("");
+                    bail_fmt!(ErrorKind::Config, "Cannot connect to postgres database with connection string: {:?}", conn_str);
                 } else {
-                    println!("    - Connection confirmed ✓");
+                    debug!("    - Connection confirmed ✓");
                 }
             }
             _ => unreachable!(),
         }
 
-        println!("\n ** Setting up migrations table");
+        debug!("\n ** Setting up migrations table");
         let table_created = match self.settings.database_type.as_ref() {
             "sqlite" => {
-                let db_path = self.path.parent().unwrap().join(&self.settings.database_name);
+                let db_path = self.database_path()?;
                 drivers::sqlite::migration_setup(&db_path)?
             }
             "postgres" => {
@@ -387,20 +501,26 @@ impl Config {
         };
 
         if table_created {
-            println!("    - migrations table missing");
-            println!("    - `__migrant_migrations` table created ✓");
+            debug!("    - migrations table missing");
+            debug!("    - `__migrant_migrations` table created ✓");
             Ok(true)
         } else {
-            println!("    - `__migrant_migrations` table already exists ✓");
+            debug!("    - `__migrant_migrations` table already exists ✓");
             Ok(false)
         }
     }
 
     /// Return the absolute path to the directory containing migration folders
     pub fn migration_dir(&self) -> Result<PathBuf> {
-        Ok(self.path.parent()
-            .map(|p| p.join(&self.settings.migration_location))
-            .ok_or_else(|| format_err!(ErrorKind::PathError, "Error generating PathBuf to migration_location"))?)
+        let path = Path::new(self.settings.migration_location.as_ref()
+                             .ok_or_else(|| format_err!(ErrorKind::Config, "Migration location not specified"))?);
+        Ok(if path.is_absolute() { path.to_owned() } else {
+            let spath = Path::new(self.settings_path.as_ref()
+                                  .ok_or_else(|| format_err!(ErrorKind::Config, "Settings path not specified"))?);
+            let spath = spath.parent()
+                .ok_or_else(|| format_err!(ErrorKind::PathError, "Unable to determine parent path: {:?}", spath))?;
+            spath.join(path)
+        })
     }
 
     /// Return the database type
@@ -408,17 +528,32 @@ impl Config {
         Ok(self.settings.database_type.to_owned())
     }
 
+    fn database_path_string(&self) -> Result<String> {
+        let path = self.database_path()?;
+        let path = path.to_str()
+            .ok_or_else(|| format_err!(ErrorKind::PathError, "Invalid utf8 path: {:?}", path))?
+            .to_owned();
+        Ok(path)
+    }
+
     /// Return the absolute path to the database file. This is intended for
     /// sqlite3 databases only
     pub fn database_path(&self) -> Result<PathBuf> {
-        match self.settings.database_type.as_ref() {
-            "sqlite" => (),
-            db_t => bail_fmt!(ErrorKind::Config, "Cannot retrieve database-path for database-type: {}", db_t),
-        };
+        Ok(match self.settings.database_type.as_ref() {
+            "sqlite" => {
+                let path = Path::new(self.settings.database_path.as_ref()
+                                     .ok_or_else(|| format_err!(ErrorKind::Config, "Database path not specified"))?);
+                if path.is_absolute() { path.to_owned() } else {
+                    let spath = Path::new(self.settings_path.as_ref()
+                                          .ok_or_else(|| format_err!(ErrorKind::Config, "Settings path not specified"))?);
+                    let spath = spath.parent()
+                        .ok_or_else(|| format_err!(ErrorKind::PathError, "Unable to determine parent path: {:?}", spath))?;
+                    spath.join(path)
+                }
 
-        Ok(self.path.parent()
-            .map(|p| p.join(&self.settings.database_name))
-            .ok_or_else(|| format_err!(ErrorKind::PathError, "Error generating PathBuf to database-path"))?)
+            }
+            db_t => bail_fmt!(ErrorKind::Config, "Cannot retrieve database-path for database-type: {}", db_t),
+        })
     }
 
     /// Generate a database connection string.
@@ -441,10 +576,9 @@ impl Config {
             None => bail_fmt!(ErrorKind::Config, "'database_user' not specified"),
         };
 
-        let db_name = if self.settings.database_name.is_empty() {
-            bail_fmt!(ErrorKind::Config, "`database_name` not specified");
-        } else {
-            encode(&self.settings.database_name)
+        let db_name = match self.settings.database_name.as_ref().and_then(|s| if s.is_empty() { None } else { Some(s) }) {
+            Some(ref name) => encode(name),
+            None => bail_fmt!(ErrorKind::Config, "`database_name` not specified"),
         };
 
         let host = self.settings.database_host.clone().unwrap_or_else(|| "localhost".to_string());
@@ -469,10 +603,7 @@ impl Config {
             let mut pairs = vec![];
             for (k, v) in params.iter() {
                 let k = encode(k);
-                let v = match *v {
-                    toml::value::Value::String(ref s) => encode(s),
-                    ref v => bail_fmt!(ErrorKind::Config, "Database params can only be strings, found `{}={}`", k, v),
-                };
+                let v = encode(v);
                 pairs.push((k, v));
             }
             if !pairs.is_empty() {

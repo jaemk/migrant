@@ -12,7 +12,7 @@
 # extern crate migrant_lib;
 # use migrant_lib::{Config, FileMigration, EmbeddedMigration, FnMigration, DbConn};
 # fn run() -> Result<(), Box<std::error::Error>> {
-# let mut config = Config::load_file_only("path")?;
+# let mut config = Config::from_settings_file("path")?;
 fn up(_: DbConn) -> Result<(), Box<std::error::Error>> {
     print!(" Up!");
     Ok(())
@@ -61,6 +61,7 @@ for a working sample.
 
 #![recursion_limit = "1024"]
 #[macro_use] extern crate error_chain;
+#[macro_use] extern crate log;
 #[macro_use] extern crate lazy_static;
 #[macro_use] extern crate serde_derive;
 extern crate serde;
@@ -103,29 +104,31 @@ pub mod types;
 
 pub use errors::*;
 pub use migratable::Migratable;
-pub use config::{ConfigInitializer, Config};
+pub use config::{ConfigInitializer, Config, Settings};
 pub use migration::{FileMigration, EmbeddedMigration, FnMigration};
 pub use connection::DbConn;
 
 
-static CONFIG_FILE: &'static str = ".migrant.toml";
+static CONFIG_FILE: &'static str = "Migrant.toml";
 static DT_FORMAT: &'static str = "%Y%m%d%H%M%S";
 
 
 static SQLITE_CONFIG_TEMPLATE: &'static str = r#"
-# required, do not edit
+# Required, do not edit
 database_type = "sqlite"
 
-# required: relative path to your database file from this config file dir: `__CONFIG_DIR__/`
+# Required: Absolute or relative path to your database file.
+#           If a relative path is provided, it will be assumed
+#           to be relative to this config file dir: `__CONFIG_DIR__/`
 # ex.) database_name = "db/db.db"
-database_name = "__DB_NAME__"
+database_path = "__DB_PATH__"
 
 migration_location = "migrations"  # default "migrations"
 "#;
 
 
 static PG_CONFIG_TEMPLATE: &'static str = r#"
-# required, do not edit
+# Required, do not edit
 database_type = "postgres"
 
 database_name = "__DB_NAME__"      # required
@@ -150,6 +153,25 @@ lazy_static! {
 
     // For verifying complete stamp+tag names
     static ref FULL_TAG_RE: Regex = Regex::new(r"[0-9]{14}_[a-z0-9-]+").expect("failed to compile regex");
+}
+
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub enum DbType {
+    Postgresql,
+    Sqlite,
+}
+impl fmt::Display for DbType {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match *self {
+            DbType::Postgresql => {
+                write!(f, "postgres")
+            }
+            DbType::Sqlite => {
+                write!(f, "sqlite")
+            }
+        }
+    }
 }
 
 
@@ -267,8 +289,8 @@ impl Migrator {
 }
 
 
-/// Search for a `.migrant.toml` file in the current and parent directories
-pub fn search_for_config(base: &PathBuf) -> Option<PathBuf> {
+/// Search for a `Migrant.toml` file in the current and parent directories
+pub fn search_for_settings_file(base: &PathBuf) -> Option<PathBuf> {
     let mut base = base.clone();
     loop {
         for path in fs::read_dir(&base).unwrap() {
@@ -386,8 +408,9 @@ pub enum DbKind {
     Sqlite,
     Postgres,
 }
-impl DbKind {
-    fn from(s: &str) -> Result<Self> {
+impl std::str::FromStr for DbKind {
+    type Err = Error;
+    fn from_str(s: &str) -> Result<Self> {
         Ok(match s {
             "sqlite" => DbKind::Sqlite,
             "postgres" => DbKind::Postgres,
@@ -400,7 +423,7 @@ impl DbKind {
 /// Apply the migration in the specified direction
 fn run_migration(config: &Config, direction: &Direction,
                  migration: &Box<Migratable>) -> std::result::Result<(), Box<std::error::Error>> {
-    let db_kind = DbKind::from(config.settings.database_type.as_ref())?;
+    let db_kind: DbKind = config.settings.database_type.as_str().parse()?;
     Ok(match *direction {
         Direction::Up => {
             migration.apply_up(db_kind, config)?;
@@ -415,11 +438,10 @@ fn run_migration(config: &Config, direction: &Direction,
 /// Try applying the next available migration in the specified `Direction`
 fn apply_migration(config: &Config, direction: Direction,
                        force: bool, fake: bool, all: bool) -> Result<()> {
-    let mig_dir = config.migration_dir()?;
-
     let migrations = match config.migrations {
         Some(ref migrations) => migrations.clone(),
         None => {
+            let mig_dir = config.migration_dir()?;
             search_for_migrations(&mig_dir)?.into_iter()
                 .map(|fm| fm.boxed()).collect()
         }
