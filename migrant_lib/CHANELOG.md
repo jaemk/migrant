@@ -11,6 +11,8 @@
 
 ### Changed
 - Config file renamed from `.migrant.toml` to `Migrant.toml`
+    - In sqlite configs, `database_name` parameter is now `database_path`
+      and can be either an absolute or relative (to the config file dir) path.
 - `Config::load_file_only` renamed to `Config::from_settings_file`
 - `search_for_config` renamed to `search_for_settings_file`
 - Output from `Config::setup` is now only shown in debug logs (`debug!` macro)
