@@ -11,8 +11,8 @@ readme = "README.md"
 workspace = ".."
 
 exclude = [
-    "db/*",
-    "migrations/*",
+    "/db/*",
+    "/migrations/*",
 ]
 
 [dependencies]
