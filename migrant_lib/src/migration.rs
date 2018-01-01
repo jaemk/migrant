@@ -14,7 +14,7 @@ use {DbKind, invalid_tag, Direction, DT_FORMAT};
 use errors::*;
 
 
-/// Define a migration that uses files
+/// Define a migration that uses SQL statements saved in files.
 ///
 /// Files defined in this migration must be present at run-time
 #[derive(Clone, Debug)]
@@ -124,18 +124,24 @@ impl Migratable for FileMigration {
 
 /// Define an embedded migration
 ///
-/// Statements provided to `EmbeddedMigration` will be embedded in
+/// SQL statements provided to `EmbeddedMigration` will be embedded in
 /// the executable so no files are required at run-time. The
-/// standard `include_str!` macro can be used to embed contents of files
+/// standard `include_str!` macro can be used to embed contents of files.
 /// Database specific features (`postgresql`/`sqlite`) are required to use
 /// this functionality.
 ///
 /// # Example
 ///
-/// ```rust,ignore
+/// ```rust,no_run
+/// # extern crate migrant_lib;
+/// # use migrant_lib::EmbeddedMigration;
+/// # fn main() { run().unwrap(); }
+/// # fn run() -> Result<(), Box<std::error::Error>> {
 /// EmbeddedMigration::with_tag("initial")?
 ///     .up(include_str!("../migrations/initial/up.sql"))
-///     .down(include_str!("../migrations/initial/down.sql"))
+///     .down(include_str!("../migrations/initial/down.sql"));
+/// # Ok(())
+/// # }
 /// ```
 #[derive(Clone, Debug)]
 pub struct EmbeddedMigration {
