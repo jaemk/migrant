@@ -10,7 +10,7 @@ This should be run with `cargo run --example embedded_programmable`
 */
 extern crate migrant_lib;
 
-use migrant_lib::{Config, Settings, DbType, FileMigration, EmbeddedMigration, FnMigration, Migrator, Direction};
+use migrant_lib::{Config, Settings, DbKind, FileMigration, EmbeddedMigration, FnMigration, Migrator, Direction};
 
 
 mod migrations {
@@ -85,7 +85,7 @@ fn run() -> Result<(), Box<std::error::Error>> {
     let path = std::path::Path::new("db/db.db");
     create_file_if_missing(path)?;
     let path = path.canonicalize()?;
-    let mut settings = Settings::with_db_type(DbType::Sqlite);
+    let mut settings = Settings::with_db_type(DbKind::Sqlite);
     settings.database_path(&path)?;
 
     let mut config = Config::with_settings(&settings);

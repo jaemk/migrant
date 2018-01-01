@@ -10,7 +10,7 @@ use chrono::{self, TimeZone};
 
 use drivers;
 use {
-    Migratable, encode, prompt, open_file_in_fg, write_to_path, invalid_tag, DbType,
+    Migratable, encode, prompt, open_file_in_fg, write_to_path, invalid_tag, DbKind,
     FULL_TAG_RE, DT_FORMAT, CONFIG_FILE,
     PG_CONFIG_TEMPLATE, SQLITE_CONFIG_TEMPLATE,
 };
@@ -175,7 +175,7 @@ impl Settings {
     }
 
     /// Initialize an empty `Settings` to be configured
-    pub fn with_db_type(db_type: DbType) -> Self {
+    pub fn with_db_type(db_type: DbKind) -> Self {
         Self {
             database_type: db_type.to_string(),
             migration_location: None,

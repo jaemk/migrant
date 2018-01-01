@@ -156,18 +156,29 @@ lazy_static! {
 }
 
 
+/// Database type being used
 #[derive(Debug, Clone, Eq, PartialEq)]
-pub enum DbType {
-    Postgresql,
+pub enum DbKind {
     Sqlite,
+    Postgres,
 }
-impl fmt::Display for DbType {
+impl std::str::FromStr for DbKind {
+    type Err = Error;
+    fn from_str(s: &str) -> Result<Self> {
+        Ok(match s {
+            "sqlite" => DbKind::Sqlite,
+            "postgres" => DbKind::Postgres,
+            _ => bail_fmt!(ErrorKind::InvalidDbKind, "Invalid Database Kind: {}", s),
+        })
+    }
+}
+impl fmt::Display for DbKind {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match *self {
-            DbType::Postgresql => {
+            DbKind::Postgres => {
                 write!(f, "postgres")
             }
-            DbType::Sqlite => {
+            DbKind::Sqlite => {
                 write!(f, "sqlite")
             }
         }
@@ -400,23 +411,6 @@ fn next_available<'a>(direction: &Direction, available: &'a [Box<Migratable>], a
             }
         }
     })
-}
-
-
-/// Database type being used
-pub enum DbKind {
-    Sqlite,
-    Postgres,
-}
-impl std::str::FromStr for DbKind {
-    type Err = Error;
-    fn from_str(s: &str) -> Result<Self> {
-        Ok(match s {
-            "sqlite" => DbKind::Sqlite,
-            "postgres" => DbKind::Postgres,
-            _ => bail_fmt!(ErrorKind::InvalidDbKind, "Invalid Database Kind: {}", s),
-        })
-    }
 }
 
 
