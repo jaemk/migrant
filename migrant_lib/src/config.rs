@@ -151,7 +151,10 @@ impl ConfigInitializer {
 
 
 #[derive(Deserialize, Debug, Clone)]
-/// Settings that are serialized and saved in a project `Migrant.toml` config file
+/// Project settings
+///
+/// These settings are serialized and saved in a project `Migrant.toml` config file
+/// or defined explicitly in source using the provided builder methods.
 pub struct Settings {
     pub(crate) database_type: String,
     pub(crate) migration_location: Option<String>,
@@ -161,7 +164,6 @@ pub struct Settings {
     pub(crate) database_port: Option<String>,
     pub(crate) database_user: Option<String>,
     pub(crate) database_password: Option<String>,
-    // pub(crate) database_params: Option<toml::value::Table>,
     pub(crate) database_params: Option<HashMap<String, String>>,
 }
 impl Settings {
@@ -250,7 +252,7 @@ impl Settings {
 
 
 #[derive(Debug, Clone)]
-/// Project configuration/settings
+/// Full project configuration
 pub struct Config {
     pub(crate) settings: Settings,
     pub(crate) settings_path: Option<PathBuf>,
@@ -308,6 +310,8 @@ impl Config {
     ///         .down(migrations::Custom::down)
     ///         .boxed(),
     /// ])?;
+    ///
+    /// // Load applied migrations
     /// let config = config.reload()?;
     /// # Ok(())
     /// # }
@@ -378,6 +382,24 @@ impl Config {
 
     /// Initialize a `Config` using an explicitly created `Settings` object.
     /// This alleviates the need for a settings file.
+    ///
+    /// ```rust,no_run
+    /// # extern crate migrant_lib;
+    /// # use migrant_lib::{Settings, Config, DbKind};
+    /// # fn main() { run().unwrap(); }
+    /// # fn run() -> Result<(), Box<std::error::Error>> {
+    /// let mut settings = Settings::with_db_type(DbKind::Sqlite);
+    /// settings.database_path("/absolute/path/to/db.db")?;
+    /// settings.migration_location("/absolute/path/to/migration_dir")?;
+    /// let mut config = Config::with_settings(&settings);
+    /// // Setup migrations table
+    /// config.setup()?;
+    ///
+    /// // Reload config, ping the database for applied migrations
+    /// let config = config.reload()?;
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn with_settings(s: &Settings) -> Config {
         Config {
             settings: s.clone(),
@@ -479,7 +501,10 @@ impl Config {
                     debug!("      sudo -u postgres createuser {}", self.settings.database_user.as_ref().unwrap());
                     debug!("      sudo -u postgres psql -c \"alter user {} with password '****'\"", self.settings.database_user.as_ref().unwrap());
                     debug!("");
-                    bail_fmt!(ErrorKind::Config, "Cannot connect to postgres database with connection string: {:?}", conn_str);
+                    bail_fmt!(ErrorKind::Config,
+                              "Cannot connect to postgres database with connection string: {:?}. \
+                               Do the database & user exist?",
+                              conn_str);
                 } else {
                     debug!("    - Connection confirmed ✓");
                 }
@@ -617,5 +642,4 @@ impl Config {
         Ok(url.into_string())
     }
 }
-
 
