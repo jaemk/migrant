@@ -8,18 +8,13 @@ readme = "README.md"
 keywords = ["database", "migration", "sql", "postgres", "sqlite"]
 categories = ["command-line-utilities", "database", "development-tools"]
 license = "MIT"
-exclude = ["/ci/", ".travis.yml", "/migrant_lib/", "/migrations/", "*.db"]
+exclude = ["/ci/", ".travis.yml", "/migrations/", "*.db"]
 
 [dependencies]
 clap = "2"
 error-chain = "0.11"
-migrant_lib = { version = "0.13.3", path = "migrant_lib/" }
+migrant_lib = { version = "0.14.0" }
 self_update = { version = "0.4", optional = true }
-
-[workspace]
-members = [
-    "migrant_lib",
-]
 
 [features]
 default = []

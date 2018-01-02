@@ -1,10 +1,8 @@
 # Migrant
 [![Build Status](https://travis-ci.org/jaemk/migrant.svg?branch=master)](https://travis-ci.org/jaemk/migrant)
 [![crates.io:migrant](https://img.shields.io/crates/v/migrant.svg?label=migrant)](https://crates.io/crates/migrant)
-[![crates.io:migrant_lib](https://img.shields.io/crates/v/migrant_lib.svg?label=migrant_lib)](https://crates.io/crates/migrant_lib)
-[![docs](https://docs.rs/migrant_lib/badge.svg)](https://docs.rs/migrant_lib)
 
-> Basic migration manager powered by [`migrant_lib`](https://github.com/jaemk/migrant/tree/master/migrant_lib)
+> Basic migration manager powered by [`migrant_lib`](https://github.com/jaemk/migrant_lib)
 
 Currently supports:
  * postgres
@@ -73,8 +71,8 @@ When run interactively (without `--no-confirm`), `setup` will be run automatical
 
 ### Usage as a library
 
-See [`migrant_lib`](https://github.com/jaemk/migrant/tree/master/migrant_lib) and
-[examples](https://github.com/jaemk/migrant/tree/master/migrant_lib/examples).
+See [`migrant_lib`](https://github.com/jaemk/migrant_lib) and
+[examples](https://github.com/jaemk/migrant_lib/tree/master/examples).
 `migrant` itself is just a thin wrapper around `migrant_lib`, so the full functionality of migration management
 can be embedded in your actual project.
 
@@ -82,5 +80,5 @@ can be embedded in your actual project.
 ### Development
 
 - Install dependencies: `sqlite3`, `libsqlite3-dev`, `postgresql`, `libpq-dev`
-- `./test_all.sh`
+- `cargo build`
 

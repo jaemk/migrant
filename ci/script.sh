@@ -13,9 +13,6 @@ main() {
     #fi
 
     #cross test --target $TARGET
-    if [ $TRAVIS_OS_NAME = linux ]; then
-        ./test_all.sh
-    fi
     cross test --target $TARGET --release
     cross test --target $TARGET --release --features 'sqlite postgresql update'
 }
