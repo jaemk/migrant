@@ -313,6 +313,7 @@ impl Config {
     ///
     /// // Load applied migrations
     /// let config = config.reload()?;
+    /// # let _ = config;
     /// # Ok(())
     /// # }
     /// # fn main() { run().unwrap(); }
@@ -391,12 +392,13 @@ impl Config {
     /// let mut settings = Settings::with_db_type(DbKind::Sqlite);
     /// settings.database_path("/absolute/path/to/db.db")?;
     /// settings.migration_location("/absolute/path/to/migration_dir")?;
-    /// let mut config = Config::with_settings(&settings);
+    /// let config = Config::with_settings(&settings);
     /// // Setup migrations table
     /// config.setup()?;
     ///
     /// // Reload config, ping the database for applied migrations
     /// let config = config.reload()?;
+    /// # let _ = config;
     /// # Ok(())
     /// # }
     /// ```
