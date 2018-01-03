@@ -10,8 +10,8 @@ Currently supports:
 
 
 `migrant` will manage all migrations that live under `<project-dir>/migrations/` where `project-dir` is the closest
-parent path that contains a `.migrant.toml` configuration file (`..../<project-dir>/.migrant.toml`).
-The default migration file location can be modified in your `.migrant.toml` file (`"migration_location"`).
+parent path that contains a `Migrant.toml` configuration file (`..../<project-dir>/Migrant.toml`).
+The default migration file location can be modified in your `Migrant.toml` file (`"migration_location"`).
 If the `migration_location` directory doesn't exist, it will be created the first time you create a new migration.
 `migrant` stores all applied migrations in a database table named `__migrant_migrations`
 
@@ -45,7 +45,7 @@ cargo install migrant --features 'postgresql sqlite'
 
 ### Simple Usage
 
-`migrant init [--type <database-type>, --location <project-dir>, --no-confirm]` - Initialize project by creating a `.migrant.toml` file with db info/credentials.
+`migrant init [--type <database-type>, --location <project-dir>, --no-confirm]` - Initialize project by creating a `Migrant.toml` file with db info/credentials.
 When run interactively (without `--no-confirm`), `setup` will be run automatically.
 
 `migrant setup` - Verify database info/credentials and setup a `__migrant_migrations` table if missing.
@@ -60,7 +60,7 @@ When run interactively (without `--no-confirm`), `setup` will be run automatical
 
 `migrant shell` - Open a repl
 
-`migrant which-config` - Display the full path of the `.migrant.toml` file being used
+`migrant which-config` - Display the full path of the `Migrant.toml` file being used
 
 `migrant connect-string` - Display either the connection-string generated from config-params or the database-path for sqlite
 
