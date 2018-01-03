@@ -69,7 +69,7 @@ pub fn build_cli() -> App<'static, 'static> {
                 .help("Applies the migration and treats it as if it were successful"))
             .arg(Arg::with_name("fake")
                 .long("fake")
-                .help("Updates the `.migrant.toml` file as if the specified migration was applied")))
+                .help("Updates the migrations table as if the specified migration was applied")))
         .subcommand(SubCommand::with_name("redo")
             .about("Shortcut for running the latest `down` and `up` migration. Can be augmented with `all` and `force`")
             .arg(Arg::with_name("all")
