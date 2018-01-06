@@ -10,7 +10,7 @@ use std::io;
 use std::fs;
 use std::env;
 use std::path::PathBuf;
-use migrant_lib::{Config, Direction, Migrator};
+use migrant_lib::{Config, Direction, Migrator, DbKind};
 
 mod cli;
 mod errors {
@@ -74,9 +74,11 @@ fn run(dir: &PathBuf, matches: &clap::ArgMatches) -> Result<()> {
         let config = if let Some(init_matches) = matches.subcommand_matches("init") {
             let dir = init_matches.value_of("location").map(PathBuf::from).unwrap_or_else(|| dir.to_owned());
             let interactive = !init_matches.is_present("no-confirm");
-            Config::init_in(&dir)
-                .interactive(interactive)
-                .for_database(init_matches.value_of("type"))?
+            let mut config = Config::init_in(&dir).interactive(interactive);
+            if let Some(db_kind) = init_matches.value_of("type") {
+                config = config.database_type(db_kind.parse::<DbKind>()?);
+            }
+            config
         } else {
             Config::init_in(&dir)
         };
@@ -93,8 +95,10 @@ fn run(dir: &PathBuf, matches: &clap::ArgMatches) -> Result<()> {
     }
 
     if matches.is_present("connect-string") {
-        if config.database_type()? == "sqlite" {
-            println!("{}", config.database_path()?.to_str().unwrap());
+        if config.database_type() == DbKind::Sqlite {
+            let path = config.database_path()?;
+            let path = path.to_str().ok_or_else(|| format!("PathError: Invalid utf8: {:?}", path))?;
+            println!("{}", path);
         } else {
             println!("{}", config.connect_string()?);
         }
