@@ -4,12 +4,14 @@
 
 > Basic migration manager powered by [`migrant_lib`](https://github.com/jaemk/migrant_lib)
 
-Currently supports:
- * postgres
- * sqlite
+Supported databases:
+
+- [x] SQLite
+- [x] Postgres
+- [ ] MySQL
 
 
-`migrant` will manage all migrations that live under `<project-dir>/migrations/` where `project-dir` is the closest
+`migrant` will manage all migrations that live under `<project-dir>/migrations/`, where `project-dir` is the closest
 parent path that contains a `Migrant.toml` configuration file (`..../<project-dir>/Migrant.toml`).
 The default migration file location can be modified in your `Migrant.toml` file (`"migration_location"`).
 If the `migration_location` directory doesn't exist, it will be created the first time you create a new migration.
@@ -66,7 +68,7 @@ When run interactively (without `--no-confirm`), `setup` will be run automatical
 
 `migrant self update` - Update to the latest version released on GitHub.
 
-`migrant self bash-completions install [--path <path]` - Generate a bash completion script and save it to the default or specified path.
+`migrant self bash-completions install [--path <path>]` - Generate a bash completion script and save it to the default or specified path.
 
 
 ### Usage as a library
