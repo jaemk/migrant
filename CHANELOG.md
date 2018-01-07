@@ -9,6 +9,16 @@
 ### Removed
 
 
+## [0.10.2]
+### Added
+
+### Changed
+- Update deps
+- Update readme
+
+### Removed
+
+
 ## [0.10.1]
 ### Added
 
