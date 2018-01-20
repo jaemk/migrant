@@ -1,6 +1,6 @@
 [package]
 name = "migrant"
-version = "0.10.2"
+version = "0.10.3"
 authors = ["James Kominick <james.kominick@gmail.com>"]
 description = "Simple migration manager for postgres, sqlite"
 repository = "https://github.com/jaemk/migrant"
@@ -8,7 +8,13 @@ readme = "README.md"
 keywords = ["database", "migration", "sql", "postgres", "sqlite"]
 categories = ["command-line-utilities", "database", "development-tools"]
 license = "MIT"
-exclude = ["/ci/", ".travis.yml", "/migrations/", "*.db"]
+exclude = [
+    "/ci/*",
+    "/migrations/*",
+    "/db/*",
+    "Migrant.toml",
+    ".travis.yml",
+]
 
 [dependencies]
 clap = "2"

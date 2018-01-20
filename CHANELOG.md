@@ -9,6 +9,19 @@
 ### Removed
 
 
+## [0.10.3]
+### Added
+
+### Changed
+- For the `bash-completions` subcommand, write the success message to stderr so the
+  stdout of the command can be redirected to a file
+- Update deps
+- Cleanup
+- Update cargo excluded items
+
+### Removed
+
+
 ## [0.10.2]
 ### Added
 
