@@ -62,7 +62,7 @@ fn run(dir: &PathBuf, matches: &clap::ArgMatches) -> Result<()> {
                 }
             };
             cli::build_cli().gen_completions_to(APP_NAME.to_lowercase(), clap::Shell::Bash, &mut out);
-            println!("** Success!");
+            eprintln!("** Success!");
             return Ok(())
         }
         println!("migrant: see `--help`");
