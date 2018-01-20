@@ -11,6 +11,7 @@ use std::fs;
 use std::env;
 use std::path::PathBuf;
 use migrant_lib::{Config, Direction, Migrator, DbKind};
+use migrant_lib::config::{SqliteSettingsBuilder, PostgresSettingsBuilder};
 
 mod cli;
 mod errors {
@@ -71,16 +72,25 @@ fn run(dir: &PathBuf, matches: &clap::ArgMatches) -> Result<()> {
     let config_path = migrant_lib::search_for_settings_file(dir);
 
     if matches.is_present("init") || config_path.is_none() {
-        let config = if let Some(init_matches) = matches.subcommand_matches("init") {
-            let dir = init_matches.value_of("location").map(PathBuf::from).unwrap_or_else(|| dir.to_owned());
-            let interactive = !init_matches.is_present("no-confirm");
-            let mut config = Config::init_in(&dir).interactive(interactive);
-            if let Some(db_kind) = init_matches.value_of("type") {
-                config = config.database_type(db_kind.parse::<DbKind>()?);
+        let config = match matches.subcommand_matches("init") {
+            None => Config::init_in(&dir),
+            Some(init_matches) => {
+                let dir = init_matches.value_of("location").map(PathBuf::from).unwrap_or_else(|| dir.to_owned());
+                let mut config = Config::init_in(&dir);
+                let interactive = !init_matches.is_present("no-confirm");
+                config.interactive(interactive);
+                if let Some(db_kind) = init_matches.value_of("type") {
+                    match db_kind.parse::<DbKind>()? {
+                        DbKind::Sqlite => {
+                            config.with_sqlite_options(&SqliteSettingsBuilder::empty());
+                        }
+                        DbKind::Postgres => {
+                            config.with_postgres_options(&PostgresSettingsBuilder::empty());
+                        }
+                    }
+                }
+                config
             }
-            config
-        } else {
-            Config::init_in(&dir)
         };
         config.initialize()?;
         return Ok(())
