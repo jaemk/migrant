@@ -96,7 +96,9 @@ fn run(dir: &PathBuf, matches: &clap::ArgMatches) -> Result<()> {
         return Ok(())
     }
 
-    let config_path = config_path.unwrap();    // absolute path of `.migrant` file
+    // Absolute path of `Migrant.toml` file
+    // This file must exist at this point, created by the block above
+    let config_path = config_path.expect("Settings file must exist");
     let config = Config::from_settings_file(&config_path)?;
 
     if matches.is_present("setup") {
@@ -105,12 +107,15 @@ fn run(dir: &PathBuf, matches: &clap::ArgMatches) -> Result<()> {
     }
 
     if matches.is_present("connect-string") {
-        if config.database_type() == DbKind::Sqlite {
-            let path = config.database_path()?;
-            let path = path.to_str().ok_or_else(|| format!("PathError: Invalid utf8: {:?}", path))?;
-            println!("{}", path);
-        } else {
-            println!("{}", config.connect_string()?);
+        match config.database_type() {
+            DbKind::Sqlite => {
+                let path = config.database_path()?;
+                let path = path.to_str().ok_or_else(|| format!("PathError: Invalid utf8: {:?}", path))?;
+                println!("{}", path);
+            }
+            DbKind::Postgres => {
+                println!("{}", config.connect_string()?);
+            }
         }
         return Ok(())
     }
@@ -184,7 +189,8 @@ fn run(dir: &PathBuf, matches: &clap::ArgMatches) -> Result<()> {
             migrant_lib::edit(&config, &tag, &up_down)?;
         }
         ("which-config", _) => {
-            println!("{}", config_path.to_str().unwrap());
+            let path = config_path.to_str().ok_or_else(|| format!("PathError: Invalid utf8: {:?}", config_path))?;
+            println!("{}", path);
         }
         _ => {
             println!("migrant: see `--help`");
