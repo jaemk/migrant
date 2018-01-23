@@ -9,6 +9,15 @@
 ### Removed
 
 
+## [0.10.4]
+### Added
+
+### Changed
+- Update deps (migrant_lib postgres default port fix)
+
+### Removed
+
+
 ## [0.10.3]
 ### Added
 

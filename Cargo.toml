@@ -1,6 +1,6 @@
 [package]
 name = "migrant"
-version = "0.10.3"
+version = "0.10.4"
 authors = ["James Kominick <james.kominick@gmail.com>"]
 description = "Simple migration manager for postgres, sqlite"
 repository = "https://github.com/jaemk/migrant"
