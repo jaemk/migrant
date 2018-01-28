@@ -9,6 +9,18 @@
 ### Removed
 
 
+## [0.11.0]
+### Added
+- MySQL support!
+
+### Changed
+- Update database feature flags to be more consistent
+    - `postgres, sqlite, mysql`
+- Update crate keywords
+
+### Removed
+
+
 ## [0.10.4]
 ### Added
 
