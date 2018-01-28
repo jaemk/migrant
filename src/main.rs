@@ -11,7 +11,7 @@ use std::fs;
 use std::env;
 use std::path::PathBuf;
 use migrant_lib::{Config, Direction, Migrator, DbKind};
-use migrant_lib::config::{SqliteSettingsBuilder, PostgresSettingsBuilder};
+use migrant_lib::config::{SqliteSettingsBuilder, PostgresSettingsBuilder, MySqlSettingsBuilder};
 
 mod cli;
 mod errors {
@@ -87,6 +87,9 @@ fn run(dir: &PathBuf, matches: &clap::ArgMatches) -> Result<()> {
                         DbKind::Postgres => {
                             config.with_postgres_options(&PostgresSettingsBuilder::empty());
                         }
+                        DbKind::MySql => {
+                            config.with_mysql_options(&MySqlSettingsBuilder::empty());
+                        }
                     }
                 }
                 config
@@ -113,7 +116,7 @@ fn run(dir: &PathBuf, matches: &clap::ArgMatches) -> Result<()> {
                 let path = path.to_str().ok_or_else(|| format!("PathError: Invalid utf8: {:?}", path))?;
                 println!("{}", path);
             }
-            DbKind::Postgres => {
+            DbKind::Postgres | DbKind::MySql => {
                 println!("{}", config.connect_string()?);
             }
         }

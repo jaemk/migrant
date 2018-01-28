@@ -4,11 +4,15 @@
 
 > Basic migration manager powered by [`migrant_lib`](https://github.com/jaemk/migrant_lib)
 
-Supported databases:
 
-- [x] SQLite
-- [x] Postgres
-- [ ] MySQL
+**Supported databases/features:**
+
+| Feature       |    Backend                            |
+|---------------|---------------------------------------|
+| `postgres`    | Enable postgres connectivity          |
+| `sqlite`      | Enable sqlite connectivity            |
+| `mysql`       | Enable mysql connectivity             |
+| `update`      | Enable `self-update` functionality    |
 
 
 `migrant` will manage all migrations that live under `<project-dir>/migrations/`, where `project-dir` is the closest
@@ -20,15 +24,20 @@ If the `migration_location` directory doesn't exist, it will be created the firs
 
 ### Installation
 
-By default `migrant` will build without any features, falling back to using each database's `cli` commands (`psql` & `sqlite3`).
-The `postgres` and `rusqlite` database driver libraries can be activated with the `postgresql` and `sqlite` `features`.
-Both of these drivers require their dev libraries (`postgresql`: `libpq-dev`, `sqlite`: `libsqlite3-dev`).
-Self update functionality (updating to the latest GitHub release) is available behind the `update` feature.
+**Binary releases:**
+
+See [releases](https://github.com/jaemk/migrant/releases) for binaries. If you've already installed a binary release, you can update to the latest release via `migrant self update`.
+
+**Building from source:**
+
+By default `migrant` will build without any features, falling back to using each database's `cli` commands
+(`psql` / `sqlite3` / `mysqlsh`).
+The `postgres`, `rusqlite`, and `mysql` database driver libraries can be activated with their respective feature flags.
+Note, Some drivers require their dev libraries (`postgresql`: `libpq-dev`, `sqlite`: `libsqlite3-dev`).
+[Self update](https://github.com/jaemk/self_update) functionality (updating to the latest GitHub release) is available behind the `update` feature.
 The binary releases are built with all features.
 
-See [releases](https://github.com/jaemk/migrant/releases) for binaries. If you've installed a binary release, you can update to the latest release via `migrant self update`.
-
-Install from source/`crates.io`:
+**Building from source (`crates.io`):**
 
 ```shell
 # install without features
@@ -36,13 +45,13 @@ Install from source/`crates.io`:
 cargo install migrant
 
 # install with `postgres`
-cargo install migrant --features postgresql
+cargo install migrant --features postgres
 
 # install with `rusqlite`
 cargo install migrant --features sqlite
 
 # all
-cargo install migrant --features 'postgresql sqlite'
+cargo install migrant --features 'postgres sqlite mysql update'
 ```
 
 ### Simple Usage
@@ -81,6 +90,13 @@ can be embedded in your actual project.
 
 ### Development
 
-- Install dependencies: `sqlite3`, `libsqlite3-dev`, `postgresql`, `libpq-dev`
+- Install dependencies:
+    - **SQLite**: `apt install sqlite3 libsqlite3-dev`
+    - **PostgreSQL**: `apt install postgresql libpq-dev`
+    - **MySQL**: See [mysql install docs](https://dev.mysql.com/doc/mysql-apt-repo-quick-guide/en/)
+       - [Download the apt repo `.deb`](https://dev.mysql.com/downloads/repo/apt/)
+       - `dpkg -i mysql-apt-config_<version>_all.deb`
+       - `apt update`
+       - `apt install mysql-server mysql-shell`
 - `cargo build`
 
