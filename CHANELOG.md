@@ -1,6 +1,5 @@
 # Changelog
 
-
 ## [Unreleased]
 ### Added
 
@@ -8,6 +7,17 @@
 
 ### Removed
 
+----
+
+## [0.11.1]
+### Added
+
+### Changed
+- Update `migrant_lib`
+
+### Removed
+
+----
 
 ## [0.11.0]
 ### Added
@@ -20,6 +30,7 @@
 
 ### Removed
 
+----
 
 ## [0.10.4]
 ### Added
@@ -29,6 +40,7 @@
 
 ### Removed
 
+----
 
 ## [0.10.3]
 ### Added
@@ -42,6 +54,7 @@
 
 ### Removed
 
+----
 
 ## [0.10.2]
 ### Added
@@ -52,6 +65,7 @@
 
 ### Removed
 
+----
 
 ## [0.10.1]
 ### Added
@@ -62,6 +76,7 @@
 
 ### Removed
 
+----
 
 ## [0.10.0]
 ### Added
@@ -74,6 +89,7 @@
 
 ### Removed
 
+----
 
 ## [0.9.11]
 ### Added
