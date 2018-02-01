@@ -9,6 +9,16 @@
 
 ----
 
+## [0.11.2]
+### Added
+
+### Changed
+- Update `migrant_lib`
+
+### Removed
+
+----
+
 ## [0.11.1]
 ### Added
 
