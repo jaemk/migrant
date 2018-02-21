@@ -19,7 +19,10 @@
 parent path that contains a `Migrant.toml` configuration file (`..../<project-dir>/Migrant.toml`).
 The default migration file location can be modified in your `Migrant.toml` file (`"migration_location"`).
 If the `migration_location` directory doesn't exist, it will be created the first time you create a new migration.
-`migrant` stores all applied migrations in a database table named `__migrant_migrations`
+`migrant` stores all applied migrations in a database table named `__migrant_migrations`.
+
+*Note:* SQL statements are batch executed as is. If you want your migration to happen atomically in a
+transaction you must manually wrap your statements in a transaction (`begin transaction; ... commit;`).
 
 
 ### Installation
