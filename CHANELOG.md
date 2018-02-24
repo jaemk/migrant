@@ -1,9 +1,10 @@
 # Changelog
 
-## [Unreleased]
+## [0.11.3]
 ### Added
 
 ### Changed
+- Update migrant_lib - improves invalid tag error messages
 
 ### Removed
 
