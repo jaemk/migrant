@@ -102,7 +102,8 @@ fn run(dir: &PathBuf, matches: &clap::ArgMatches) -> Result<()> {
     // Absolute path of `Migrant.toml` file
     // This file must exist at this point, created by the block above
     let config_path = config_path.expect("Settings file must exist");
-    let config = Config::from_settings_file(&config_path)?;
+    let mut config = Config::from_settings_file(&config_path)?;
+    config.use_cli_compatible_tags(true);
 
     if matches.is_present("setup") {
         config.setup()?;
