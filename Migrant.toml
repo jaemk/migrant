@@ -1,0 +1,12 @@
+
+# Required, do not edit
+database_type = "sqlite"
+
+# Required: Absolute or relative path to your database file.
+#           If a relative path is provided, it will be assumed
+#           to be relative to this config file dir: `./`
+# ex.) database_name = "db/db.db"
+database_path = "db/db.db"
+
+migration_location = "migrations"  # default "migrations"
+
