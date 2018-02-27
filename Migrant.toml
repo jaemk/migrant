@@ -6,7 +6,7 @@ database_type = "sqlite"
 #           If a relative path is provided, it will be assumed
 #           to be relative to this config file dir: `./`
 # ex.) database_name = "db/db.db"
-database_path = "db/db.db"
+database_path = "db/migrant.db"
 
 migration_location = "migrations"  # default "migrations"
 
