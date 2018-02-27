@@ -51,6 +51,7 @@ matrix:
 
 before_install:
     - set -e
+    - sudo apt-get install sqlite3
 
 install:
   - sh ci/install.sh
