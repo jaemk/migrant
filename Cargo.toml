@@ -31,4 +31,5 @@ sqlite = ["migrant_lib/d-sqlite"]
 postgres = ["migrant_lib/d-postgres"]
 mysql = ["migrant_lib/d-mysql"]
 update = ["self_update"]
+integration_tests = []
 
