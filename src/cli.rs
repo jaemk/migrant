@@ -6,7 +6,7 @@ pub fn build_cli() -> App<'static, 'static> {
     App::new(APP_NAME)
         .version(APP_VERSION)
         .author("James K. <james.kominick@gmail.com>")
-        .about("Postgres/SQLite migration manager")
+        .about("Postgres/SQLite/MySQL migration manager")
         .subcommand(SubCommand::with_name("self")
                     .about("Self referential things")
                     .subcommand(SubCommand::with_name("update")

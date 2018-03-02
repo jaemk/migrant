@@ -2,7 +2,7 @@
 name = "migrant"
 version = "0.11.3"
 authors = ["James Kominick <james.kominick@gmail.com>"]
-description = "Database migration management for postgres, sqlite, mysql"
+description = "CLI Database migration management for postgres, sqlite, mysql"
 repository = "https://github.com/jaemk/migrant"
 readme = "README.md"
 keywords = ["database", "migration", "postgres", "sqlite", "mysql"]
