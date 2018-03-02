@@ -1,5 +1,16 @@
 # Changelog
 
+## [Unreleased]
+### Added
+- Integration tests
+
+### Changed
+- Crate / program description
+
+### Removed
+
+----
+
 ## [0.11.3]
 ### Added
 
