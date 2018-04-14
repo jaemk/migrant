@@ -95,3 +95,8 @@ can be embedded in your actual project.
 
 See [CONTRIBUTING](https://github.com/jaemk/migrant/blob/master/CONTRIBUTING.md)
 
+
+### Docker
+
+An image with the binary installed is available at `jaemk/migrant:latest` 
+
