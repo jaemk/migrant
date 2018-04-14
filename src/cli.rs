@@ -5,7 +5,7 @@ use super::{APP_VERSION, APP_NAME};
 pub fn build_cli() -> App<'static, 'static> {
     App::new(APP_NAME)
         .version(APP_VERSION)
-        .author("James K. <james.kominick@gmail.com>")
+        .author("James K. <james@kominick.com>")
         .about("Postgres/SQLite/MySQL migration manager")
         .subcommand(SubCommand::with_name("self")
                     .about("Self referential things")
