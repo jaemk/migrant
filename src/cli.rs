@@ -38,7 +38,7 @@ pub fn build_cli() -> App<'static, 'static> {
                  .long("type")
                  .short("t")
                  .takes_value(true)
-                 .help("Specify the database type (sqlite|postgres)"))
+                 .help("Specify the database type (sqlite|postgres|mysql)"))
             .arg(Arg::with_name("location")
                  .long("location")
                  .short("l")
