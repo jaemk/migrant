@@ -75,10 +75,12 @@ fn run(dir: &PathBuf, matches: &clap::ArgMatches) -> Result<()> {
         let config = match matches.subcommand_matches("init") {
             None => Config::init_in(&dir),
             Some(init_matches) => {
+                let from_env = init_matches.is_present("default-from-env");
                 let dir = init_matches.value_of("location").map(PathBuf::from).unwrap_or_else(|| dir.to_owned());
                 let mut config = Config::init_in(&dir);
                 let interactive = !init_matches.is_present("no-confirm");
                 config.interactive(interactive);
+                config.with_env_defaults(from_env);
                 if let Some(db_kind) = init_matches.value_of("type") {
                     match db_kind.parse::<DbKind>()? {
                         DbKind::Sqlite => {
