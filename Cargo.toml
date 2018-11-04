@@ -1,7 +1,7 @@
 [package]
 name = "migrant"
-version = "0.11.4"
-authors = ["James Kominick <james.kominick@gmail.com>"]
+version = "0.11.5"
+authors = ["James Kominick <james@kominick.com>"]
 description = "CLI Database migration management for postgres, sqlite, mysql"
 repository = "https://github.com/jaemk/migrant"
 readme = "README.md"
@@ -19,15 +19,16 @@ exclude = [
 [dependencies]
 clap = "2"
 error-chain = "0.11"
-migrant_lib = { version = "0.19" }
+migrant_lib = { version = "0.20" }
 self_update = { version = "0.4", optional = true }
+rusqlite = { version = "0.14", optional = true, features = ["bundled"] }
 
 [dev-dependencies]
 assert_cli = "0.5"
 
 [features]
 default = []
-sqlite = ["migrant_lib/d-sqlite"]
+sqlite = ["migrant_lib/d-sqlite", "rusqlite"]
 postgres = ["migrant_lib/d-postgres"]
 mysql = ["migrant_lib/d-mysql"]
 update = ["self_update"]
