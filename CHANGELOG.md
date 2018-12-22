@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.12.0]
+### Added
+
+### Changed
+- Update `migrant_lib`
+
+### Removed
+
+----
+
 ## [0.11.4]
 ### Added
 - Integration tests
