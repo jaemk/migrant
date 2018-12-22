@@ -21,7 +21,7 @@ clap = "2"
 error-chain = "0.11"
 migrant_lib = { version = "0.22" }
 self_update = { version = "0.4", optional = true }
-rusqlite = { version = "0.14", optional = true, features = ["bundled"] }
+rusqlite = { version = "0.15", optional = true, features = ["bundled"] }
 
 [dev-dependencies]
 assert_cli = "0.5"
