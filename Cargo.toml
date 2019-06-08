@@ -22,6 +22,7 @@ error-chain = "0.11"
 migrant_lib = { version = "0.22" }
 self_update = { version = "0.4", optional = true }
 rusqlite = { version = "0.15", optional = true, features = ["bundled"] }
+dotenv = "0.14"
 
 [dev-dependencies]
 assert_cli = "0.5"
