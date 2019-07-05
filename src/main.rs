@@ -54,7 +54,7 @@ fn run(dir: &PathBuf, matches: &clap::ArgMatches) -> Result<()> {
         }
 
         if let Some(compl_matches) = self_matches.subcommand_matches("bash-completions") {
-            let mut out: Box<io::Write> = {
+            let mut out: Box<dyn io::Write> = {
                 if let Some(install_matches) = compl_matches.subcommand_matches("install") {
                     let install_path = install_matches.value_of("path").unwrap();
                     let prompt = format!(
