@@ -1,6 +1,6 @@
 extern crate assert_cli;
 
-#[cfg(feature="integration_tests")]
+#[cfg(feature = "integration_tests")]
 mod tests {
     use assert_cli::Assert;
 
@@ -12,61 +12,87 @@ mod tests {
             .unwrap();
         Assert::command(&["cargo", "run", "--features", "sqlite", "--"])
             .with_args(&["apply", "-ad"])
-            .execute().is_ok();
+            .execute()
+            .ok();
 
         Assert::command(&["cargo", "run", "--features", "sqlite", "--"])
             .with_args(&["apply", "-ad"])
             .fails()
-            .stderr().contains("MigrationComplete: No un-applied `Down` migrations found")
+            .stderr()
+            .contains("MigrationComplete: No un-applied `Down` migrations found")
             .unwrap();
 
         Assert::command(&["cargo", "run", "--features", "sqlite", "--"])
             .with_args(&["list"])
-            .stdout().contains("Current Migration Status:")
-            .stdout().contains("[ ] 20170812145327_initial")
-            .stdout().contains("[ ] 20171126194042_second")
+            .stdout()
+            .contains("Current Migration Status:")
+            .stdout()
+            .contains("[ ] 20170812145327_initial")
+            .stdout()
+            .contains("[ ] 20171126194042_second")
             .unwrap();
 
         Assert::command(&["cargo", "run", "--features", "sqlite", "--"])
             .with_args(&["apply", "-a"])
-            .stdout().contains("Applying[Up]:")
-            .stdout().contains("Current Migration Status:")
-            .stdout().contains("[✓] 20170812145327_initial")
-            .stdout().contains("[✓] 20171126194042_second")
+            .stdout()
+            .contains("Applying[Up]:")
+            .stdout()
+            .contains("Current Migration Status:")
+            .stdout()
+            .contains("[✓] 20170812145327_initial")
+            .stdout()
+            .contains("[✓] 20171126194042_second")
             .unwrap();
 
         Assert::command(&["cargo", "run", "--features", "sqlite", "--"])
             .with_args(&["list"])
-            .stdout().contains("Current Migration Status:")
-            .stdout().contains("[✓] 20170812145327_initial")
-            .stdout().contains("[✓] 20171126194042_second")
+            .stdout()
+            .contains("Current Migration Status:")
+            .stdout()
+            .contains("[✓] 20170812145327_initial")
+            .stdout()
+            .contains("[✓] 20171126194042_second")
             .unwrap();
 
         Assert::command(&["cargo", "run", "--features", "sqlite", "--"])
             .with_args(&["redo"])
-            .stdout().contains("Applying[Down]:")
-            .stdout().contains("Current Migration Status:")
-            .stdout().contains("[ ] 20171126194042_second")
-            .stdout().contains("Applying[Up]:")
-            .stdout().contains("Current Migration Status:")
-            .stdout().contains("[✓] 20171126194042_second")
+            .stdout()
+            .contains("Applying[Down]:")
+            .stdout()
+            .contains("Current Migration Status:")
+            .stdout()
+            .contains("[ ] 20171126194042_second")
+            .stdout()
+            .contains("Applying[Up]:")
+            .stdout()
+            .contains("Current Migration Status:")
+            .stdout()
+            .contains("[✓] 20171126194042_second")
             .unwrap();
 
         Assert::command(&["cargo", "run", "--features", "sqlite", "--"])
             .with_args(&["redo", "--all"])
-            .stdout().contains("Applying[Down]:")
-            .stdout().contains("Current Migration Status:")
-            .stdout().contains("[ ] 20170812145327_initial")
-            .stdout().contains("[ ] 20171126194042_second")
-            .stdout().contains("Applying[Up]:")
-            .stdout().contains("Current Migration Status:")
-            .stdout().contains("[✓] 20170812145327_initial")
-            .stdout().contains("[✓] 20171126194042_second")
+            .stdout()
+            .contains("Applying[Down]:")
+            .stdout()
+            .contains("Current Migration Status:")
+            .stdout()
+            .contains("[ ] 20170812145327_initial")
+            .stdout()
+            .contains("[ ] 20171126194042_second")
+            .stdout()
+            .contains("Applying[Up]:")
+            .stdout()
+            .contains("Current Migration Status:")
+            .stdout()
+            .contains("[✓] 20170812145327_initial")
+            .stdout()
+            .contains("[✓] 20171126194042_second")
             .unwrap();
 
         Assert::command(&["cargo", "run", "--features", "sqlite", "--"])
             .with_args(&["apply", "-ad"])
-            .execute().is_ok();
+            .execute()
+            .ok();
     }
 }
-
