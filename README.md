@@ -21,6 +21,10 @@ The default migration file location can be modified in your `Migrant.toml` file 
 If the `migration_location` directory doesn't exist, it will be created the first time you create a new migration.
 `migrant` stores all applied migrations in a database table named `__migrant_migrations`.
 
+*Note:* Configuration values prefixed with `env:` in your `Migrant.toml` will be sourced from environment variables.
+For example, `database_user = "env:DB_USER"` will use the value of the environment variable `DB_USER`.
+If a `.env.` file exists, it will be "sourced" automatically before your `Migrant.toml` is loaded.
+
 *Note:* SQL statements are batch executed as is. If you want your migration to happen atomically in a
 transaction you must manually wrap your statements in a transaction (`begin transaction; ... commit;`).
 
