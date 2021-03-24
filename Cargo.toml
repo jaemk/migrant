@@ -1,6 +1,6 @@
 [package]
 name = "migrant"
-version = "0.13.0"
+version = "0.14.0"
 authors = ["James Kominick <james@kominick.com>"]
 description = "CLI Database migration management for postgres, sqlite, mysql"
 repository = "https://github.com/jaemk/migrant"
