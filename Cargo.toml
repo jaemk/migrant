@@ -16,16 +16,49 @@ exclude = [
     ".travis.yml",
 ]
 
-[dependencies]
-clap = "2"
+[workspace]
+members = ["migrant_lib"]
+
+[workspace.dependencies]
+migrant_lib = { path = "migrant_lib", version = "0.34" }
+
+# shared between the cli and the library
 error-chain = "0.12"
-migrant_lib = { version = "0.32" }
-self_update = { version = "0.26", optional = true }
-rusqlite = { version = "0.24", optional = true, features = ["bundled"] }
+rusqlite = "0.29"
+
+# cli-only
+clap = "2"
+self_update = "0.26"
 dotenv = "0.14"
+assert_cli = "0.6"
+
+# library-only
+chrono = "0.4"
+lazy_static = "1"
+regex = "1"
+walkdir = "2"
+serde = "1"
+serde_derive = "1"
+serde_json = "1"
+toml = "0.5"
+percent-encoding = "2"
+url = "2"
+log = "0.4"
+postgres = "0.19"
+native-tls = "0.2"
+postgres-native-tls = "0.5"
+mysql = "28"
+
+[dependencies]
+clap = { workspace = true }
+error-chain = { workspace = true }
+migrant_lib = { workspace = true }
+self_update = { workspace = true, optional = true }
+rusqlite = { workspace = true, optional = true, features = ["bundled"] }
+dotenv = { workspace = true }
 
 [dev-dependencies]
-assert_cli = "0.6"
+assert_cli = { workspace = true }
 
 [features]
 default = []
@@ -34,4 +67,3 @@ postgres = ["migrant_lib/d-postgres"]
 mysql = ["migrant_lib/d-mysql"]
 update = ["self_update"]
 integration_tests = []
-
