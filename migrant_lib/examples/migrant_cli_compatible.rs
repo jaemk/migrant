@@ -15,8 +15,6 @@ Run with: `cargo run --example migrant_cli_compatible [--features d-sqlite]`
 Note: Running without features will use the corresponding database shell commands.
       Use the respective `--features` to use the actual database driver libraries (`d-sqlite`, `d-postgres`, `d-mysql`)
 */
-extern crate migrant_lib;
-
 use migrant_lib::config::SqliteSettingsBuilder;
 use migrant_lib::Config;
 use std::env;

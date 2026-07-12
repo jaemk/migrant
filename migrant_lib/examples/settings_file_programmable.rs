@@ -8,8 +8,6 @@ NOTE: The feature-gates are only required here so the example will compile when 
 
 This should be run with `cargo run --example settings_file_programmable --features d-sqlite`
 */
-extern crate migrant_lib;
-
 #[cfg(feature = "d-sqlite")]
 use migrant_lib::config::SqliteSettingsBuilder;
 #[cfg(feature = "d-sqlite")]

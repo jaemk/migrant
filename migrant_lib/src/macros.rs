@@ -1,41 +1,20 @@
 /*!
-Macros
-
+Internal helper macros
 */
 
-macro_rules! print_flush {
-    ($lit:expr) => {
-        print_flush!($lit,)
+/// Construct an `Error` of the given variant from a format string
+macro_rules! err {
+    ($kind:ident, $($fmt:tt)*) => {
+        $crate::errors::Error::$kind(format!($($fmt)*))
     };
-    ($lit:expr, $($arg:expr),*) => {
-        {
-            use ::std::io::Write;
-            print!($lit, $($arg),*);
-            ::std::io::stdout().flush().expect("Failed Flushing stdout");
-        }
-    }
 }
 
-// -------------
-// error-chain
-// -------------
-
-/// Helper for formatting Errors that wrap strings
-macro_rules! format_err {
-    ($error:expr, $str:expr) => {
-        $error(format!($str))
+/// Return early with an `Error` of the given variant
+macro_rules! bail {
+    ($kind:ident, $($fmt:tt)*) => {
+        return Err($crate::errors::Error::$kind(format!($($fmt)*)))
     };
-    ($error:expr, $str:expr, $($arg:expr),*) => {
-        $error(format!($str, $($arg),*))
-    }
 }
 
-/// Helper for formatting strings with error-chain's `bail!` macro
-macro_rules! bail_fmt {
-    ($error:expr, $str:expr) => {
-        bail!(format_err!($error, $str))
-    };
-    ($error:expr, $str:expr, $($arg:expr),*) => {
-        bail!(format_err!($error, $str, $($arg),*))
-    }
-}
+pub(crate) use bail;
+pub(crate) use err;

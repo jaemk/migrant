@@ -1,11 +1,29 @@
-use super::errors::*;
+/*!
+Database drivers
 
-mod sql {
+Each enabled backend provides a connection type holding a live database
+connection. All migration-table operations go through [`DbConnection`],
+which is lazily established by [`Config`](crate::Config) and kept alive
+for the life of the config (and all of its clones).
+*/
+use std::fmt;
+
+use crate::config::Config;
+use crate::errors::*;
+use crate::DbKind;
+
+#[allow(dead_code)] // per-backend statements are unused when their feature is disabled
+pub(crate) mod sql {
     pub static CREATE_TABLE: &str = "create table __migrant_migrations(tag text unique);";
     pub static MYSQL_CREATE_TABLE: &str =
         "create table __migrant_migrations(tag varchar(512) unique);";
 
     pub static GET_MIGRATIONS: &str = "select tag from __migrant_migrations;";
+    pub static INSERT_MIGRATION_PG_SQLITE: &str =
+        "insert into __migrant_migrations (tag) values ($1)";
+    pub static REMOVE_MIGRATION_PG_SQLITE: &str = "delete from __migrant_migrations where tag = $1";
+    pub static INSERT_MIGRATION_MYSQL: &str = "insert into __migrant_migrations (tag) values (?)";
+    pub static REMOVE_MIGRATION_MYSQL: &str = "delete from __migrant_migrations where tag = ?";
 
     pub static SQLITE_MIGRATION_TABLE_EXISTS: &str = "select exists(select 1 from sqlite_master where type = 'table' and name = '__migrant_migrations');";
     pub static PG_MIGRATION_TABLE_EXISTS: &str =
@@ -13,6 +31,126 @@ mod sql {
     pub static MYSQL_MIGRATION_TABLE_EXISTS: &str = "select exists(select 1 from information_schema.tables where table_name='__migrant_migrations') as tag;";
 }
 
-pub mod mysql;
-pub mod pg;
-pub mod sqlite;
+#[cfg(feature = "d-mysql")]
+pub(crate) mod mysql;
+#[cfg(feature = "d-postgres")]
+pub(crate) mod pg;
+#[cfg(feature = "d-sqlite")]
+pub(crate) mod sqlite;
+
+/// A live connection to one of the supported databases
+///
+/// Server connections are boxed to keep the enum small
+pub(crate) enum DbConnection {
+    #[cfg(feature = "d-sqlite")]
+    Sqlite(sqlite::SqliteConn),
+    #[cfg(feature = "d-postgres")]
+    Postgres(Box<pg::PgConn>),
+    #[cfg(feature = "d-mysql")]
+    MySql(Box<mysql::MySqlConn>),
+}
+
+impl fmt::Debug for DbConnection {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let kind = match self {
+            #[cfg(feature = "d-sqlite")]
+            DbConnection::Sqlite(_) => "sqlite",
+            #[cfg(feature = "d-postgres")]
+            DbConnection::Postgres(_) => "postgres",
+            #[cfg(feature = "d-mysql")]
+            DbConnection::MySql(_) => "mysql",
+            #[allow(unreachable_patterns)]
+            _ => "unknown",
+        };
+        write!(f, "DbConnection({})", kind)
+    }
+}
+
+/// Dispatch a method call to the active backend connection
+macro_rules! dispatch {
+    ($self:expr, $conn:ident => $body:expr) => {
+        match $self {
+            #[cfg(feature = "d-sqlite")]
+            DbConnection::Sqlite($conn) => $body,
+            #[cfg(feature = "d-postgres")]
+            DbConnection::Postgres($conn) => $body,
+            #[cfg(feature = "d-mysql")]
+            DbConnection::MySql($conn) => $body,
+            #[allow(unreachable_patterns)]
+            _ => Err(Error::FeatureRequired("d-sqlite / d-postgres / d-mysql")),
+        }
+    };
+}
+
+// method arguments are unused in the fallback arm when no db features are enabled
+#[allow(unused_variables)]
+impl DbConnection {
+    /// Open a new connection for the given config
+    pub(crate) fn connect(config: &Config) -> Result<Self> {
+        match config.database_type() {
+            DbKind::Sqlite => {
+                #[cfg(feature = "d-sqlite")]
+                {
+                    let path = config.database_path_string()?;
+                    Ok(DbConnection::Sqlite(sqlite::SqliteConn::open(&path)?))
+                }
+                #[cfg(not(feature = "d-sqlite"))]
+                Err(Error::FeatureRequired("d-sqlite"))
+            }
+            DbKind::Postgres => {
+                #[cfg(feature = "d-postgres")]
+                {
+                    let conn_str = config.connect_string()?;
+                    let cert = config.ssl_cert_file();
+                    Ok(DbConnection::Postgres(Box::new(pg::PgConn::connect(
+                        &conn_str,
+                        cert.as_deref(),
+                    )?)))
+                }
+                #[cfg(not(feature = "d-postgres"))]
+                Err(Error::FeatureRequired("d-postgres"))
+            }
+            DbKind::MySql => {
+                #[cfg(feature = "d-mysql")]
+                {
+                    let conn_str = config.connect_string()?;
+                    Ok(DbConnection::MySql(Box::new(mysql::MySqlConn::connect(
+                        &conn_str,
+                    )?)))
+                }
+                #[cfg(not(feature = "d-mysql"))]
+                Err(Error::FeatureRequired("d-mysql"))
+            }
+        }
+    }
+
+    /// Check whether the `__migrant_migrations` table exists
+    pub(crate) fn migration_table_exists(&mut self) -> Result<bool> {
+        dispatch!(self, c => c.migration_table_exists())
+    }
+
+    /// Create the `__migrant_migrations` table if missing, returning `true` if created
+    pub(crate) fn setup_migration_table(&mut self) -> Result<bool> {
+        dispatch!(self, c => c.setup_migration_table())
+    }
+
+    /// Select all applied migration tags
+    pub(crate) fn applied_tags(&mut self) -> Result<Vec<String>> {
+        dispatch!(self, c => c.applied_tags())
+    }
+
+    /// Record a migration tag as applied
+    pub(crate) fn insert_tag(&mut self, tag: &str) -> Result<()> {
+        dispatch!(self, c => c.insert_tag(tag))
+    }
+
+    /// Remove a migration tag from the applied set
+    pub(crate) fn remove_tag(&mut self, tag: &str) -> Result<()> {
+        dispatch!(self, c => c.remove_tag(tag))
+    }
+
+    /// Execute a batch of sql statements
+    pub(crate) fn execute_batch(&mut self, sql: &str) -> Result<()> {
+        dispatch!(self, c => c.execute_batch(sql))
+    }
+}

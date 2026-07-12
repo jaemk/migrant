@@ -11,8 +11,6 @@ NOTE: The feature-gates are only required here so the example will compile when 
 
 This should be run with `cargo run --example embedded_cli_compatible --features d-sqlite`
 */
-extern crate migrant_lib;
-
 #[cfg(feature = "d-sqlite")]
 use migrant_lib::{Config, Direction, Migrator, Settings};
 #[cfg(feature = "d-sqlite")]

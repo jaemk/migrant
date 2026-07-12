@@ -2,86 +2,84 @@
 Error types
 */
 
-use chrono;
-use serde_json;
-use std;
-use toml;
-use url;
+/// Convenience alias for `Result` with [`Error`]
+pub type Result<T> = std::result::Result<T, Error>;
 
-#[cfg(feature = "d-sqlite")]
-use rusqlite;
+/// The error type returned by all fallible `migrant_lib` operations
+#[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
+pub enum Error {
+    /// Invalid or incomplete configuration
+    #[error("ConfigError: {0}")]
+    Config(String),
 
-#[cfg(feature = "d-postgres")]
-use postgres;
+    /// Failure while applying or un-applying a migration
+    #[error("MigrationError: {0}")]
+    Migration(String),
 
-#[cfg(feature = "d-mysql")]
-use mysql;
+    /// All migrations in the requested direction have already been applied
+    #[error("MigrationComplete: {0}")]
+    MigrationComplete(String),
 
-error_chain! {
-    foreign_links {
-        Io(std::io::Error);
-        StringUtf8Error(std::string::FromUtf8Error);
-        StrUtf8Error(std::str::Utf8Error);
-        TomlDe(toml::de::Error);
-        TomlSe(toml::ser::Error);
-        UrlParse(url::ParseError);
-        ChronoParse(chrono::ParseError);
-        Json(serde_json::Error);
-        Sqlite(rusqlite::Error) #[cfg(feature="d-sqlite")];
-        Postgres(postgres::Error) #[cfg(feature="d-postgres")];
-        MySql(mysql::Error) #[cfg(feature="d-mysql")];
-    }
-    errors {
-        Config(s: String) {
-            description("ConfigError")
-            display("ConfigError: {}", s)
-        }
-        Migration(s: String) {
-            description("MigrationError")
-            display("MigrationError: {}", s)
-        }
-        MigrationComplete(s: String) {
-            description("MigrationComplete")
-            display("MigrationComplete: {}", s)
-        }
-        MigrationNotFound(s: String) {
-            description("MigrationNotFound")
-            display("MigrationNotFound: {}", s)
-        }
-        ShellCommand(s: String) {
-            description("ShellCommand")
-            display("ShellCommandError: {}", s)
-        }
-        ShellCommandNoOutput(s: String) {
-            description("ShellCommandNoOutput")
-            display("ShellCommandNoOutputError: {}", s)
-        }
-        PathError(s: String) {
-            description("PathError")
-            display("PathError: {}", s)
-        }
-        TagError(s: String) {
-            description("TagError")
-            display("TagError: {}", s)
-        }
-        InvalidDbKind(s: String) {
-            description("InvalidDbKind")
-            display("InvalidDbKind: {}", s)
-        }
-    }
+    /// A referenced migration could not be found
+    #[error("MigrationNotFound: {0}")]
+    MigrationNotFound(String),
+
+    /// Failure while running an external command (editor, database shell)
+    #[error("ShellCommandError: {0}")]
+    ShellCommand(String),
+
+    /// A path could not be interpreted or constructed
+    #[error("PathError: {0}")]
+    PathError(String),
+
+    /// A migration tag does not conform to naming requirements
+    #[error("TagError: {0}")]
+    TagError(String),
+
+    /// An unknown database type was specified
+    #[error("InvalidDbKind: {0}")]
+    InvalidDbKind(String),
+
+    /// The operation requires a database feature that was not enabled at compile time
+    #[error("FeatureRequired: this operation requires the `{0}` cargo feature")]
+    FeatureRequired(&'static str),
+
+    /// IO error
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+
+    /// Settings file deserialization error
+    #[error(transparent)]
+    TomlDe(#[from] toml::de::Error),
+
+    /// Connection string construction error
+    #[error(transparent)]
+    UrlParse(#[from] url::ParseError),
+
+    /// Timestamp parsing error
+    #[error(transparent)]
+    ChronoParse(#[from] chrono::ParseError),
+
+    /// Sqlite driver error
+    #[cfg(feature = "d-sqlite")]
+    #[error(transparent)]
+    Sqlite(#[from] rusqlite::Error),
+
+    /// Postgres driver error
+    #[cfg(feature = "d-postgres")]
+    #[error(transparent)]
+    Postgres(#[from] postgres::Error),
+
+    /// MySQL driver error
+    #[cfg(feature = "d-mysql")]
+    #[error(transparent)]
+    MySql(#[from] mysql::Error),
 }
 
 impl Error {
-    /// Return `true` if the `ErrorKind` is `ErrorKind::MigrationComplete`
+    /// Return `true` if the error is `Error::MigrationComplete`
     pub fn is_migration_complete(&self) -> bool {
-        matches!(*self.kind(), ErrorKind::MigrationComplete(_))
-    }
-
-    /// Return `true` if the `ErrorKind` is `ErrorKind::ShellCommandNoOutput`
-    ///
-    /// This error only arises when using `mysql` is "shell-wrapping" mode where
-    /// the `mysqlsh` utility is used.
-    pub fn is_shell_command_no_output(&self) -> bool {
-        matches!(*self.kind(), ErrorKind::ShellCommandNoOutput(_))
+        matches!(self, Error::MigrationComplete(_))
     }
 }

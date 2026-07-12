@@ -1,69 +1,76 @@
 [package]
 name = "migrant"
-version = "0.14.0"
-authors = ["James Kominick <james@kominick.com>"]
+version = "0.15.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
 description = "CLI Database migration management for postgres, sqlite, mysql"
 repository = "https://github.com/jaemk/migrant"
 readme = "README.md"
 keywords = ["database", "migration", "postgres", "sqlite", "mysql"]
 categories = ["command-line-utilities", "database", "development-tools"]
-license = "MIT"
 exclude = [
-    "/ci/*",
     "/migrations/*",
     "/db/*",
     "Migrant.toml",
-    ".travis.yml",
 ]
 
 [workspace]
 members = ["migrant_lib"]
 
+[workspace.package]
+edition = "2021"
+rust-version = "1.88"
+authors = ["James Kominick <james@kominick.com>"]
+license = "MIT"
+
 [workspace.dependencies]
-migrant_lib = { path = "migrant_lib", version = "0.34" }
+migrant_lib = { path = "migrant_lib", version = "0.35" }
 
 # shared between the cli and the library
-error-chain = "0.12"
-rusqlite = "0.29"
+rusqlite = "0.40"
 
 # cli-only
-clap = "2"
-self_update = "0.26"
-dotenv = "0.14"
-assert_cli = "0.6"
+clap = "4"
+clap_complete = "4"
+dotenvy = "0.15"
+self_update = "0.44"
+assert_cmd = "2"
+predicates = "3"
 
 # library-only
 chrono = "0.4"
-lazy_static = "1"
-regex = "1"
-walkdir = "2"
-serde = "1"
-serde_derive = "1"
-serde_json = "1"
-toml = "0.5"
-percent-encoding = "2"
-url = "2"
 log = "0.4"
-postgres = "0.19"
-native-tls = "0.2"
-postgres-native-tls = "0.5"
 mysql = "28"
+native-tls = "0.2"
+percent-encoding = "2"
+postgres = "0.19"
+postgres-native-tls = "0.5"
+serde = { version = "1", features = ["derive"] }
+tempfile = "3"
+thiserror = "2"
+toml = "0.9"
+url = "2"
+walkdir = "2"
 
 [dependencies]
 clap = { workspace = true }
-error-chain = { workspace = true }
+clap_complete = { workspace = true }
+dotenvy = { workspace = true }
 migrant_lib = { workspace = true }
-self_update = { workspace = true, optional = true }
 rusqlite = { workspace = true, optional = true, features = ["bundled"] }
-dotenv = { workspace = true }
+self_update = { workspace = true, optional = true }
 
 [dev-dependencies]
-assert_cli = { workspace = true }
+assert_cmd = { workspace = true }
+predicates = { workspace = true }
 
 [features]
 default = []
-sqlite = ["migrant_lib/d-sqlite", "rusqlite"]
+sqlite = ["migrant_lib/d-sqlite", "dep:rusqlite"]
 postgres = ["migrant_lib/d-postgres"]
 mysql = ["migrant_lib/d-mysql"]
-update = ["self_update"]
+update = ["dep:self_update"]
+vendored-openssl = ["migrant_lib/vendored-openssl"]
 integration_tests = []

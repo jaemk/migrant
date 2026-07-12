@@ -14,45 +14,43 @@ NOTE: The feature-gates are only required here so the example will compile when 
 This should be run with `cargo run --example embedded_programmable --features d-sqlite`
 
 */
-extern crate migrant_lib;
-#[cfg(feature = "d-sqlite")]
-extern crate rusqlite;
-
 #[cfg(feature = "d-sqlite")]
 use migrant_lib::{
     Config, ConnConfig, Direction, EmbeddedMigration, FileMigration, FnMigration, Migrator,
     Settings,
 };
 #[cfg(feature = "d-sqlite")]
-use rusqlite::types::ToSql;
-#[cfg(feature = "d-sqlite")]
 use std::env;
 
 #[cfg(feature = "d-sqlite")]
 mod migrations {
     use super::*;
+    use migrant_lib::rusqlite;
+
     pub struct AddUserData;
 
     impl AddUserData {
         pub fn up(config: ConnConfig) -> Result<(), Box<dyn std::error::Error>> {
-            let db_path = config.database_path()?;
-            let conn = rusqlite::Connection::open(&db_path)?;
+            // Reuse the live connection held by the config -- this also
+            // works for in-memory (`:memory:`) databases
+            let handle = config.sqlite_connection()?;
+            let conn = handle.lock().unwrap();
             let people = ["james", "lauren", "bean"];
             for (i, name) in people.iter().enumerate() {
                 let id = i as u32 + 1;
                 conn.execute(
                     "insert into users (id, name) values (?1, ?2);",
-                    &[&id as &dyn ToSql, name],
+                    rusqlite::params![id, name],
                 )?;
             }
             Ok(())
         }
         pub fn down(config: ConnConfig) -> Result<(), Box<dyn std::error::Error>> {
-            let db_path = config.database_path()?;
-            let conn = rusqlite::Connection::open(&db_path)?;
+            let handle = config.sqlite_connection()?;
+            let conn = handle.lock().unwrap();
             let people = ["james", "lauren", "bean"];
             for name in &people {
-                conn.execute("delete from users where name = ?1", &[name])?;
+                conn.execute("delete from users where name = ?1", [name])?;
             }
             Ok(())
         }

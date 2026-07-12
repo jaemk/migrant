@@ -1,20 +1,18 @@
 /*!
 Embedded / programmable migrations
-
 */
-use chrono::{DateTime, Utc};
-use std;
 use std::borrow::Cow;
 use std::path::{Path, PathBuf};
 
+use chrono::{DateTime, Utc};
+
 use crate::config::Config;
-#[cfg(not(any(feature = "d-postgres", feature = "d-sqlite", feature = "d-mysql")))]
-use crate::connection::markers::DatabaseFeatureRequired;
 use crate::connection::ConnConfig;
-use crate::drivers;
 use crate::errors::*;
+use crate::macros::bail;
 use crate::migratable::Migratable;
-use crate::{DbKind, Direction, DT_FORMAT};
+use crate::migrator::Direction;
+use crate::DT_FORMAT;
 
 /// Define a migration that uses SQL statements saved in files.
 ///
@@ -27,11 +25,15 @@ use crate::{DbKind, Direction, DT_FORMAT};
 /// in a transaction (`begin transaction; ... commit;`).
 #[derive(Clone, Debug)]
 pub struct FileMigration {
+    /// Migration tag
     pub tag: String,
+    /// Path to an `up` migration file
     pub up: Option<PathBuf>,
+    /// Path to a `down` migration file
     pub down: Option<PathBuf>,
     pub(crate) stamp: Option<DateTime<Utc>>,
 }
+
 impl FileMigration {
     /// Create a new `FileMigration` with a given tag
     pub fn with_tag(tag: &str) -> Self {
@@ -45,11 +47,7 @@ impl FileMigration {
 
     fn check_path(path: &Path) -> Result<()> {
         if !path.exists() {
-            bail_fmt!(
-                ErrorKind::MigrationNotFound,
-                "Migration file not found: {:?}",
-                path
-            )
+            bail!(MigrationNotFound, "Migration file not found: {:?}", path)
         }
         Ok(())
     }
@@ -82,81 +80,43 @@ impl FileMigration {
     pub fn boxed(&self) -> Box<dyn Migratable> {
         Box::new(self.clone())
     }
+
+    fn apply_file(
+        config: &Config,
+        file: &Option<PathBuf>,
+    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+        if let Some(file) = file {
+            let sql = std::fs::read_to_string(file)?;
+            config.execute_sql(&sql)?;
+        }
+        Ok(())
+    }
 }
 
 impl Migratable for FileMigration {
-    fn apply_up(
-        &self,
-        db_kind: DbKind,
-        config: &Config,
-    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
-        if let Some(ref up) = self.up {
-            match db_kind {
-                DbKind::Sqlite => {
-                    let db_path = config.database_path()?;
-                    drivers::sqlite::run_migration(&db_path, up)?;
-                }
-                DbKind::Postgres => {
-                    let conn_str = config.connect_string()?;
-                    drivers::pg::run_migration(config.ssl_cert_file().as_deref(), &conn_str, up)?;
-                }
-                DbKind::MySql => {
-                    let conn_str = config.connect_string()?;
-                    drivers::mysql::run_migration(&conn_str, up)?;
-                }
-            }
-        } else {
-            print_flush!("(empty) ...");
-        }
-        Ok(())
+    fn apply_up(&self, config: &Config) -> std::result::Result<(), Box<dyn std::error::Error>> {
+        Self::apply_file(config, &self.up)
     }
-    fn apply_down(
-        &self,
-        db_kind: DbKind,
-        config: &Config,
-    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
-        if let Some(ref down) = self.down {
-            match db_kind {
-                DbKind::Sqlite => {
-                    let db_path = config.database_path()?;
-                    drivers::sqlite::run_migration(&db_path, down)?;
-                }
-                DbKind::Postgres => {
-                    let conn_str = config.connect_string()?;
-                    drivers::pg::run_migration(config.ssl_cert_file().as_deref(), &conn_str, down)?;
-                }
-                DbKind::MySql => {
-                    let conn_str = config.connect_string()?;
-                    drivers::mysql::run_migration(&conn_str, down)?;
-                }
-            }
-        } else {
-            print_flush!("(empty) ...");
-        }
-        Ok(())
+
+    fn apply_down(&self, config: &Config) -> std::result::Result<(), Box<dyn std::error::Error>> {
+        Self::apply_file(config, &self.down)
     }
+
     fn tag(&self) -> String {
         match self.stamp.as_ref() {
-            Some(dt) => {
-                let dt_string = dt.format(DT_FORMAT).to_string();
-                format!("{}_{}", dt_string, self.tag)
-            }
+            Some(dt) => format!("{}_{}", dt.format(DT_FORMAT), self.tag),
             None => self.tag.to_owned(),
         }
     }
+
     fn description(&self, direction: &Direction) -> String {
-        match *direction {
-            Direction::Up => self
-                .up
-                .as_ref()
-                .map(|p| format!("{:?}", p))
-                .unwrap_or_else(|| self.tag()),
-            Direction::Down => self
-                .down
-                .as_ref()
-                .map(|p| format!("{:?}", p))
-                .unwrap_or_else(|| self.tag()),
-        }
+        let file = match direction {
+            Direction::Up => &self.up,
+            Direction::Down => &self.down,
+        };
+        file.as_ref()
+            .map(|p| format!("{:?}", p))
+            .unwrap_or_else(|| self.tag())
     }
 }
 
@@ -171,17 +131,15 @@ impl Migratable for FileMigration {
 /// to happen atomically in a transaction you should manually wrap your statements
 /// in a transaction (`begin transaction; ... commit;`).
 ///
-/// Database specific features (`d-postgres`/`d-sqlite`/`d-mysql`) are required to use
-/// this functionality.
+/// A database feature (`d-postgres` / `d-sqlite` / `d-mysql`) is required to
+/// apply this type of migration.
 ///
 /// # Example
 ///
 /// ```rust,no_run
-/// # extern crate migrant_lib;
 /// # use migrant_lib::EmbeddedMigration;
 /// # fn main() { run().unwrap(); }
 /// # fn run() -> Result<(), Box<dyn std::error::Error>> {
-/// # #[cfg(any(feature="d-sqlite", feature="d-postgres", feature="d-mysql"))]
 /// EmbeddedMigration::with_tag("create-users-table")
 ///     .up(include_str!("../migrations/embedded/create_users_table/up.sql"))
 ///     .down(include_str!("../migrations/embedded/create_users_table/down.sql"));
@@ -190,11 +148,9 @@ impl Migratable for FileMigration {
 /// ```
 ///
 /// ```rust,no_run
-/// # extern crate migrant_lib;
 /// # use migrant_lib::EmbeddedMigration;
 /// # fn main() { run().unwrap(); }
 /// # fn run() -> Result<(), Box<dyn std::error::Error>> {
-/// # #[cfg(any(feature="d-sqlite", feature="d-postgres", feature="d-mysql"))]
 /// EmbeddedMigration::with_tag("create-places-table")
 ///     .up("create table places(id integer);")
 ///     .down("drop table places;");
@@ -203,19 +159,16 @@ impl Migratable for FileMigration {
 /// ```
 #[derive(Clone, Debug)]
 pub struct EmbeddedMigration {
+    /// Migration tag
     pub tag: String,
+    /// Statements to run for `up` migrations
     pub up: Option<Cow<'static, str>>,
+    /// Statements to run for `down` migrations
     pub down: Option<Cow<'static, str>>,
 }
+
 impl EmbeddedMigration {
     /// Create a new `EmbeddedMigration` with the given tag
-    #[cfg(not(any(feature = "d-postgres", feature = "d-sqlite", feature = "d-mysql")))]
-    pub fn with_tag(_tag: &str) -> DatabaseFeatureRequired {
-        unimplemented!();
-    }
-
-    /// Create a new `EmbeddedMigration` with the given tag
-    #[cfg(any(feature = "d-postgres", feature = "d-sqlite", feature = "d-mysql"))]
     pub fn with_tag(tag: &str) -> Self {
         Self {
             tag: tag.to_owned(),
@@ -243,70 +196,24 @@ impl EmbeddedMigration {
 }
 
 impl Migratable for EmbeddedMigration {
-    fn apply_up(
-        &self,
-        _db_kind: DbKind,
-        _config: &Config,
-    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
-        if let Some(ref _up) = self.up {
-            #[cfg(any(feature = "d-postgres", feature = "d-sqlite", feature = "d-mysql"))]
-            match _db_kind {
-                DbKind::Sqlite => {
-                    let db_path = _config.database_path()?;
-                    drivers::sqlite::run_migration_str(&db_path, _up.as_ref())?;
-                }
-                DbKind::Postgres => {
-                    let conn_str = _config.connect_string()?;
-                    drivers::pg::run_migration_str(
-                        _config.ssl_cert_file().as_deref(),
-                        &conn_str,
-                        _up.as_ref(),
-                    )?;
-                }
-                DbKind::MySql => {
-                    let conn_str = _config.connect_string()?;
-                    drivers::mysql::run_migration_str(&conn_str, _up.as_ref())?;
-                }
-            }
-            #[cfg(not(any(feature = "d-postgres", feature = "d-sqlite", feature = "d-mysql")))]
-            panic!("** Migrant ERROR: Database specific feature required to run embedded-file migration **");
-        } else {
-            print_flush!("(empty) ...");
+    fn apply_up(&self, config: &Config) -> std::result::Result<(), Box<dyn std::error::Error>> {
+        if let Some(ref up) = self.up {
+            config.execute_sql(up.as_ref())?;
         }
         Ok(())
     }
-    fn apply_down(
-        &self,
-        db_kind: DbKind,
-        config: &Config,
-    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+
+    fn apply_down(&self, config: &Config) -> std::result::Result<(), Box<dyn std::error::Error>> {
         if let Some(ref down) = self.down {
-            match db_kind {
-                DbKind::Sqlite => {
-                    let db_path = config.database_path()?;
-                    drivers::sqlite::run_migration_str(&db_path, down.as_ref())?;
-                }
-                DbKind::Postgres => {
-                    let conn_str = config.connect_string()?;
-                    drivers::pg::run_migration_str(
-                        config.ssl_cert_file().as_deref(),
-                        &conn_str,
-                        down.as_ref(),
-                    )?;
-                }
-                DbKind::MySql => {
-                    let conn_str = config.connect_string()?;
-                    drivers::mysql::run_migration_str(&conn_str, down.as_ref())?;
-                }
-            }
-        } else {
-            print_flush!("(empty) ...");
+            config.execute_sql(down.as_ref())?;
         }
         Ok(())
     }
+
     fn tag(&self) -> String {
         self.tag.to_owned()
     }
+
     fn description(&self, _: &Direction) -> String {
         self.tag()
     }
@@ -320,7 +227,6 @@ pub fn noop(_: ConnConfig) -> std::result::Result<(), Box<dyn std::error::Error>
 /// Define a programmable migration
 ///
 /// `FnMigration`s are provided a `ConnConfig` instance and given free rein to do as they please.
-/// Database specific features (`d-postgres`/`d-sqlite`/`d-mysql`) are required to use this functionality.
 ///
 /// Note, both an `up` and `down` function must be provided. There is a noop function available
 /// (`migrant_lib::migration::noop`) for convenience.
@@ -328,7 +234,6 @@ pub fn noop(_: ConnConfig) -> std::result::Result<(), Box<dyn std::error::Error>
 /// # Example
 ///
 /// ```rust,no_run
-/// # extern crate migrant_lib;
 /// # use migrant_lib::{FnMigration, ConnConfig};
 /// # fn main() { run().unwrap(); }
 /// # fn run() -> Result<(), Box<dyn std::error::Error>> {
@@ -337,7 +242,6 @@ pub fn noop(_: ConnConfig) -> std::result::Result<(), Box<dyn std::error::Error>
 ///     Ok(())
 /// }
 ///
-/// # #[cfg(any(feature="d-sqlite", feature="d-postgres", feature="d-mysql"))]
 /// FnMigration::with_tag("add-user-data")
 ///     .up(add_data)
 ///     .down(migrant_lib::migration::noop);
@@ -346,8 +250,11 @@ pub fn noop(_: ConnConfig) -> std::result::Result<(), Box<dyn std::error::Error>
 /// ```
 #[derive(Clone, Debug)]
 pub struct FnMigration<T, U> {
+    /// Migration tag
     pub tag: String,
+    /// Function to run for `up` migrations
     pub up: Option<T>,
+    /// Function to run for `down` migrations
     pub down: Option<U>,
 }
 
@@ -357,13 +264,6 @@ where
     U: 'static + Clone + Fn(ConnConfig) -> std::result::Result<(), Box<dyn std::error::Error>>,
 {
     /// Create a new `FnMigration` with the given tag
-    #[cfg(not(any(feature = "d-postgres", feature = "d-sqlite", feature = "d-mysql")))]
-    pub fn with_tag(_tag: &str) -> DatabaseFeatureRequired {
-        unimplemented!();
-    }
-
-    /// Create a new `FnMigration` with the given tag
-    #[cfg(any(feature = "d-postgres", feature = "d-sqlite", feature = "d-mysql"))]
     pub fn with_tag(tag: &str) -> Self {
         Self {
             tag: tag.to_owned(),
@@ -374,7 +274,7 @@ where
 
     /// Function to use for `up` migrations
     ///
-    /// Function must have the signature `fn(ConnConfig) -> std::result::Result<(), Box<dyn std::error::Error>>`.
+    /// Function must have the signature `fn(ConnConfig) -> Result<(), Box<dyn std::error::Error>>`.
     pub fn up(&mut self, f_up: T) -> &mut Self {
         self.up = Some(f_up);
         self
@@ -382,7 +282,7 @@ where
 
     /// Function to use for `down` migrations
     ///
-    /// Function must have the signature `fn(ConnConfig) -> std::result::Result<(), Box<dyn std::error::Error>>`.
+    /// Function must have the signature `fn(ConnConfig) -> Result<(), Box<dyn std::error::Error>>`.
     pub fn down(&mut self, f_down: U) -> &mut Self {
         self.down = Some(f_down);
         self
@@ -399,28 +299,16 @@ where
     T: 'static + Clone + Fn(ConnConfig) -> std::result::Result<(), Box<dyn std::error::Error>>,
     U: 'static + Clone + Fn(ConnConfig) -> std::result::Result<(), Box<dyn std::error::Error>>,
 {
-    fn apply_up(
-        &self,
-        _: DbKind,
-        config: &Config,
-    ) -> std::result::Result<(), Box<dyn (::std::error::Error)>> {
+    fn apply_up(&self, config: &Config) -> std::result::Result<(), Box<dyn std::error::Error>> {
         if let Some(ref up) = self.up {
             up(ConnConfig::new(config))?;
-        } else {
-            print_flush!("(empty) ...");
         }
         Ok(())
     }
 
-    fn apply_down(
-        &self,
-        _: DbKind,
-        config: &Config,
-    ) -> std::result::Result<(), Box<dyn (::std::error::Error)>> {
+    fn apply_down(&self, config: &Config) -> std::result::Result<(), Box<dyn std::error::Error>> {
         if let Some(ref down) = self.down {
             down(ConnConfig::new(config))?;
-        } else {
-            print_flush!("(empty) ...");
         }
         Ok(())
     }

@@ -1,47 +1,52 @@
 [package]
-edition = "2018"
 name = "migrant_lib"
-version = "0.34.0"
+version = "0.35.0"
+# explicit (not workspace-inherited) so `cargo readme` can parse the manifest
+edition = "2021"
+rust-version = "1.88"
 authors = ["James Kominick <james@kominick.com>"]
+license = "MIT"
 description = "Database migration and configuration library for postgres, sqlite, mysql"
 repository = "https://github.com/jaemk/migrant_lib"
 keywords = ["database", "migration", "postgres", "sqlite", "mysql"]
 categories = ["database", "development-tools"]
-license = "MIT"
 readme = "README.md"
-
 exclude = [
-    "/ci/*",
     "/db/*",
     "/migrations/*",
     "Migrant.toml",
-    ".travis.yml",
 ]
 
 [dependencies]
-error-chain = { workspace = true }
 chrono = { workspace = true }
-
-lazy_static = { workspace = true }
-regex = { workspace = true }
-walkdir = { workspace = true }
-serde = { workspace = true }
-serde_derive = { workspace = true }
-serde_json = { workspace = true }
-toml = { workspace = true }
-percent-encoding = { workspace = true }
-url = { workspace = true }
 log = { workspace = true }
-postgres = { workspace = true, optional = true }
+percent-encoding = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }
+toml = { workspace = true }
+url = { workspace = true }
+walkdir = { workspace = true }
+
+mysql = { workspace = true, optional = true }
 native-tls = { workspace = true, optional = true }
+postgres = { workspace = true, optional = true }
 postgres-native-tls = { workspace = true, optional = true }
 rusqlite = { workspace = true, optional = true }
-mysql = { workspace = true, optional = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+url = { workspace = true }
+# bundle sqlite for self-contained tests; the published library leaves
+# bundling up to the consumer
+rusqlite = { workspace = true, features = ["bundled"] }
 
 [features]
 default = []
-d-sqlite = ["rusqlite"]
-d-postgres = ["postgres", "postgres-native-tls", "native-tls"]
-d-mysql = ["mysql"]
+d-sqlite = ["dep:rusqlite"]
+d-postgres = ["dep:postgres", "dep:postgres-native-tls", "dep:native-tls"]
+d-mysql = ["dep:mysql"]
 d-all = ["d-sqlite", "d-postgres", "d-mysql"]
+vendored-openssl = ["native-tls?/vendored"]
 
+[package.metadata.docs.rs]
+features = ["d-all"]

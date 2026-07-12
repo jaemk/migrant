@@ -1,194 +1,107 @@
-use super::*;
-/// MySQL database functions using shell commands and db drivers
-use std;
-use std::path::Path;
+/*!
+MySQL driver
+*/
+use mysql::{prelude::Queryable, Conn, Opts};
 
-use std::io::Read;
+use super::sql;
+use crate::errors::*;
+use crate::macros::{bail, err};
 
-#[cfg(feature = "d-mysql")]
-use ::mysql::{prelude::*, Conn, Opts};
-
-#[cfg(not(feature = "d-mysql"))]
-mod m {
-    use super::*;
-    pub fn can_connect(conn_str: &str) -> Result<bool> {
-        unimplemented!("migrant_lib: must enable d-mysql feature");
-    }
-    pub fn migration_table_exists(conn_str: &str) -> Result<bool> {
-        unimplemented!("migrant_lib: must enable d-mysql feature");
-    }
-    pub fn migration_setup(conn_str: &str) -> Result<bool> {
-        unimplemented!("migrant_lib: must enable d-mysql feature");
-    }
-    pub fn select_migrations(conn_str: &str) -> Result<Vec<String>> {
-        unimplemented!("migrant_lib: must enable d-mysql feature");
-    }
-    pub fn insert_migration_tag(conn_str: &str, tag: &str) -> Result<()> {
-        unimplemented!("migrant_lib: must enable d-mysql feature");
-    }
-    pub fn remove_migration_tag(conn_str: &str, tag: &str) -> Result<()> {
-        unimplemented!("migrant_lib: must enable d-mysql feature");
-    }
-    pub fn run_migration(conn_str: &str, filename: &Path) -> Result<()> {
-        unimplemented!("migrant_lib: must enable d-mysql feature");
-    }
-    pub fn run_migration_str(conn_str: &str, stmt: &str) -> Result<()> {
-        unimplemented!("migrant_lib: must enable d-mysql feature");
-    }
+/// A live mysql connection
+pub(crate) struct MySqlConn {
+    conn: Conn,
 }
 
-#[cfg(feature = "d-mysql")]
-mod m {
-    use super::*;
-    /// Check connection
-    pub fn can_connect(conn_str: &str) -> Result<bool> {
-        let conn_opts = Opts::from_url(conn_str)
-            .chain_err(|| "Error parsing mysql connection string".to_string())?;
-        Conn::new(conn_opts).chain_err(|| {
-            format!(
-                "Unable to connect to mysql database with conn str: {:?}",
-                conn_str
-            )
-        })?;
-        Ok(true)
+impl MySqlConn {
+    pub(crate) fn connect(conn_str: &str) -> Result<Self> {
+        let opts = Opts::from_url(conn_str)
+            .map_err(|e| err!(Config, "Error parsing mysql connection string: {}", e))?;
+        let conn = Conn::new(opts)?;
+        Ok(Self { conn })
     }
 
-    /// Check `__migrant_migrations` table exists
-    pub fn migration_table_exists(conn_str: &str) -> Result<bool> {
-        let conn_str = Opts::from_url(conn_str)
-            .chain_err(|| "Error parsing mysql connection string".to_string())?;
-        let mut conn = Conn::new(conn_str).chain_err(|| "Connection Error")?;
-        let rows: Vec<u32> = conn.query(sql::MYSQL_MIGRATION_TABLE_EXISTS)?;
-        assert_eq!(
-            rows.len(),
-            1,
-            "Migration table check: Expected 1 returned row"
-        );
+    pub(crate) fn migration_table_exists(&mut self) -> Result<bool> {
+        let rows: Vec<u32> = self.conn.query(sql::MYSQL_MIGRATION_TABLE_EXISTS)?;
+        if rows.len() != 1 {
+            bail!(
+                Migration,
+                "Migration table check: expected 1 returned row, got {}",
+                rows.len()
+            )
+        }
         Ok(rows[0] == 1)
     }
 
-    /// Create `__migrant_migrations` table
-    pub fn migration_setup(conn_str: &str) -> Result<bool> {
-        if !migration_table_exists(conn_str)? {
-            let conn_str = Opts::from_url(conn_str)
-                .chain_err(|| "Error parsing mysql connection string".to_string())?;
-            let mut conn = Conn::new(conn_str).chain_err(|| "Connection Error")?;
-            conn.query_drop(sql::MYSQL_CREATE_TABLE)
-                .chain_err(|| "Error setting up migration table")?;
-            return Ok(true);
+    pub(crate) fn setup_migration_table(&mut self) -> Result<bool> {
+        if self.migration_table_exists()? {
+            return Ok(false);
         }
-        Ok(false)
+        self.conn.query_drop(sql::MYSQL_CREATE_TABLE)?;
+        Ok(true)
     }
 
-    /// Select all migrations from `__migrant_migrations` table
-    pub fn select_migrations(conn_str: &str) -> Result<Vec<String>> {
-        let conn_str = Opts::from_url(conn_str)
-            .chain_err(|| "Error parsing mysql connection string".to_string())?;
-        let mut conn = Conn::new(conn_str).chain_err(|| "Connection Error")?;
-        Ok(conn.query(sql::GET_MIGRATIONS)?)
+    pub(crate) fn applied_tags(&mut self) -> Result<Vec<String>> {
+        Ok(self.conn.query(sql::GET_MIGRATIONS)?)
     }
 
-    /// Insert migration tag into `__migrant_migrations` table
-    pub fn insert_migration_tag(conn_str: &str, tag: &str) -> Result<()> {
-        let conn_str = Opts::from_url(conn_str)
-            .chain_err(|| "Error parsing mysql connection string".to_string())?;
-        let mut conn = Conn::new(conn_str).chain_err(|| "Connection Error")?;
-        conn.exec_drop("insert into __migrant_migrations (tag) values (?)", (tag,))?;
+    pub(crate) fn insert_tag(&mut self, tag: &str) -> Result<()> {
+        self.conn.exec_drop(sql::INSERT_MIGRATION_MYSQL, (tag,))?;
         Ok(())
     }
 
-    /// Delete migration tag from `__migrant_migrations` table
-    pub fn remove_migration_tag(conn_str: &str, tag: &str) -> Result<()> {
-        let conn_str = Opts::from_url(conn_str)
-            .chain_err(|| "Error parsing mysql connection string".to_string())?;
-        let mut conn = Conn::new(conn_str).chain_err(|| "Connection Error")?;
-        conn.exec_drop("delete from __migrant_migrations where tag = ?", (tag,))?;
+    pub(crate) fn remove_tag(&mut self, tag: &str) -> Result<()> {
+        self.conn.exec_drop(sql::REMOVE_MIGRATION_MYSQL, (tag,))?;
         Ok(())
     }
 
-    /// Apply migration to database
-    pub fn run_migration(conn_str: &str, filename: &Path) -> Result<()> {
-        let mut file = std::fs::File::open(filename)?;
-        let mut buf = String::new();
-        file.read_to_string(&mut buf)?;
-
-        let conn_str = Opts::from_url(conn_str)
-            .chain_err(|| "Error parsing mysql connection string".to_string())?;
-        let mut conn = Conn::new(conn_str).chain_err(|| "Connection Error")?;
-        conn.query_drop(&buf)
-            .map_err(|e| format_err!(ErrorKind::Migration, "{}", e))?;
-        Ok(())
-    }
-
-    pub fn run_migration_str(conn_str: &str, stmt: &str) -> Result<()> {
-        let conn_str = Opts::from_url(conn_str)
-            .chain_err(|| "Error parsing mysql connection string".to_string())?;
-        let mut conn = Conn::new(conn_str).chain_err(|| "Connection Error")?;
-        conn.query_drop(stmt)
-            .map_err(|e| format_err!(ErrorKind::Migration, "{}", e))?;
-        Ok(())
+    pub(crate) fn execute_batch(&mut self, stmt: &str) -> Result<()> {
+        if stmt.is_empty() {
+            return Ok(());
+        }
+        self.conn
+            .query_drop(stmt)
+            .map_err(|e| err!(Migration, "{}", e))
     }
 }
 
-pub use self::m::*;
-
-#[cfg(feature = "d-mysql")]
 #[cfg(test)]
-mod test {
+mod tests {
     use super::*;
-    use std;
-    macro_rules! _try {
-        ($exp:expr) => {
-            match $exp {
-                Ok(v) => v,
-                Err(e) => {
-                    eprintln!("Caught: {}", e);
-                    panic!("{}", e)
-                }
+
+    /// Requires a running mysql instance; set `MYSQL_TEST_CONN_STR`
+    /// (e.g. `mysql://user:pass@localhost/db`) to run
+    #[test]
+    fn migration_table_lifecycle() {
+        let conn_str = match std::env::var("MYSQL_TEST_CONN_STR") {
+            Ok(s) => s,
+            Err(_) => {
+                eprintln!("MYSQL_TEST_CONN_STR not set, skipping");
+                return;
             }
         };
-    }
+        let mut conn = MySqlConn::connect(&conn_str).unwrap();
 
-    #[test]
-    fn mysql() {
-        let conn_str = std::env::var("MYSQL_TEST_CONN_STR")
-            .expect("MYSQL_TEST_CONN_STR env variable required");
-
-        // no table before setup
-        can_connect(&conn_str).unwrap();
-        let is_setup = _try!(migration_table_exists(&conn_str));
-        assert!(!is_setup, "Assert migration table does not exist");
-
-        // setup migration table
-        let was_setup = _try!(migration_setup(&conn_str));
         assert!(
-            was_setup,
-            "Assert `migration_setup` initializes migration table"
+            !conn.migration_table_exists().unwrap(),
+            "no table before setup"
         );
-        let was_setup = _try!(migration_setup(&conn_str));
-        assert!(!was_setup, "Assert `migration_setup` is idempotent");
+        assert!(conn.setup_migration_table().unwrap(), "table created");
+        assert!(!conn.setup_migration_table().unwrap(), "setup idempotent");
+        assert!(conn.migration_table_exists().unwrap(), "table exists");
 
-        // table exists after setup
-        let is_setup = _try!(migration_table_exists(&conn_str));
-        assert!(is_setup, "Assert migration table exists");
+        conn.insert_tag("initial").unwrap();
+        conn.insert_tag("alter1").unwrap();
+        conn.insert_tag("alter2").unwrap();
+        assert_eq!(3, conn.applied_tags().unwrap().len());
 
-        // insert some tags
-        _try!(insert_migration_tag(&conn_str, "initial"));
-        _try!(insert_migration_tag(&conn_str, "alter1"));
-        _try!(insert_migration_tag(&conn_str, "alter2"));
+        conn.remove_tag("alter2").unwrap();
+        assert_eq!(2, conn.applied_tags().unwrap().len());
 
-        // get applied
-        let migs = _try!(select_migrations(&conn_str));
-        assert_eq!(3, migs.len(), "Assert 3 migrations applied");
+        conn.remove_tag("alter1").unwrap();
+        conn.remove_tag("initial").unwrap();
+        assert_eq!(0, conn.applied_tags().unwrap().len());
 
-        // remove some tags
-        _try!(remove_migration_tag(&conn_str, "alter2"));
-        let migs = _try!(select_migrations(&conn_str));
-        assert_eq!(2, migs.len(), "Assert 2 migrations applied");
-
-        _try!(remove_migration_tag(&conn_str, "alter1"));
-        _try!(remove_migration_tag(&conn_str, "initial"));
-        let migs = _try!(select_migrations(&conn_str));
-        assert_eq!(0, migs.len(), "Assert all migrations removed");
+        conn.execute_batch("drop table __migrant_migrations;")
+            .unwrap();
     }
 }
