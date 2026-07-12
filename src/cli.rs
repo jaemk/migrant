@@ -1,105 +1,167 @@
-use clap::{Arg, App, SubCommand};
-use super::{APP_VERSION, APP_NAME};
+use clap::{Arg, ArgAction, Command};
 
-
-pub fn build_cli() -> App<'static, 'static> {
-    App::new(APP_NAME)
-        .version(APP_VERSION)
+pub fn build_cli() -> Command {
+    Command::new("migrant")
+        .version(env!("CARGO_PKG_VERSION"))
         .author("James K. <james@kominick.com>")
         .about("Postgres/SQLite/MySQL migration manager")
-        .subcommand(SubCommand::with_name("self")
-                    .about("Self referential things")
-                    .subcommand(SubCommand::with_name("update")
+        .subcommand(
+            Command::new("self")
+                .about("Self referential things")
+                .subcommand(
+                    Command::new("update")
                         .about("Update to the latest binary release, replacing this binary")
-                        .arg(Arg::with_name("no_confirm")
-                             .help("Skip download/update confirmation")
-                             .long("no-confirm")
-                             .short("y")
-                             .required(false)
-                             .takes_value(false))
-                        .arg(Arg::with_name("quiet")
-                             .help("Suppress unnecessary download output (progress bar)")
-                             .long("quiet")
-                             .short("q")
-                             .required(false)
-                             .takes_value(false)))
-                    .subcommand(SubCommand::with_name("bash-completions")
+                        .arg(
+                            Arg::new("no_confirm")
+                                .help("Skip download/update confirmation")
+                                .long("no-confirm")
+                                .short('y')
+                                .action(ArgAction::SetTrue),
+                        )
+                        .arg(
+                            Arg::new("quiet")
+                                .help("Suppress unnecessary download output (progress bar)")
+                                .long("quiet")
+                                .short('q')
+                                .action(ArgAction::SetTrue),
+                        ),
+                )
+                .subcommand(
+                    Command::new("bash-completions")
                         .about("Generate bash completions & output to stdout or a file if specified")
-                        .subcommand(SubCommand::with_name("install")
-                            .about("Installs generated bash completions")
-                            .arg(Arg::with_name("path")
-                                .help("Path to install bash completions at")
-                                .long("path")
-                                .default_value("/etc/bash_completion.d/migrant")
-                                .takes_value(true)))))
-        .subcommand(SubCommand::with_name("init")
-            .about("Initialize project config")
-            .arg(Arg::with_name("type")
-                 .long("type")
-                 .short("t")
-                 .takes_value(true)
-                 .help("Specify the database type (sqlite|postgres|mysql)"))
-            .arg(Arg::with_name("location")
-                 .long("location")
-                 .short("l")
-                 .takes_value(true)
-                 .help("Directory to initialize in"))
-            .arg(Arg::with_name("default-from-env")
-                 .long("default-from-env")
-                 .takes_value(false)
-                 .help("Whether to default all settings file values to `env:VAR` form"))
-            .arg(Arg::with_name("no-confirm")
-                 .long("no-confirm")
-                 .takes_value(false)
-                 .help("Disable interactive prompts")))
-        .subcommand(SubCommand::with_name("setup")
-            .about("Setup migration table"))
-        .subcommand(SubCommand::with_name("connect-string")
-            .about("Print out the connection string for postgres, or file-path for sqlite"))
-        .subcommand(SubCommand::with_name("list")
-            .about("List status of applied and available migrations"))
-        .subcommand(SubCommand::with_name("apply")
-            .about("Moves up or down (applies up/down.sql) one migration. Default direction is up unless specified with `-d/--down`.")
-            .arg(Arg::with_name("down")
-                .long("down")
-                .short("d")
-                .help("Applies `down.sql` migrations"))
-            .arg(Arg::with_name("all")
-                .long("all")
-                .short("a")
-                .help("Applies all available migrations"))
-            .arg(Arg::with_name("force")
-                .long("force")
-                .help("Applies the migration and treats it as if it were successful"))
-            .arg(Arg::with_name("fake")
-                .long("fake")
-                .help("Updates the migrations table as if the specified migration was applied")))
-        .subcommand(SubCommand::with_name("redo")
-            .about("Shortcut for running the latest `down` and `up` migration. Can be augmented with `all` and `force`")
-            .arg(Arg::with_name("all")
-                .long("all")
-                .short("a")
-                .help("Applies all available migrations"))
-            .arg(Arg::with_name("force")
-                .long("force")
-                .help("Applies the migration and treats it as if it were successful")))
-        .subcommand(SubCommand::with_name("new")
-            .about("Create new migration up/down files")
-            .arg(Arg::with_name("tag")
-                 .required(true)
-                 .help("tag to use for new migration")))
-        .subcommand(SubCommand::with_name("shell")
-            .about("Open a repl connection"))
-        .subcommand(SubCommand::with_name("edit")
-            .about("Edit a migration file by tag name")
-            .arg(Arg::with_name("tag")
-                 .required(true)
-                 .help("Tag name"))
-            .arg(Arg::with_name("down")
-                 .long("down")
-                 .short("d")
-                 .help("Edit the down.sql file")))
-        .subcommand(SubCommand::with_name("which-config")
-            .about("Display the path to the configuration file being used"))
+                        .subcommand(
+                            Command::new("install")
+                                .about("Installs generated bash completions")
+                                .arg(
+                                    Arg::new("path")
+                                        .help("Path to install bash completions at")
+                                        .long("path")
+                                        .default_value("/etc/bash_completion.d/migrant"),
+                                ),
+                        ),
+                ),
+        )
+        .subcommand(
+            Command::new("init")
+                .about("Initialize project config")
+                .arg(
+                    Arg::new("type")
+                        .long("type")
+                        .short('t')
+                        .help("Specify the database type (sqlite|postgres|mysql)"),
+                )
+                .arg(
+                    Arg::new("location")
+                        .long("location")
+                        .short('l')
+                        .help("Directory to initialize in"),
+                )
+                .arg(
+                    Arg::new("default-from-env")
+                        .long("default-from-env")
+                        .action(ArgAction::SetTrue)
+                        .help("Whether to default all settings file values to `env:VAR` form"),
+                )
+                .arg(
+                    Arg::new("no-confirm")
+                        .long("no-confirm")
+                        .action(ArgAction::SetTrue)
+                        .help("Disable interactive prompts"),
+                ),
+        )
+        .subcommand(Command::new("setup").about("Setup migration table"))
+        .subcommand(
+            Command::new("connect-string")
+                .about("Print out the connection string for postgres, or file-path for sqlite"),
+        )
+        .subcommand(
+            Command::new("list").about("List status of applied and available migrations"),
+        )
+        .subcommand(
+            Command::new("apply")
+                .about("Moves up or down (applies up/down.sql) one migration. Default direction is up unless specified with `-d/--down`.")
+                .arg(
+                    Arg::new("down")
+                        .long("down")
+                        .short('d')
+                        .action(ArgAction::SetTrue)
+                        .help("Applies `down.sql` migrations"),
+                )
+                .arg(
+                    Arg::new("all")
+                        .long("all")
+                        .short('a')
+                        .action(ArgAction::SetTrue)
+                        .help("Applies all remaining migrations in the chosen direction (un-applies all with --down)"),
+                )
+                .arg(
+                    Arg::new("force")
+                        .long("force")
+                        .action(ArgAction::SetTrue)
+                        .help("Applies migrations, ignoring errors"),
+                )
+                .arg(
+                    Arg::new("fake")
+                        .long("fake")
+                        .action(ArgAction::SetTrue)
+                        .help("Updates the migration table without running the migration"),
+                ),
+        )
+        .subcommand(
+            Command::new("redo")
+                .about("Shortcut for running the latest `down` and `up` migration. Can be augmented with `all` and `force`")
+                .arg(
+                    Arg::new("all")
+                        .long("all")
+                        .short('a')
+                        .action(ArgAction::SetTrue)
+                        .help("Applies all remaining migrations in the chosen direction (un-applies all with --down)"),
+                )
+                .arg(
+                    Arg::new("force")
+                        .long("force")
+                        .action(ArgAction::SetTrue)
+                        .help("Applies migrations, ignoring errors"),
+                ),
+        )
+        .subcommand(
+            Command::new("new")
+                .about("Create new migration up/down files")
+                .arg(
+                    Arg::new("tag")
+                        .required(true)
+                        .help("tag to use for new migration"),
+                ),
+        )
+        .subcommand(Command::new("shell").about("Open a repl connection"))
+        .subcommand(
+            Command::new("edit")
+                .about("Edit a migration file by tag name")
+                .arg(Arg::new("tag").required(true).help("Tag name"))
+                .arg(
+                    Arg::new("down")
+                        .long("down")
+                        .short('d')
+                        .action(ArgAction::SetTrue)
+                        .help("Edit the down.sql file"),
+                ),
+        )
+        .subcommand(
+            Command::new("which-config")
+                .about("Display the path to the configuration file being used"),
+        )
+        .subcommand(
+            Command::new("tui")
+                .about("Interactive terminal UI for viewing and applying migrations"),
+        )
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cli_is_well_formed() {
+        build_cli().debug_assert();
+    }
+}

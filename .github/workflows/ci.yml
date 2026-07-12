@@ -1,0 +1,86 @@
+name: ci
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: rustfmt
+        run: cargo fmt --all --check
+      - name: clippy (lib)
+        run: cargo clippy -p migrant_lib --all-targets --features d-all -- -D warnings
+      - name: clippy (cli)
+        run: cargo clippy -p migrant --all-targets --features sqlite,postgres,mysql,update,integration_tests -- -D warnings
+      - name: docs
+        run: cargo doc -p migrant_lib --features d-all --no-deps
+        env:
+          RUSTDOCFLAGS: -D warnings
+
+  test-lib:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: migrant
+          POSTGRES_PASSWORD: pass
+          POSTGRES_DB: migrant_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U migrant"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      mysql:
+        image: mysql:8
+        env:
+          MYSQL_ROOT_PASSWORD: rootpass
+          MYSQL_DATABASE: migrant_test
+          MYSQL_USER: migrant
+          MYSQL_PASSWORD: pass
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd "mysqladmin ping -h localhost -prootpass"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      POSTGRES_TEST_CONN_STR: postgres://migrant:pass@localhost:5432/migrant_test
+      MYSQL_TEST_CONN_STR: mysql://migrant:pass@localhost:3306/migrant_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: test (no db features)
+        run: cargo test -p migrant_lib
+      - name: test (all db features)
+        run: cargo test -p migrant_lib --features d-all
+      - name: examples
+        run: cargo run -p migrant_lib --example in_memory_sqlite --features d-sqlite
+
+  test-cli:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: test
+        run: cargo test -p migrant --features sqlite,integration_tests

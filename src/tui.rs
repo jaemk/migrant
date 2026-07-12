@@ -1,0 +1,203 @@
+/*!
+Interactive terminal UI for viewing and applying migrations
+*/
+use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use migrant_lib::{Config, Direction, MigrationStatus, Migrator};
+use ratatui::layout::{Constraint, Layout};
+use ratatui::style::{Color, Modifier, Style};
+use ratatui::text::{Line, Span};
+use ratatui::widgets::{Block, List, ListItem, ListState, Paragraph, Wrap};
+use ratatui::{DefaultTerminal, Frame};
+
+pub fn run(config: &Config) -> super::Result<()> {
+    use std::io::IsTerminal;
+    if !std::io::stdout().is_terminal() {
+        return Err("`migrant tui` requires an interactive terminal".into());
+    }
+    let mut app = App::new(config)?;
+    let previous_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |panic_info| {
+        ratatui::restore();
+        previous_hook(panic_info);
+    }));
+    let mut terminal = ratatui::init();
+    let res = app.run(&mut terminal);
+    ratatui::restore();
+    res
+}
+
+struct App {
+    config: Config,
+    statuses: Vec<MigrationStatus>,
+    list_state: ListState,
+    message: String,
+    quit: bool,
+}
+
+impl App {
+    fn new(config: &Config) -> super::Result<Self> {
+        let config = config.reload()?;
+        let statuses = migrant_lib::migration_statuses(&config)?;
+        let mut list_state = ListState::default();
+        if !statuses.is_empty() {
+            list_state.select(Some(0));
+        }
+        Ok(Self {
+            config,
+            statuses,
+            list_state,
+            message: String::from("Ready"),
+            quit: false,
+        })
+    }
+
+    fn run(&mut self, terminal: &mut DefaultTerminal) -> super::Result<()> {
+        while !self.quit {
+            terminal.draw(|frame| self.render(frame))?;
+            if let Event::Key(key) = event::read()? {
+                if key.kind == KeyEventKind::Press {
+                    self.handle_key(key);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn handle_key(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Char('q') | KeyCode::Esc => self.quit = true,
+            KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => self.quit = true,
+            KeyCode::Char('j') | KeyCode::Down => self.select_next(),
+            KeyCode::Char('k') | KeyCode::Up => self.select_previous(),
+            KeyCode::Char('u') => self.apply(Direction::Up, false),
+            KeyCode::Char('d') => self.apply(Direction::Down, false),
+            KeyCode::Char('a') => self.apply(Direction::Up, true),
+            KeyCode::Char('D') => self.apply(Direction::Down, true),
+            KeyCode::Char('r') => self.refresh("Refreshed"),
+            _ => {}
+        }
+    }
+
+    fn select_next(&mut self) {
+        if self.statuses.is_empty() {
+            return;
+        }
+        let next = match self.list_state.selected() {
+            Some(i) => (i + 1).min(self.statuses.len() - 1),
+            None => 0,
+        };
+        self.list_state.select(Some(next));
+    }
+
+    fn select_previous(&mut self) {
+        if self.statuses.is_empty() {
+            return;
+        }
+        let previous = self
+            .list_state
+            .selected()
+            .map_or(0, |i| i.saturating_sub(1));
+        self.list_state.select(Some(previous));
+    }
+
+    fn apply(&mut self, direction: Direction, all: bool) {
+        let res = Migrator::with_config(&self.config)
+            .direction(direction)
+            .all(all)
+            .show_output(false)
+            .apply();
+        let message = match res {
+            Ok(()) => format!(
+                "Applied {}[{}] migration{}",
+                if all { "all " } else { "" },
+                direction.to_string().to_lowercase(),
+                if all { "s" } else { "" }
+            ),
+            Err(e) if e.is_migration_complete() => match direction {
+                Direction::Up => "No un-applied migrations".to_string(),
+                Direction::Down => "Nothing to un-apply".to_string(),
+            },
+            Err(e) => format!("{}", e),
+        };
+        self.refresh(&message);
+    }
+
+    fn refresh(&mut self, message: &str) {
+        match self.config.reload() {
+            Ok(config) => {
+                self.config = config;
+                match migrant_lib::migration_statuses(&self.config) {
+                    Ok(statuses) => {
+                        self.statuses = statuses;
+                        self.message = message.to_string();
+                    }
+                    Err(e) => self.message = format!("{}", e),
+                }
+            }
+            Err(e) => self.message = format!("{}", e),
+        }
+        // keep the selection in bounds
+        match self.list_state.selected() {
+            Some(i) if !self.statuses.is_empty() => {
+                self.list_state.select(Some(i.min(self.statuses.len() - 1)));
+            }
+            Some(_) => self.list_state.select(None),
+            None if !self.statuses.is_empty() => self.list_state.select(Some(0)),
+            None => {}
+        }
+    }
+
+    fn render(&mut self, frame: &mut Frame) {
+        let [header_area, list_area, footer_area] = Layout::vertical([
+            Constraint::Length(3),
+            Constraint::Min(1),
+            Constraint::Length(4),
+        ])
+        .areas(frame.area());
+
+        let applied = self.statuses.iter().filter(|m| m.applied).count();
+        let header = Paragraph::new(Line::from(vec![
+            Span::styled("migrant", Style::new().add_modifier(Modifier::BOLD)),
+            Span::raw(format!(
+                "  |  {}  |  {}/{} applied",
+                self.config.database_type(),
+                applied,
+                self.statuses.len()
+            )),
+        ]))
+        .block(Block::bordered());
+        frame.render_widget(header, header_area);
+
+        let items = self
+            .statuses
+            .iter()
+            .map(|mig| {
+                let (mark, style) = if mig.applied {
+                    ("✓", Style::new().fg(Color::Green))
+                } else {
+                    (" ", Style::new().fg(Color::DarkGray))
+                };
+                ListItem::new(Line::from(vec![
+                    Span::styled(format!("[{}] ", mark), style),
+                    Span::raw(mig.tag.clone()),
+                ]))
+            })
+            .collect::<Vec<_>>();
+        let list = List::new(items)
+            .block(Block::bordered().title("Migrations"))
+            .highlight_style(Style::new().add_modifier(Modifier::REVERSED))
+            .highlight_symbol("> ");
+        frame.render_stateful_widget(list, list_area, &mut self.list_state);
+
+        let footer = Paragraph::new(vec![
+            Line::from(Span::styled(
+                "u: apply up  d: apply down  a: apply all up  D: apply all down  r: refresh  q: quit",
+                Style::new().fg(Color::DarkGray),
+            )),
+            Line::from(self.message.as_str()),
+        ])
+        .wrap(Wrap { trim: false })
+        .block(Block::bordered());
+        frame.render_widget(footer, footer_area);
+    }
+}

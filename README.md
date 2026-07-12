@@ -1,18 +1,19 @@
 # Migrant
-[![Build Status](https://travis-ci.org/jaemk/migrant.svg?branch=master)](https://travis-ci.org/jaemk/migrant)
+[![Build Status](https://github.com/jaemk/migrant/actions/workflows/ci.yml/badge.svg)](https://github.com/jaemk/migrant/actions)
 [![crates.io:migrant](https://img.shields.io/crates/v/migrant.svg?label=migrant)](https://crates.io/crates/migrant)
 
-> Basic migration manager powered by [`migrant_lib`](https://github.com/jaemk/migrant_lib)
+> Basic migration manager powered by [`migrant_lib`](./migrant_lib/)
 
 
 **Supported databases/features:**
 
-| Feature       |    Backend                            |
-|---------------|---------------------------------------|
-| `postgres`    | Enable postgres connectivity          |
-| `sqlite`      | Enable sqlite connectivity            |
-| `mysql`       | Enable mysql connectivity             |
-| `update`      | Enable `self-update` functionality    |
+| Feature            |    Backend                                          |
+|--------------------|------------------------------------------------------|
+| `postgres`         | Enable postgres connectivity                        |
+| `sqlite`           | Enable sqlite connectivity                          |
+| `mysql`            | Enable mysql connectivity                           |
+| `update`           | Enable `self-update` functionality                  |
+| `vendored-openssl` | Statically vendor OpenSSL (for static/musl builds)  |
 
 
 `migrant` will manage all migrations that live under `<project-dir>/migrations/`, where `project-dir` is the closest
@@ -23,7 +24,7 @@ If the `migration_location` directory doesn't exist, it will be created the firs
 
 *Note:* Configuration values prefixed with `env:` in your `Migrant.toml` will be sourced from environment variables.
 For example, `database_user = "env:DB_USER"` will use the value of the environment variable `DB_USER`.
-If a `.env.` file exists, it will be "sourced" automatically before your `Migrant.toml` is loaded.
+If a `.env` file exists, it will be "sourced" automatically before your `Migrant.toml` is loaded.
 
 *Note:* SQL statements are batch executed as is. If you want your migration to happen atomically in a
 transaction you must manually wrap your statements in a transaction (`begin transaction; ... commit;`).
@@ -34,27 +35,23 @@ transaction you must manually wrap your statements in a transaction (`begin tran
 **Binary releases:**
 
 See [releases](https://github.com/jaemk/migrant/releases) for binaries. If you've already installed a binary release, you can update to the latest release via `migrant self update`.
+Note: `migrant self update` only works when the binary was built with the `update` feature; binary releases include it, but `cargo install migrant --features postgres` (for example) does not.
 
 **Building from source:**
 
-By default `migrant` will build without any features, falling back to using each database's `cli` commands
-(`psql` / `sqlite3` / `mysqlsh`).
-The `postgres`, `rusqlite`, and `mysql` database driver libraries can be activated with their respective feature flags.
-Note, Some drivers require their dev libraries (`postgresql`: `libpq-dev`, `sqlite`: `libsqlite3-dev`).
+By default `migrant` builds without any database features, so at least one of `postgres` / `sqlite` / `mysql`
+is required for a useful binary.
+Some drivers require their dev libraries (`postgresql`: `libpq-dev`); the `sqlite` feature bundles sqlite.
 [Self update](https://github.com/jaemk/self_update) functionality (updating to the latest GitHub release) is available behind the `update` feature.
 The binary releases are built with all features.
 
 **Building from source (`crates.io`):**
 
 ```shell
-# install without features
-# use cli commands for all db interaction
-cargo install migrant
-
 # install with `postgres`
 cargo install migrant --features postgres
 
-# install with `rusqlite`
+# install with bundled sqlite
 cargo install migrant --features sqlite
 
 # all
@@ -63,8 +60,9 @@ cargo install migrant --features 'postgres sqlite mysql update'
 
 ### Simple Usage
 
-`migrant init [--type <database-type>, --location <project-dir>, --no-confirm]` - Initialize project by creating a `Migrant.toml` file with db info/credentials.
+`migrant init [--type <database-type>, --location <project-dir>, --default-from-env, --no-confirm]` - Initialize project by creating a `Migrant.toml` file with db info/credentials.
 When run interactively (without `--no-confirm`), `setup` will be run automatically.
+`--default-from-env` seeds all settings values as `env:VAR` references instead of literal values.
 
 `migrant setup` - Verify database info/credentials and setup a `__migrant_migrations` table if missing.
 
@@ -75,6 +73,10 @@ When run interactively (without `--no-confirm`), `setup` will be run automatical
 `migrant list` - Display all available .sql files and mark those applied.
 
 `migrant apply [--down, --all, --force, --fake]` - Apply the next available migration[s].
+
+`migrant redo [--all, --force]` - Re-apply the latest migration (down then up).
+
+`migrant tui` - Open an interactive terminal UI for viewing and applying migrations.
 
 `migrant shell` - Open a repl
 
@@ -89,10 +91,22 @@ When run interactively (without `--no-confirm`), `setup` will be run automatical
 
 ### Usage as a library
 
-See [`migrant_lib`](https://github.com/jaemk/migrant_lib) and
-[examples](https://github.com/jaemk/migrant_lib/tree/master/examples).
+See [`migrant_lib`](./migrant_lib/) and
+[examples](./migrant_lib/examples/).
 `migrant` itself is just a thin wrapper around `migrant_lib`, so the full functionality of migration management
 can be embedded in your actual project.
+
+
+### Releases
+
+The library and the CLI are versioned and released separately, triggered by pushing a tag:
+
+- `lib-v<version>` publishes `migrant_lib` to crates.io. The tag must match the version in `migrant_lib/Cargo.toml`.
+- `cli-v<version>` publishes `migrant` to crates.io and builds release binaries
+  (linux gnu/musl, macos x86_64/aarch64, windows) attached to a GitHub release.
+  The tag must match the version in `Cargo.toml`.
+
+When both change, tag `lib-v*` first so the published CLI can resolve its `migrant_lib` dependency.
 
 
 ### Development
@@ -102,5 +116,4 @@ See [CONTRIBUTING](https://github.com/jaemk/migrant/blob/master/CONTRIBUTING.md)
 
 ### Docker
 
-An image with the binary installed is available at `jaemk/migrant:latest` 
-
+An image with the binary installed is available at `jaemk/migrant:latest`

@@ -6,15 +6,10 @@ Thanks for contributing!
 ## Getting Started
 
 - [Install rust](https://www.rust-lang.org/en-US/install.html)
-- Install dependencies:
-    - **SQLite**: `apt install sqlite3 libsqlite3-dev`
-    - **PostgreSQL**: `apt install postgresql libpq-dev`
-    - **MySQL**: See [mysql install docs](https://dev.mysql.com/doc/mysql-apt-repo-quick-guide/en/)
-       - [Download the apt repo `.deb`](https://dev.mysql.com/downloads/repo/apt/)
-       - `dpkg -i mysql-apt-config_<version>_all.deb`
-       - `apt update`
-       - `apt install mysql-server mysql-shell`
 - `cargo build`
+
+The `sqlite` feature bundles sqlite, so no system libraries are needed for it.
+The `postgres` feature needs `libpq-dev` at build time on linux.
 
 
 ## Making Changes
@@ -25,17 +20,24 @@ Thanks for contributing!
 
 ## Running Tests
 
-The integration tests assume the `Migrant.toml` configuration file is present and configured for sqlite.
+The CLI integration tests use the repo's `Migrant.toml` (sqlite) and `migrations/` directory:
 
 ```bash
-cargo test
-cargo test --features 'sqlite postgres mysql'
+cargo test --features sqlite,integration_tests
 ```
+
+Library tests live in `migrant_lib/` (see its CONTRIBUTING for postgres/mysql setup).
 
 
 ## Submitting Changes
 
 Pull Requests should be made against master.
-Travis CI will run the test suite on all PRs.
+GitHub Actions will run the test suite on all PRs.
 Remember to update the changelog!
 
+
+## Releasing
+
+- `lib-v<version>` tags publish `migrant_lib` to crates.io
+- `cli-v<version>` tags publish `migrant` to crates.io and attach release binaries to a GitHub release
+- Tags must match the corresponding `Cargo.toml` version; tag `lib-v*` first when both change

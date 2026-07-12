@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.15.0]
+### Added
+- `migrant tui` subcommand: interactive terminal UI for viewing and applying migrations
+- GitHub Actions CI and release workflows. Releases are triggered by tags:
+  `lib-v*` publishes `migrant_lib`, `cli-v*` publishes `migrant` and builds release binaries
+- `vendored-openssl` feature for static (musl) builds
+
+### Changed
+- Update `migrant_lib` to 0.35
+- Port CLI from clap 2 to clap 4, preserving the existing interface
+- `self update` now resolves `cli-v*` release tags
+- Replace `dotenv` with `dotenvy`, `error-chain` with plain error types
+- Update to edition 2021
+
+### Removed
+- Travis CI
+
+----
+
 ## [0.12.0]
 ### Added
 
