@@ -150,6 +150,10 @@ pub fn build_cli() -> Command {
             Command::new("which-config")
                 .about("Display the path to the configuration file being used"),
         )
+        .subcommand(
+            Command::new("tui")
+                .about("Interactive terminal UI for viewing and applying migrations"),
+        )
 }
 
 #[cfg(test)]

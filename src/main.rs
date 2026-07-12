@@ -7,6 +7,7 @@ use migrant_lib::config::{MySqlSettingsBuilder, PostgresSettingsBuilder, SqliteS
 use migrant_lib::{Config, DbKind, Direction, Migrator};
 
 mod cli;
+mod tui;
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
@@ -163,6 +164,9 @@ fn run(dir: &Path, matches: &clap::ArgMatches) -> Result<()> {
                 .to_str()
                 .ok_or_else(|| format!("PathError: Invalid utf8: {:?}", config_path))?;
             println!("{}", path);
+        }
+        Some(("tui", _)) => {
+            tui::run(&config)?;
         }
         _ => {
             println!("migrant: see `--help`");

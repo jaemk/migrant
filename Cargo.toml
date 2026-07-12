@@ -34,7 +34,9 @@ rusqlite = "0.40"
 # cli-only
 clap = "4"
 clap_complete = "4"
+crossterm = "0.29"
 dotenvy = "0.15"
+ratatui = "0.30"
 self_update = "0.44"
 assert_cmd = "2"
 predicates = "3"
@@ -57,8 +59,10 @@ walkdir = "2"
 [dependencies]
 clap = { workspace = true }
 clap_complete = { workspace = true }
+crossterm = { workspace = true }
 dotenvy = { workspace = true }
 migrant_lib = { workspace = true }
+ratatui = { workspace = true }
 rusqlite = { workspace = true, optional = true, features = ["bundled"] }
 self_update = { workspace = true, optional = true }
 
