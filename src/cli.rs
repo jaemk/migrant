@@ -92,19 +92,19 @@ pub fn build_cli() -> Command {
                         .long("all")
                         .short('a')
                         .action(ArgAction::SetTrue)
-                        .help("Applies all available migrations"),
+                        .help("Applies all remaining migrations in the chosen direction (un-applies all with --down)"),
                 )
                 .arg(
                     Arg::new("force")
                         .long("force")
                         .action(ArgAction::SetTrue)
-                        .help("Applies the migration and treats it as if it were successful"),
+                        .help("Applies migrations, ignoring errors"),
                 )
                 .arg(
                     Arg::new("fake")
                         .long("fake")
                         .action(ArgAction::SetTrue)
-                        .help("Updates the migrations table as if the specified migration was applied"),
+                        .help("Updates the migration table without running the migration"),
                 ),
         )
         .subcommand(
@@ -115,13 +115,13 @@ pub fn build_cli() -> Command {
                         .long("all")
                         .short('a')
                         .action(ArgAction::SetTrue)
-                        .help("Applies all available migrations"),
+                        .help("Applies all remaining migrations in the chosen direction (un-applies all with --down)"),
                 )
                 .arg(
                     Arg::new("force")
                         .long("force")
                         .action(ArgAction::SetTrue)
-                        .help("Applies the migration and treats it as if it were successful"),
+                        .help("Applies migrations, ignoring errors"),
                 ),
         )
         .subcommand(

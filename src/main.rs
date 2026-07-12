@@ -211,6 +211,39 @@ fn run_self(self_matches: &clap::ArgMatches) -> Result<()> {
     Ok(())
 }
 
+/// Find the greatest `cli-v<version>` release among a set of release tags,
+/// returning the version with the `prefix` stripped.
+///
+/// GitHub releases are normally listed newest-first, but a backport (e.g.
+/// `cli-v0.14.1`) published after a newer release (e.g. `cli-v0.15.0`) can
+/// still appear first in the list. Rather than relying on list order, every
+/// `<prefix>*` entry is compared with `self_update::version::bump_is_greater`
+/// and the maximum is returned. Tags that don't start with `prefix` (such as
+/// `lib-v*` library releases) are ignored.
+#[cfg(feature = "update")]
+fn latest_cli_release<'a, I>(versions: I, prefix: &str) -> Result<Option<&'a str>>
+where
+    I: IntoIterator<Item = &'a str>,
+{
+    let mut max: Option<&'a str> = None;
+    for version in versions {
+        let Some(stripped) = version.strip_prefix(prefix) else {
+            continue;
+        };
+        max = Some(match max {
+            None => stripped,
+            Some(current) => {
+                if self_update::version::bump_is_greater(current, stripped)? {
+                    stripped
+                } else {
+                    current
+                }
+            }
+        });
+    }
+    Ok(max)
+}
+
 /// CLI release tags are prefixed (`cli-v<version>`) to distinguish them from
 /// library releases (`lib-v<version>`), so the latest CLI release is resolved
 /// manually instead of relying on self_update's plain-semver tag handling.
@@ -223,11 +256,7 @@ fn update(matches: &clap::ArgMatches) -> Result<()> {
         .repo_name("migrant")
         .build()?
         .fetch()?;
-    // `Release::version` is the git tag with any leading `v` stripped, and
-    // releases are ordered newest-first
-    let latest = releases
-        .iter()
-        .find_map(|r| r.version.strip_prefix(TAG_PREFIX));
+    let latest = latest_cli_release(releases.iter().map(|r| r.version.as_str()), TAG_PREFIX)?;
     let latest = match latest {
         Some(v) => v,
         None => {
@@ -264,6 +293,43 @@ fn update(matches: &clap::ArgMatches) -> Result<()> {
 #[cfg(not(feature = "update"))]
 fn update(_: &clap::ArgMatches) -> Result<()> {
     Err("This executable was not compiled with `self_update` features enabled via `--features update`".into())
+}
+
+#[cfg(all(test, feature = "update"))]
+mod update_tests {
+    use super::latest_cli_release;
+
+    #[test]
+    fn backport_listed_first_still_yields_max() {
+        // A backport published after the newer release can sort first in
+        // GitHub's release list; the max must still be picked regardless of
+        // list order.
+        let versions = ["cli-v0.14.1", "cli-v0.15.0"];
+        let latest = latest_cli_release(versions, "cli-v").unwrap();
+        assert_eq!(latest, Some("0.15.0"));
+
+        // Order reversed should give the same result.
+        let versions = ["cli-v0.15.0", "cli-v0.14.1"];
+        let latest = latest_cli_release(versions, "cli-v").unwrap();
+        assert_eq!(latest, Some("0.15.0"));
+    }
+
+    #[test]
+    fn no_cli_v_entries_yields_none() {
+        let versions = ["lib-v1.0.0", "lib-v1.1.0"];
+        let latest = latest_cli_release(versions, "cli-v").unwrap();
+        assert_eq!(latest, None);
+
+        let latest = latest_cli_release(std::iter::empty(), "cli-v").unwrap();
+        assert_eq!(latest, None);
+    }
+
+    #[test]
+    fn mixed_lib_v_tags_are_ignored() {
+        let versions = ["lib-v2.0.0", "cli-v0.14.0", "lib-v1.9.9", "cli-v0.13.0"];
+        let latest = latest_cli_release(versions, "cli-v").unwrap();
+        assert_eq!(latest, Some("0.14.0"));
+    }
 }
 
 /// Get confirmation on a prompt

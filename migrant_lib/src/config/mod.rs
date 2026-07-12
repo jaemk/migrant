@@ -306,7 +306,19 @@ impl Config {
     /// will also be reloaded from the file. Returns a new `Config` instance.
     pub fn reload(&self) -> Result<Config> {
         let mut config = match self.settings_path.as_ref() {
-            Some(path) => Config::from_settings_file(path)?,
+            Some(path) => {
+                let mut reloaded = Config::from_settings_file(path)?;
+                // `from_settings_file` builds a fresh, unconnected config. If the
+                // settings on disk are unchanged, carry over our live connection
+                // so that in-memory (`:memory:`) databases -- whose entire state
+                // lives in the connection handle -- are not silently discarded.
+                // If the settings changed, keep the fresh connection so the
+                // reloaded config connects using the new settings.
+                if reloaded.settings == self.settings {
+                    reloaded.conn = Arc::clone(&self.conn);
+                }
+                reloaded
+            }
             None => self.clone(),
         };
         config.cli_compatible = self.cli_compatible;

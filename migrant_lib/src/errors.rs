@@ -83,3 +83,20 @@ impl Error {
         matches!(self, Error::MigrationComplete(_))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn is_migration_complete_true_for_migration_complete() {
+        let err = Error::MigrationComplete("nothing to apply".to_string());
+        assert!(err.is_migration_complete());
+    }
+
+    #[test]
+    fn is_migration_complete_false_for_other_errors() {
+        let err = Error::Migration("boom".to_string());
+        assert!(!err.is_migration_complete());
+    }
+}

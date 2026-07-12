@@ -15,6 +15,11 @@ pub fn run(config: &Config) -> super::Result<()> {
         return Err("`migrant tui` requires an interactive terminal".into());
     }
     let mut app = App::new(config)?;
+    let previous_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |panic_info| {
+        ratatui::restore();
+        previous_hook(panic_info);
+    }));
     let mut terminal = ratatui::init();
     let res = app.run(&mut terminal);
     ratatui::restore();
@@ -105,9 +110,13 @@ impl App {
             Ok(()) => format!(
                 "Applied {}[{}] migration{}",
                 if all { "all " } else { "" },
-                direction,
+                direction.to_string().to_lowercase(),
                 if all { "s" } else { "" }
             ),
+            Err(e) if e.is_migration_complete() => match direction {
+                Direction::Up => "No un-applied migrations".to_string(),
+                Direction::Down => "Nothing to un-apply".to_string(),
+            },
             Err(e) => format!("{}", e),
         };
         self.refresh(&message);

@@ -26,12 +26,54 @@ fn tls_connector(cert: &Path) -> Result<postgres_native_tls::MakeTlsConnector> {
     Ok(postgres_native_tls::MakeTlsConnector::new(connector))
 }
 
+/// Build a TLS connector that trusts the system's root certificates.
+fn system_tls_connector() -> Result<postgres_native_tls::MakeTlsConnector> {
+    let connector = native_tls::TlsConnector::new()
+        .map_err(|e| err!(Migration, "postgres tls-connection error {}", e))?;
+    Ok(postgres_native_tls::MakeTlsConnector::new(connector))
+}
+
+/// Extract the `sslmode` param value (if any) from a postgres connection
+/// string, handling both URL-style query params (`?sslmode=require`) and
+/// libpq keyword/value strings (`sslmode=require`).
+fn sslmode_value(conn_str: &str) -> Option<&str> {
+    conn_str
+        .split(|c: char| c.is_whitespace() || matches!(c, '?' | '&' | ';'))
+        .find_map(|token| {
+            let (key, value) = token.split_once('=')?;
+            key.trim().eq_ignore_ascii_case("sslmode").then_some(value)
+        })
+        .map(str::trim)
+}
+
+/// Decide whether a connection string requests TLS.
+///
+/// Returns `false` when no `sslmode` param is present or it is `disable`
+/// (the historical default), and `true` for any other value
+/// (`prefer`/`require`/`verify-ca`/`verify-full`).
+fn conn_str_wants_tls(conn_str: &str) -> bool {
+    match sslmode_value(conn_str) {
+        None => false,
+        Some(mode) => !mode.eq_ignore_ascii_case("disable"),
+    }
+}
+
 impl PgConn {
-    /// Connect, optionally verifying the server with a custom ssl cert
+    /// Connect to postgres, selecting a TLS backend from the connection string.
+    ///
+    /// - When a custom `cert` file is given, the server is verified against
+    ///   that root certificate.
+    /// - Otherwise the connection string's `sslmode` param decides: absent or
+    ///   `disable` connects without TLS (the default); any other value
+    ///   (`prefer`/`require`/`verify-ca`/`verify-full`) connects with a
+    ///   `native-tls` connector using the system trust roots.
     pub(crate) fn connect(conn_str: &str, cert: Option<&Path>) -> Result<Self> {
         let client = match cert {
-            None => Client::connect(conn_str, NoTls)?,
             Some(cert) => Client::connect(conn_str, tls_connector(cert)?)?,
+            None if conn_str_wants_tls(conn_str) => {
+                Client::connect(conn_str, system_tls_connector()?)?
+            }
+            None => Client::connect(conn_str, NoTls)?,
         };
         Ok(Self { client })
     }
@@ -80,6 +122,47 @@ impl PgConn {
 mod tests {
     use super::*;
 
+    #[test]
+    fn sslmode_value_parsing() {
+        assert_eq!(sslmode_value("postgres://user:pass@localhost/db"), None);
+        assert_eq!(
+            sslmode_value("postgres://user:pass@localhost/db?sslmode=require"),
+            Some("require")
+        );
+        assert_eq!(
+            sslmode_value("postgres://u:p@h/db?connect_timeout=10&sslmode=verify-full"),
+            Some("verify-full")
+        );
+        assert_eq!(
+            sslmode_value("host=localhost user=u sslmode=disable dbname=db"),
+            Some("disable")
+        );
+        assert_eq!(sslmode_value("host=localhost user=u dbname=db"), None);
+    }
+
+    #[test]
+    fn conn_str_wants_tls_decision() {
+        // no sslmode param -> unchanged default, no TLS
+        assert!(!conn_str_wants_tls("postgres://user:pass@localhost/db"));
+        assert!(!conn_str_wants_tls("host=localhost user=u dbname=db"));
+        // sslmode=disable -> no TLS
+        assert!(!conn_str_wants_tls(
+            "postgres://user:pass@localhost/db?sslmode=disable"
+        ));
+        assert!(!conn_str_wants_tls("host=localhost sslmode=disable"));
+        // any other sslmode -> TLS
+        assert!(conn_str_wants_tls(
+            "postgres://user:pass@localhost/db?sslmode=require"
+        ));
+        assert!(conn_str_wants_tls("host=localhost sslmode=prefer"));
+        // sslmode mixed with other params -> TLS
+        assert!(conn_str_wants_tls(
+            "postgres://u:p@h/db?connect_timeout=10&sslmode=verify-full"
+        ));
+        // case-insensitive
+        assert!(!conn_str_wants_tls("postgres://u:p@h/db?sslmode=DISABLE"));
+    }
+
     /// Requires a running postgres instance; set `POSTGRES_TEST_CONN_STR`
     /// (e.g. `postgres://user:pass@localhost/db`) to run
     #[test]
@@ -92,6 +175,10 @@ mod tests {
             }
         };
         let mut conn = PgConn::connect(&conn_str, None).unwrap();
+
+        // drop any leftover table from an earlier interrupted run
+        conn.execute_batch("drop table if exists __migrant_migrations;")
+            .unwrap();
 
         assert!(
             !conn.migration_table_exists().unwrap(),

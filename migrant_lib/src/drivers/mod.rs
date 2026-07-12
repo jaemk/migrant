@@ -28,7 +28,7 @@ pub(crate) mod sql {
     pub static SQLITE_MIGRATION_TABLE_EXISTS: &str = "select exists(select 1 from sqlite_master where type = 'table' and name = '__migrant_migrations');";
     pub static PG_MIGRATION_TABLE_EXISTS: &str =
         "select exists(select 1 from pg_tables where tablename = '__migrant_migrations');";
-    pub static MYSQL_MIGRATION_TABLE_EXISTS: &str = "select exists(select 1 from information_schema.tables where table_name='__migrant_migrations') as tag;";
+    pub static MYSQL_MIGRATION_TABLE_EXISTS: &str = "select exists(select 1 from information_schema.tables where table_name='__migrant_migrations' and table_schema = database()) as tag;";
 }
 
 #[cfg(feature = "d-mysql")]
@@ -152,5 +152,23 @@ impl DbConnection {
     /// Execute a batch of sql statements
     pub(crate) fn execute_batch(&mut self, sql: &str) -> Result<()> {
         dispatch!(self, c => c.execute_batch(sql))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::sql;
+
+    /// Regression guard for F2: the mysql migration-table-exists check must be
+    /// scoped to the current database via `table_schema = database()`, otherwise
+    /// a `__migrant_migrations` table in any other schema on the server is a
+    /// false positive and setup skips creating the table in the right schema.
+    #[test]
+    fn mysql_migration_table_exists_is_scoped_to_current_schema() {
+        assert!(
+            sql::MYSQL_MIGRATION_TABLE_EXISTS.contains("table_schema = database()"),
+            "MYSQL_MIGRATION_TABLE_EXISTS must filter on table_schema = database(): {}",
+            sql::MYSQL_MIGRATION_TABLE_EXISTS
+        );
     }
 }

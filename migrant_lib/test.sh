@@ -6,6 +6,8 @@
 # MYSQL_TEST_CONN_STR; this script provides both via docker.
 set -e
 
+cd "$(dirname "$0")"
+
 PG_CONTAINER=migrant-test-pg
 MYSQL_CONTAINER=migrant-test-mysql
 PG_PORT="${PG_PORT:-15432}"
@@ -35,7 +37,9 @@ docker run -d --rm --name "$MYSQL_CONTAINER" \
 echo "waiting for postgres..."
 until docker exec "$PG_CONTAINER" pg_isready -U migrant >/dev/null 2>&1; do sleep 1; done
 echo "waiting for mysql..."
-until docker exec "$MYSQL_CONTAINER" mysqladmin ping -prootpass >/dev/null 2>&1; do sleep 1; done
+# ping over tcp: mysql:8's temporary init server is socket-only, so a plain
+# (socket) ping succeeds before the real server is accepting tcp connections
+until docker exec "$MYSQL_CONTAINER" mysqladmin ping --protocol=tcp -h127.0.0.1 -prootpass >/dev/null 2>&1; do sleep 1; done
 
 set -x
 cargo test

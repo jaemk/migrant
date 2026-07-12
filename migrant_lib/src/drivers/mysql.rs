@@ -81,6 +81,10 @@ mod tests {
         };
         let mut conn = MySqlConn::connect(&conn_str).unwrap();
 
+        // drop any leftover table from an earlier interrupted run
+        conn.execute_batch("drop table if exists __migrant_migrations;")
+            .unwrap();
+
         assert!(
             !conn.migration_table_exists().unwrap(),
             "no table before setup"

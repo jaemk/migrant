@@ -9,27 +9,36 @@ use std::path::{Path, PathBuf};
 use serde::Deserialize;
 
 use crate::errors::*;
-use crate::macros::bail;
+use crate::macros::{bail, err};
 use crate::util::encode;
 use crate::{DbKind, SQLITE_MEMORY_PATH};
 
 use super::builders::{MySqlSettingsBuilder, PostgresSettingsBuilder, SqliteSettingsBuilder};
 
 /// Resolve `env:VAR_NAME` values from the environment.
-/// Missing environment variables resolve to an empty string.
-fn resolve_env(value: &str) -> String {
+///
+/// A missing `env:VAR_NAME` variable is a hard error rather than resolving to
+/// an empty string: silently connecting with empty credentials (or an empty
+/// database path) is worse than failing loudly.
+fn resolve_env(value: &str) -> Result<String> {
     match value.strip_prefix("env:") {
-        Some(var) => env::var(var).unwrap_or_default(),
-        None => value.to_string(),
+        Some(var) => env::var(var).map_err(|_| {
+            err!(
+                Config,
+                "Environment variable `{}` referenced in settings is not set",
+                var
+            )
+        }),
+        None => Ok(value.to_string()),
     }
 }
 
-fn resolve_env_opt(value: &Option<String>) -> Option<String> {
-    value.as_deref().map(resolve_env)
+fn resolve_env_opt(value: &Option<String>) -> Result<Option<String>> {
+    value.as_deref().map(resolve_env).transpose()
 }
 
 /// Sqlite connection settings
-#[derive(Deserialize, Debug, Clone)]
+#[derive(Deserialize, Debug, Clone, PartialEq)]
 pub(crate) struct SqliteSettings {
     pub(crate) database_path: String,
     pub(crate) migration_location: Option<String>,
@@ -40,16 +49,16 @@ impl SqliteSettings {
         self.database_path == SQLITE_MEMORY_PATH
     }
 
-    fn resolve_env_vars(&self) -> Self {
-        Self {
-            database_path: resolve_env(&self.database_path),
-            migration_location: resolve_env_opt(&self.migration_location),
-        }
+    fn resolve_env_vars(&self) -> Result<Self> {
+        Ok(Self {
+            database_path: resolve_env(&self.database_path)?,
+            migration_location: resolve_env_opt(&self.migration_location)?,
+        })
     }
 }
 
 /// Connection settings for server-based databases (postgres, mysql)
-#[derive(Deserialize, Debug, Clone)]
+#[derive(Deserialize, Debug, Clone, PartialEq)]
 pub(crate) struct ServerSettings {
     pub(crate) database_name: String,
     pub(crate) database_user: String,
@@ -87,34 +96,41 @@ impl ServerSettings {
             if !params.is_empty() {
                 let mut pairs = url.query_pairs_mut();
                 for (k, v) in params {
-                    pairs.append_pair(&encode(k), &encode(v));
+                    // `append_pair` percent-encodes for us; pre-encoding here
+                    // would double-encode the keys and values.
+                    pairs.append_pair(k, v);
                 }
             }
         }
         Ok(url.to_string())
     }
 
-    fn resolve_env_vars(&self) -> Self {
-        Self {
-            database_name: resolve_env(&self.database_name),
-            database_user: resolve_env(&self.database_user),
-            database_password: resolve_env(&self.database_password),
-            database_host: resolve_env_opt(&self.database_host),
-            database_port: resolve_env_opt(&self.database_port),
-            database_params: self.database_params.as_ref().map(|params| {
-                params
-                    .iter()
-                    .map(|(k, v)| (k.clone(), resolve_env(v)))
-                    .collect()
-            }),
+    fn resolve_env_vars(&self) -> Result<Self> {
+        let database_params = match self.database_params.as_ref() {
+            Some(params) => {
+                let mut resolved = BTreeMap::new();
+                for (k, v) in params {
+                    resolved.insert(k.clone(), resolve_env(v)?);
+                }
+                Some(resolved)
+            }
+            None => None,
+        };
+        Ok(Self {
+            database_name: resolve_env(&self.database_name)?,
+            database_user: resolve_env(&self.database_user)?,
+            database_password: resolve_env(&self.database_password)?,
+            database_host: resolve_env_opt(&self.database_host)?,
+            database_port: resolve_env_opt(&self.database_port)?,
+            database_params,
             ssl_cert_file: self.ssl_cert_file.clone(),
-            migration_location: resolve_env_opt(&self.migration_location),
-        }
+            migration_location: resolve_env_opt(&self.migration_location)?,
+        })
     }
 }
 
 /// Settings for one of the supported databases
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) enum DbSettings {
     Sqlite(SqliteSettings),
     Postgres(ServerSettings),
@@ -178,7 +194,7 @@ impl DbSettings {
 ///
 /// These settings are serialized and saved in a project `Migrant.toml` config file
 /// or defined explicitly in source using the provided builder methods.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Settings {
     pub(crate) inner: DbSettings,
 }
@@ -199,15 +215,15 @@ impl Settings {
         let inner = match type_field.database_type.as_str() {
             "sqlite" => {
                 let settings: SqliteSettings = toml::from_str(&content)?;
-                DbSettings::Sqlite(settings.resolve_env_vars())
+                DbSettings::Sqlite(settings.resolve_env_vars()?)
             }
             "postgres" => {
                 let settings: ServerSettings = toml::from_str(&content)?;
-                DbSettings::Postgres(settings.resolve_env_vars())
+                DbSettings::Postgres(settings.resolve_env_vars()?)
             }
             "mysql" => {
                 let settings: ServerSettings = toml::from_str(&content)?;
-                DbSettings::MySql(settings.resolve_env_vars())
+                DbSettings::MySql(settings.resolve_env_vars()?)
             }
             t => bail!(Config, "Invalid database_type: {:?}", t),
         };
@@ -227,5 +243,77 @@ impl Settings {
     /// Initialize a `MySqlSettingsBuilder` to be configured
     pub fn configure_mysql() -> MySqlSettingsBuilder {
         MySqlSettingsBuilder::default()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn server_settings() -> ServerSettings {
+        ServerSettings {
+            database_name: "mydb".into(),
+            database_user: "user".into(),
+            database_password: "pass".into(),
+            database_host: Some("localhost".into()),
+            database_port: Some("5432".into()),
+            database_params: None,
+            ssl_cert_file: None,
+            migration_location: None,
+        }
+    }
+
+    #[test]
+    fn connect_string_params_single_encoded() {
+        let mut settings = server_settings();
+        let mut params = BTreeMap::new();
+        // A value with a space and an `=`: both must be encoded exactly once.
+        params.insert("options".to_string(), "-c search_path=myschema".to_string());
+        params.insert("sslmode".to_string(), "require".to_string());
+        settings.database_params = Some(params);
+
+        let url = settings.connect_string("postgres", "5432").unwrap();
+        assert_eq!(
+            url,
+            "postgres://user:pass@localhost:5432/mydb\
+             ?options=-c+search_path%3Dmyschema&sslmode=require"
+        );
+    }
+
+    #[test]
+    fn connect_string_credentials_special_chars_encoded() {
+        let mut settings = server_settings();
+        settings.database_user = "user name".into();
+        settings.database_password = "p@ss:word".into();
+        settings.database_host = Some("my host".into());
+
+        let url = settings.connect_string("postgres", "5432").unwrap();
+        assert_eq!(
+            url,
+            "postgres://user%20name:p%40ss%3Aword@my%20host:5432/mydb"
+        );
+    }
+
+    #[test]
+    fn resolve_env_plain_value_passthrough() {
+        assert_eq!(resolve_env("plain-value").unwrap(), "plain-value");
+    }
+
+    #[test]
+    fn resolve_env_missing_var_errors_and_names_var() {
+        // A variable name unique to this test that is never set.
+        let name = "MIGRANT_TEST_UNSET_VAR_9F3A7C21";
+        assert!(
+            env::var(name).is_err(),
+            "test precondition: var must be unset"
+        );
+
+        let err = resolve_env(&format!("env:{}", name)).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains(name),
+            "error message should name the missing variable, got: {}",
+            msg
+        );
     }
 }

@@ -29,9 +29,15 @@ impl SqliteSettingsBuilder {
         Self::default()
     }
 
-    /// **Required** (unless `memory` is used) -- Set the absolute path of a database file.
+    /// **Required** (unless `memory` is used) -- Set the path of a database file.
     ///
     /// The special path `:memory:` selects an in-memory database.
+    ///
+    /// When this builder is used directly with `build()` (or passed to
+    /// `Config::with_settings`), the path must be absolute. When it is instead passed to
+    /// `Config::init_in(...).with_sqlite_options(...)`, a relative path is also accepted --
+    /// it is written into the generated settings file and resolved relative to that
+    /// settings file's directory when the config is later loaded.
     pub fn database_path<T: AsRef<Path>>(&mut self, p: T) -> Result<&mut Self> {
         self.database_path = Some(path_to_string(p.as_ref())?);
         Ok(self)

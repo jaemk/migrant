@@ -76,6 +76,26 @@ fn apply_and_unapply(settings: Settings) {
     assert!(statuses.iter().all(|m| !m.applied));
 }
 
+/// Drop the migration table so the next run starts from a clean database.
+#[cfg(feature = "d-postgres")]
+fn drop_pg_migration_table(conn_str: &str) {
+    let mut client = postgres::Client::connect(conn_str, postgres::NoTls)
+        .expect("connect to drop postgres migration table");
+    client
+        .batch_execute("drop table if exists __migrant_migrations;")
+        .expect("drop postgres migration table");
+}
+
+/// Drop the migration table so the next run starts from a clean database.
+#[cfg(feature = "d-mysql")]
+fn drop_mysql_migration_table(conn_str: &str) {
+    use mysql::prelude::Queryable;
+    let opts = mysql::Opts::from_url(conn_str).expect("parse mysql connection string");
+    let mut conn = mysql::Conn::new(opts).expect("connect to drop mysql migration table");
+    conn.query_drop("drop table if exists __migrant_migrations;")
+        .expect("drop mysql migration table");
+}
+
 #[cfg(feature = "d-postgres")]
 #[test]
 fn postgres_end_to_end() {
@@ -95,7 +115,10 @@ fn postgres_end_to_end() {
         .database_port(parts.port)
         .build()
         .unwrap();
+    // drop any leftover table from an earlier interrupted run
+    drop_pg_migration_table(&conn_str);
     apply_and_unapply(settings);
+    drop_pg_migration_table(&conn_str);
 }
 
 #[cfg(feature = "d-mysql")]
@@ -117,5 +140,8 @@ fn mysql_end_to_end() {
         .database_port(parts.port)
         .build()
         .unwrap();
+    // drop any leftover table from an earlier interrupted run
+    drop_mysql_migration_table(&conn_str);
     apply_and_unapply(settings);
+    drop_mysql_migration_table(&conn_str);
 }

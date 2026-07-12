@@ -26,6 +26,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                         .database_path("db/db.db")?
                         .migration_location("migrations/managed")?,
                 )
+                .interactive(false)
                 .initialize()?;
             println!(
                 "\nSettings file and migrations table initialized. \

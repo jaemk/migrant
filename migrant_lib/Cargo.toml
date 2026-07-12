@@ -7,7 +7,7 @@ rust-version = "1.88"
 authors = ["James Kominick <james@kominick.com>"]
 license = "MIT"
 description = "Database migration and configuration library for postgres, sqlite, mysql"
-repository = "https://github.com/jaemk/migrant_lib"
+repository = "https://github.com/jaemk/migrant"
 keywords = ["database", "migration", "postgres", "sqlite", "mysql"]
 categories = ["database", "development-tools"]
 readme = "README.md"
@@ -35,7 +35,6 @@ rusqlite = { workspace = true, optional = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
-url = { workspace = true }
 # bundle sqlite for self-contained tests; the published library leaves
 # bundling up to the consumer
 rusqlite = { workspace = true, features = ["bundled"] }

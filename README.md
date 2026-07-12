@@ -2,17 +2,18 @@
 [![Build Status](https://github.com/jaemk/migrant/actions/workflows/ci.yml/badge.svg)](https://github.com/jaemk/migrant/actions)
 [![crates.io:migrant](https://img.shields.io/crates/v/migrant.svg?label=migrant)](https://crates.io/crates/migrant)
 
-> Basic migration manager powered by [`migrant_lib`](https://github.com/jaemk/migrant_lib)
+> Basic migration manager powered by [`migrant_lib`](./migrant_lib/)
 
 
 **Supported databases/features:**
 
-| Feature       |    Backend                            |
-|---------------|---------------------------------------|
-| `postgres`    | Enable postgres connectivity          |
-| `sqlite`      | Enable sqlite connectivity            |
-| `mysql`       | Enable mysql connectivity             |
-| `update`      | Enable `self-update` functionality    |
+| Feature            |    Backend                                          |
+|--------------------|------------------------------------------------------|
+| `postgres`         | Enable postgres connectivity                        |
+| `sqlite`           | Enable sqlite connectivity                          |
+| `mysql`            | Enable mysql connectivity                           |
+| `update`           | Enable `self-update` functionality                  |
+| `vendored-openssl` | Statically vendor OpenSSL (for static/musl builds)  |
 
 
 `migrant` will manage all migrations that live under `<project-dir>/migrations/`, where `project-dir` is the closest
@@ -34,6 +35,7 @@ transaction you must manually wrap your statements in a transaction (`begin tran
 **Binary releases:**
 
 See [releases](https://github.com/jaemk/migrant/releases) for binaries. If you've already installed a binary release, you can update to the latest release via `migrant self update`.
+Note: `migrant self update` only works when the binary was built with the `update` feature; binary releases include it, but `cargo install migrant --features postgres` (for example) does not.
 
 **Building from source:**
 
@@ -58,8 +60,9 @@ cargo install migrant --features 'postgres sqlite mysql update'
 
 ### Simple Usage
 
-`migrant init [--type <database-type>, --location <project-dir>, --no-confirm]` - Initialize project by creating a `Migrant.toml` file with db info/credentials.
+`migrant init [--type <database-type>, --location <project-dir>, --default-from-env, --no-confirm]` - Initialize project by creating a `Migrant.toml` file with db info/credentials.
 When run interactively (without `--no-confirm`), `setup` will be run automatically.
+`--default-from-env` seeds all settings values as `env:VAR` references instead of literal values.
 
 `migrant setup` - Verify database info/credentials and setup a `__migrant_migrations` table if missing.
 
@@ -88,8 +91,8 @@ When run interactively (without `--no-confirm`), `setup` will be run automatical
 
 ### Usage as a library
 
-See [`migrant_lib`](https://github.com/jaemk/migrant_lib) and
-[examples](https://github.com/jaemk/migrant_lib/tree/master/examples).
+See [`migrant_lib`](./migrant_lib/) and
+[examples](./migrant_lib/examples/).
 `migrant` itself is just a thin wrapper around `migrant_lib`, so the full functionality of migration management
 can be embedded in your actual project.
 

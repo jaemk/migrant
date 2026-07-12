@@ -11,9 +11,7 @@ For CLI compatibility and embedded capabilities, see the
 [embedded_cli_compatible](https://github.com/jaemk/migrant_lib/blob/master/examples/embedded_cli_compatible.rs)
 example.
 
-Run with: `cargo run --example migrant_cli_compatible [--features d-sqlite]`
-Note: Running without features will use the corresponding database shell commands.
-      Use the respective `--features` to use the actual database driver libraries (`d-sqlite`, `d-postgres`, `d-mysql`)
+This should be run with `cargo run --example migrant_cli_compatible --features d-sqlite`
 */
 use migrant_lib::config::SqliteSettingsBuilder;
 use migrant_lib::Config;
@@ -49,6 +47,7 @@ fn run() -> Result<(), migrant_lib::Error> {
                 //         .database_port(3306)
                 //         .database_params(&[("prefer_socket", "true")])
                 //         .migration_location("migrations/managed")?)
+                .interactive(false)
                 .initialize()?;
             println!(
                 "\nSettings file and migrations table initialized. \

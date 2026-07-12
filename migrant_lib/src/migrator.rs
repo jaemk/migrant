@@ -157,16 +157,26 @@ impl Migrator {
                 .iter()
                 .find(|m| !applied.contains(&m.tag()))
                 .map(AsRef::as_ref),
-            Direction::Down => match applied.last() {
-                None => None,
-                Some(tag) => {
-                    let mig = available.iter().rev().find(|m| &m.tag() == tag);
-                    match mig {
-                        None => bail!(MigrationNotFound, "Tag not found: {}", tag),
+            Direction::Down => {
+                if applied.is_empty() {
+                    None
+                } else {
+                    // Select the Down target by definition order: the last
+                    // migration in `available` order whose tag is applied. The
+                    // `applied` slice may be unordered (it comes from an
+                    // unordered `select tag from __migrant_migrations` unless
+                    // running in cli-compatible mode), so we must not rely on
+                    // `applied.last()`.
+                    match available.iter().rev().find(|m| applied.contains(&m.tag())) {
                         Some(mig) => Some(mig.as_ref()),
+                        None => bail!(
+                            MigrationNotFound,
+                            "Applied migration not found in available migrations: {}",
+                            applied[0]
+                        ),
                     }
                 }
-            },
+            }
         })
     }
 
@@ -229,6 +239,72 @@ impl Migrator {
     fn println(&self, s: &str) {
         if self.show_output {
             println!("{}", s);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::migration::EmbeddedMigration;
+
+    fn available(tags: &[&str]) -> Vec<Box<dyn Migratable>> {
+        tags.iter()
+            .map(|t| EmbeddedMigration::with_tag(t).boxed())
+            .collect()
+    }
+
+    fn tags(strs: &[&str]) -> Vec<String> {
+        strs.iter().map(|s| (*s).to_owned()).collect()
+    }
+
+    #[test]
+    fn up_picks_first_unapplied_in_definition_order() {
+        let avail = available(&["a", "b", "c"]);
+        let applied = tags(&["a"]);
+        let next = Migrator::next_available(Direction::Up, &avail, &applied)
+            .unwrap()
+            .expect("expected an un-applied migration");
+        assert_eq!(next.tag(), "b");
+    }
+
+    #[test]
+    fn up_returns_none_when_all_applied() {
+        let avail = available(&["a", "b"]);
+        let applied = tags(&["a", "b"]);
+        let next = Migrator::next_available(Direction::Up, &avail, &applied).unwrap();
+        assert!(next.is_none());
+    }
+
+    #[test]
+    fn down_picks_last_applied_in_definition_order_even_when_applied_shuffled() {
+        let avail = available(&["a", "b", "c", "d"]);
+        // `applied` is intentionally shuffled and does not include the final
+        // migration `d`. The Down target must be `c` (the last applied tag in
+        // definition order), not `applied.last()` which would be `a`.
+        let applied = tags(&["b", "c", "a"]);
+        let next = Migrator::next_available(Direction::Down, &avail, &applied)
+            .unwrap()
+            .expect("expected a down migration");
+        assert_eq!(next.tag(), "c");
+    }
+
+    #[test]
+    fn down_with_empty_applied_returns_none() {
+        let avail = available(&["a", "b"]);
+        let applied: Vec<String> = Vec::new();
+        let next = Migrator::next_available(Direction::Down, &avail, &applied).unwrap();
+        assert!(next.is_none());
+    }
+
+    #[test]
+    fn down_with_applied_tags_absent_from_available_errors() {
+        let avail = available(&["a", "b"]);
+        let applied = tags(&["x", "y"]);
+        match Migrator::next_available(Direction::Down, &avail, &applied) {
+            Err(Error::MigrationNotFound(_)) => {}
+            Err(other) => panic!("expected MigrationNotFound, got: {:?}", other),
+            Ok(_) => panic!("expected MigrationNotFound error, got Ok"),
         }
     }
 }

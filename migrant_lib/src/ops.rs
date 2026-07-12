@@ -13,7 +13,7 @@ use chrono::{NaiveDateTime, Utc};
 use log::warn;
 use walkdir::WalkDir;
 
-use crate::config::Config;
+use crate::config::{Config, DbSettings};
 use crate::errors::*;
 use crate::macros::{bail, err};
 use crate::migratable::Migratable;
@@ -215,37 +215,100 @@ pub fn new(config: &Config, tag: &str) -> Result<()> {
 /// | `mysql`     | `mysqlsh` (`mysql-shell`)   |
 ///
 pub fn shell(config: &Config) -> Result<()> {
-    let mut command = match config.database_type() {
-        DbKind::Sqlite => {
-            let db_path = config.database_path_string()?;
-            let mut cmd = Command::new("sqlite3");
-            cmd.arg(db_path);
-            cmd
-        }
-        DbKind::Postgres => {
-            let mut cmd = Command::new("psql");
-            cmd.arg(config.connect_string()?);
-            cmd
-        }
-        DbKind::MySql => {
-            let mut cmd = Command::new("mysqlsh");
-            cmd.arg("--sql").arg("--uri").arg(config.connect_string()?);
-            cmd
-        }
-    };
-    let program = command.get_program().to_string_lossy().to_string();
+    let spec = build_shell_command(config)?;
+    let mut command = Command::new(&spec.program);
+    command.args(&spec.args);
+    for (key, value) in &spec.envs {
+        command.env(key, value);
+    }
     command
         .spawn()
         .map_err(|e| {
             err!(
                 ShellCommand,
                 "Error running command `{}`. Is it available on your PATH? -> {}",
-                program,
+                spec.program,
                 e
             )
         })?
         .wait()?;
     Ok(())
+}
+
+/// A fully-resolved database shell invocation: the program to run, its
+/// arguments, and any extra environment variables it should be spawned with.
+///
+/// Secrets (the database password) are carried out-of-band in `envs` rather
+/// than in `args`, so they never appear in the process' `argv`
+/// (`/proc/<pid>/cmdline`), which is world-readable to other local users.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ShellCommandSpec {
+    program: String,
+    args: Vec<String>,
+    envs: Vec<(String, String)>,
+}
+
+/// Build the shell invocation for the given `Config` without spawning anything.
+///
+/// This is factored out of `shell()` so the command construction (in
+/// particular, that the password is kept out of `argv`) is unit-testable
+/// without a live database or an installed shell utility.
+fn build_shell_command(config: &Config) -> Result<ShellCommandSpec> {
+    match config.database_type() {
+        DbKind::Sqlite => {
+            if config.settings.inner.is_memory_sqlite() {
+                bail!(
+                    ShellCommand,
+                    "shell is not supported for in-memory sqlite databases"
+                )
+            }
+            let db_path = config.database_path_string()?;
+            Ok(ShellCommandSpec {
+                program: "sqlite3".to_string(),
+                args: vec![db_path],
+                envs: vec![],
+            })
+        }
+        DbKind::Postgres => {
+            let (uri, password) = connect_uri_without_password(config)?;
+            // psql reads the password from `PGPASSWORD` when present.
+            Ok(ShellCommandSpec {
+                program: "psql".to_string(),
+                args: vec![uri],
+                envs: vec![("PGPASSWORD".to_string(), password)],
+            })
+        }
+        DbKind::MySql => {
+            let (uri, password) = connect_uri_without_password(config)?;
+            // MySQL Shell honors `MYSQL_PWD` for classic-protocol password auth.
+            Ok(ShellCommandSpec {
+                program: "mysqlsh".to_string(),
+                args: vec!["--sql".to_string(), "--uri".to_string(), uri],
+                envs: vec![("MYSQL_PWD".to_string(), password)],
+            })
+        }
+    }
+}
+
+/// Return `(connect_uri, raw_password)` for a server database `Config`.
+///
+/// The returned URI has its password component stripped so it is safe to pass
+/// as a command-line argument. The password is returned separately as its raw
+/// (non-percent-encoded) value, taken straight from the settings so it never
+/// round-trips through URL encoding.
+fn connect_uri_without_password(config: &Config) -> Result<(String, String)> {
+    let raw_password = match &config.settings.inner {
+        DbSettings::Postgres(s) | DbSettings::MySql(s) => s.database_password.clone(),
+        DbSettings::Sqlite(_) => String::new(),
+    };
+    let mut url = url::Url::parse(&config.connect_string()?)?;
+    url.set_password(None).map_err(|_| {
+        err!(
+            ShellCommand,
+            "Unable to strip password from database connection string"
+        )
+    })?;
+    Ok((url.to_string(), raw_password))
 }
 
 /// Get user's selection of a set of migrations
@@ -367,5 +430,98 @@ mod tests {
         fs::create_dir_all(&d).unwrap();
         fs::write(d.join("up.sql"), "select 1;").unwrap();
         assert!(search_for_migrations(root).is_err());
+    }
+
+    // A password with characters that must be percent-encoded in a URL: `@`
+    // becomes `%40` and the space becomes `%20`. If the raw or encoded form
+    // ever leaks into `argv`, these tests catch it.
+    const RAW_PASSWORD: &str = "p@ss w";
+    const ENCODED_PASSWORD: &str = "p%40ss%20w";
+
+    fn postgres_config() -> Config {
+        let settings = crate::config::Settings::configure_postgres()
+            .database_name("mydb")
+            .database_user("myuser")
+            .database_password(RAW_PASSWORD)
+            .database_host("localhost")
+            .database_port(5432)
+            .build()
+            .unwrap();
+        Config::with_settings(&settings)
+    }
+
+    fn mysql_config() -> Config {
+        let settings = crate::config::Settings::configure_mysql()
+            .database_name("mydb")
+            .database_user("myuser")
+            .database_password(RAW_PASSWORD)
+            .database_host("localhost")
+            .database_port(3306)
+            .build()
+            .unwrap();
+        Config::with_settings(&settings)
+    }
+
+    fn assert_no_password_in_args(args: &[String]) {
+        for arg in args {
+            assert!(
+                !arg.contains(RAW_PASSWORD),
+                "raw password leaked into argv: {:?}",
+                arg
+            );
+            assert!(
+                !arg.contains(ENCODED_PASSWORD),
+                "encoded password leaked into argv: {:?}",
+                arg
+            );
+        }
+    }
+
+    #[test]
+    fn postgres_shell_keeps_password_out_of_argv() {
+        let spec = build_shell_command(&postgres_config()).unwrap();
+        assert_eq!(spec.program, "psql");
+        assert_no_password_in_args(&spec.args);
+        // The connect uri is still present as an argument (sans password).
+        assert!(spec.args.iter().any(|a| a.starts_with("postgres://")));
+        // The raw password is delivered out-of-band via PGPASSWORD.
+        assert!(
+            spec.envs
+                .iter()
+                .any(|(k, v)| k == "PGPASSWORD" && v == RAW_PASSWORD),
+            "PGPASSWORD with raw password not found in {:?}",
+            spec.envs
+        );
+    }
+
+    #[test]
+    fn mysql_shell_keeps_password_out_of_argv() {
+        let spec = build_shell_command(&mysql_config()).unwrap();
+        assert_eq!(spec.program, "mysqlsh");
+        assert_no_password_in_args(&spec.args);
+        assert!(spec.args.iter().any(|a| a.starts_with("mysql://")));
+        // The raw password is delivered out-of-band via MYSQL_PWD.
+        assert!(
+            spec.envs
+                .iter()
+                .any(|(k, v)| k == "MYSQL_PWD" && v == RAW_PASSWORD),
+            "MYSQL_PWD with raw password not found in {:?}",
+            spec.envs
+        );
+    }
+
+    #[test]
+    fn in_memory_sqlite_shell_errors() {
+        let settings = crate::config::Settings::configure_sqlite()
+            .memory()
+            .build()
+            .unwrap();
+        let config = Config::with_settings(&settings);
+        let res = build_shell_command(&config);
+        assert!(
+            res.is_err(),
+            "expected an error for in-memory sqlite, got {:?}",
+            res
+        );
     }
 }

@@ -228,8 +228,11 @@ pub fn noop(_: ConnConfig) -> std::result::Result<(), Box<dyn std::error::Error>
 ///
 /// `FnMigration`s are provided a `ConnConfig` instance and given free rein to do as they please.
 ///
-/// Note, both an `up` and `down` function must be provided. There is a noop function available
-/// (`migrant_lib::migration::noop`) for convenience.
+/// Note, `up` and `down` are each optional. A missing function is a silent no-op for that
+/// direction -- for example, applying a `Down` migration whose `down` function was never set
+/// will still mark the migration as un-applied in the migration table, even though no SQL or
+/// code actually ran. There is a noop function available (`migrant_lib::migration::noop`) for
+/// convenience if you want to be explicit about a direction doing nothing.
 ///
 /// # Example
 ///
