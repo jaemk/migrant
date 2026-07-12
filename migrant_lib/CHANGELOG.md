@@ -5,6 +5,37 @@
 ### Changed
 ### Removed
 
+## [0.35.0]
+### Added
+- In-memory sqlite support: `Settings::configure_sqlite().memory()` or `database_path(":memory:")`.
+  The connection is established once and kept alive by the `Config` (shared by all clones)
+- `Config::sqlite_connection` and `ConnConfig::sqlite_connection` return a shared handle
+  (`Arc<Mutex<rusqlite::Connection>>`) to the live sqlite connection
+- `migration_statuses` returns the applied-state of all managed migrations (`MigrationStatus`)
+- `rusqlite` re-export (with `d-sqlite`) so downstream code can use matching types
+- Sqlite end-to-end tests run against temp-file and in-memory databases; postgres/mysql
+  tests are gated on `POSTGRES_TEST_CONN_STR` / `MYSQL_TEST_CONN_STR`
+
+### Changed
+- Database connections are now established lazily and kept alive for the life of a `Config`
+  and its clones, instead of reconnecting for every operation. Server connections are
+  re-established after an operation error
+- Replace `error-chain` with a plain `Error` enum (`thiserror`). `ErrorKind` is gone;
+  match on `Error` variants directly. Error display strings are unchanged
+- `Migratable::apply_up`/`apply_down` take only `&Config` (the `DbKind` parameter was removed)
+- `EmbeddedMigration::with_tag` and `FnMigration::with_tag` are available without database
+  features; applying migrations without the needed feature returns `Error::FeatureRequired`
+  instead of panicking
+- Failed sqlite migration batches roll back any transaction they left open
+- Update deps: rusqlite 0.40, toml 0.9, mysql 28; drop lazy_static, regex, serde_derive,
+  serde_json, error-chain
+- Update to edition 2021
+
+### Removed
+- `Config::migration_dir` (deprecated since 0.18.1, use `Config::migration_location`)
+- `ErrorKind` and the `connection::markers` types
+- Travis CI (replaced by GitHub Actions in the workspace repo)
+
 ## [0.34.0]
 ### Added
 ### Changed

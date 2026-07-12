@@ -1,6 +1,6 @@
 # migrant_lib
 
-[![Build Status](https://travis-ci.org/jaemk/migrant_lib.svg?branch=master)](https://travis-ci.org/jaemk/migrant_lib)
+[![Build Status](https://github.com/jaemk/migrant/actions/workflows/ci.yml/badge.svg)](https://github.com/jaemk/migrant/actions)
 [![crates.io:migrant_lib](https://img.shields.io/crates/v/migrant_lib.svg?label=migrant_lib)](https://crates.io/crates/migrant_lib)
 [![docs](https://docs.rs/migrant_lib/badge.svg)](https://docs.rs/migrant_lib)
 
@@ -25,14 +25,13 @@
 *Notes:*
 
 - No features are enabled by default
-- As of `0.20.0` the `d-sqlite` feature does not use `rusqlite`s `bundled` feature.
+- The `d-sqlite` feature does not use `rusqlite`s `bundled` feature.
   If you would like `sqlite` to be bundled with your application, you will have to
   include `rusqlite` and enable the `bundled` feature in your project.
 
 
 ## Usage
 
-- You must enable the database features relevant to your usecase (`d-postgres` / `d-sqlite` / `d-mysql`).
 - Migrations can be defined as files, string literals, or functions.
 - File migrations can be either read from files at runtime or embedded in your executable at compile time
   (using [`include_str!`](https://doc.rust-lang.org/std/macro.include_str.html)).
@@ -44,8 +43,8 @@
 - Function migrations must have the signature `fn(ConnConfig) -> Result<(), Box<dyn std::error::Error>>`.
   See the [embedded_programmable](https://github.com/jaemk/migrant_lib/blob/master/examples/embedded_programmable.rs)
   example for a working sample of function migrations.
-- When `d-postgres` is enabled, you can specify a custom/self-signed ssl certificate using
-  `PostgresSettingsBuilder::ssl_cert_file` or setting `ssl_cert_file = "..."` in your `Migrant.toml`.
+- When working with embedded and function migrations, the respective database feature must be
+  enabled (`d-postgres` / `d-sqlite` / `d-mysql`).
 
 
 ```rust
@@ -73,6 +72,23 @@ config.use_migrations(&[
         .down(down)
         .boxed(),
 ])?;
+```
+
+
+## In-memory sqlite databases
+
+With the `d-sqlite` feature, the special database path `:memory:` selects an
+in-memory sqlite database. The underlying connection is established once and
+kept alive by the `Config` (and shared by all of its clones), so migrations
+and application queries all see the same database. Function migrations can
+access the live connection through `ConnConfig::sqlite_connection`.
+
+```rust
+let settings = migrant_lib::Settings::configure_sqlite()
+    .memory()
+    .build()?;
+let config = migrant_lib::Config::with_settings(&settings);
+config.setup()?;
 ```
 
 
