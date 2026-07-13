@@ -1,0 +1,20 @@
+[book]
+title = "migrant"
+description = "Embeddable database migration management for SQLite, PostgreSQL, and MySQL, with a companion CLI."
+authors = ["James Kominick"]
+language = "en"
+src = "src"
+
+[output.html]
+default-theme = "navy"
+preferred-dark-theme = "navy"
+git-repository-url = "https://github.com/jaemk/migrant"
+edit-url-template = "https://github.com/jaemk/migrant/edit/main/docs/{path}"
+# Docs are served under /guide/ on the Pages site; the landing page owns the root.
+site-url = "/migrant/guide/"
+additional-css = ["assets/custom.css"]
+additional-js = ["assets/custom.js"]
+
+[output.html.fold]
+enable = true
+level = 1

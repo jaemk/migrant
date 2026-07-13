@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <defs>
+    <radialGradient id="g" gradientUnits="userSpaceOnUse" cx="38" cy="18" r="38">
+      <stop offset="0%" stop-color="#5fe0a8"/>
+      <stop offset="45%" stop-color="#1fae76"/>
+      <stop offset="100%" stop-color="#0a5a41"/>
+    </radialGradient>
+    <linearGradient id="b" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#f6fdf7"/>
+      <stop offset="100%" stop-color="#cfe9da"/>
+    </linearGradient>
+  </defs>
+  <rect width="64" height="64" rx="14" fill="#07231c"/>
+  <!-- head -->
+  <circle cx="40" cy="29" r="19" fill="url(#g)"/>
+  <!-- white chin/throat (female: no ruby) -->
+  <ellipse cx="30" cy="41" rx="7.5" ry="6" transform="rotate(25 30 41)" fill="url(#b)"/>
+  <!-- long needle bill -->
+  <path d="M26,31 L2,49 L27,37 Z" fill="#22322c"/>
+  <!-- blush -->
+  <ellipse cx="37" cy="36" rx="3.6" ry="2.6" transform="rotate(20 37 36)" fill="#f2a0b5" opacity="0.75"/>
+  <!-- eye -->
+  <circle cx="36" cy="27" r="5.2" fill="#0e1f19"/>
+  <circle cx="37.8" cy="25.2" r="1.9" fill="#ffffff"/>
+  <!-- crown sheen -->
+  <ellipse cx="37" cy="16" rx="9" ry="4" transform="rotate(-14 37 16)" fill="#ffffff" opacity="0.35"/>
+</svg>

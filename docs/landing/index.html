@@ -1,0 +1,271 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>migrant -- database migration management</title>
+  <meta name="description" content="migrant manages up/down SQL migrations for SQLite, PostgreSQL, and MySQL, from a CLI or embedded in your Rust application." />
+  <link rel="icon" href="favicon.svg" type="image/svg+xml" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="bg" aria-hidden="true">
+    <span class="orb orb-a"></span>
+    <span class="orb orb-b"></span>
+    <span class="orb orb-c"></span>
+    <span class="grain"></span>
+  </div>
+
+  <header class="nav">
+    <a class="brand" href="#top">
+      <img class="brand-mark" src="favicon.svg" alt="" width="24" height="24" />
+      <span class="brand-name">migrant</span>
+    </a>
+    <nav class="nav-links">
+      <a href="guide/">Docs</a>
+      <a href="guide/quickstart.html">Quickstart</a>
+      <a href="https://github.com/jaemk/migrant">GitHub</a>
+    </nav>
+  </header>
+
+  <main id="top" class="hero">
+    <div class="hero-stage" id="stage">
+      <!-- A female ruby-throated hummingbird (green, no ruby throat), hovering
+           with a little sky-blue backpack full of database migrations. -->
+      <svg class="bird" viewBox="0 0 600 640" role="img"
+           aria-label="A cute green female hummingbird hovering with a little backpack full of database migrations">
+        <defs>
+          <!-- one shared user-space gradient so head, neck, and body blend seamlessly -->
+          <radialGradient id="birdGreen" gradientUnits="userSpaceOnUse" cx="235" cy="200" r="340">
+            <stop offset="0%" stop-color="#5fe0a8" />
+            <stop offset="30%" stop-color="#1fae76" />
+            <stop offset="65%" stop-color="#0e6b4d" />
+            <stop offset="100%" stop-color="#083f2e" />
+          </radialGradient>
+          <linearGradient id="belly" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stop-color="#f6fdf7" />
+            <stop offset="100%" stop-color="#cfe9da" />
+          </linearGradient>
+          <linearGradient id="wingGrad" x1="0" y1="1" x2="1" y2="0">
+            <stop offset="0%" stop-color="#2fa98c" />
+            <stop offset="55%" stop-color="#5eccae" />
+            <stop offset="100%" stop-color="#9fe4ff" />
+          </linearGradient>
+          <linearGradient id="packBlue" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stop-color="#8fdcff" />
+            <stop offset="100%" stop-color="#38a9e6" />
+          </linearGradient>
+          <radialGradient id="sheen" cx="50%" cy="50%" r="50%">
+            <stop offset="0%" stop-color="#ffffff" stop-opacity="0.8" />
+            <stop offset="100%" stop-color="#ffffff" stop-opacity="0" />
+          </radialGradient>
+          <filter id="softGlow" x="-60%" y="-60%" width="220%" height="220%">
+            <feGaussianBlur stdDeviation="14" />
+          </filter>
+          <filter id="wingBlur" x="-40%" y="-40%" width="180%" height="180%">
+            <feGaussianBlur stdDeviation="4" />
+          </filter>
+        </defs>
+
+        <!-- soft glow halo behind the bird -->
+        <ellipse cx="310" cy="330" rx="190" ry="160" fill="#12b981" opacity="0.14" filter="url(#softGlow)" />
+
+        <g class="bird-body">
+          <!-- body frame: origin at body center, x-axis runs head->tail (down-right) -->
+          <g transform="translate(335 330) rotate(38)">
+            <!-- ghost wing (upstroke), blurred, to imply fast beats -->
+            <g class="wing-ghost" filter="url(#wingBlur)" opacity="0.35">
+              <path fill="url(#wingGrad)"
+                    d="M20,-40 C 45,-100 75,-150 125,-170 C 112,-118 100,-75 88,-32 C 62,-26 38,-30 20,-40 Z"
+                    transform="rotate(-26 20 -40)" />
+            </g>
+
+            <!-- fanned tail with white tips (female ruby-throat) -->
+            <g class="tail-fan">
+              <g fill="#0c5341" stroke="#083b2e" stroke-width="1.5">
+                <path d="M80,-4 C 130,-14 165,-12 185,-2 C 165,8 130,10 82,8 Z" />
+                <path d="M80,4 C 125,8 158,20 172,38 C 150,42 118,34 78,14 Z" />
+                <path d="M76,10 C 110,26 130,46 136,66 C 116,62 96,44 72,18 Z" />
+              </g>
+              <g fill="#eafff6">
+                <ellipse cx="181" cy="-2" rx="7" ry="4.5" />
+                <ellipse cx="168" cy="37" rx="6.5" ry="4.5" />
+                <ellipse cx="133" cy="62" rx="6" ry="4.5" />
+              </g>
+            </g>
+
+            <!-- body -->
+            <ellipse cx="0" cy="0" rx="95" ry="60" fill="url(#birdGreen)" />
+            <!-- white underside -->
+            <ellipse cx="-14" cy="26" rx="76" ry="36" fill="url(#belly)" />
+
+            <!-- backpack full of migrations, sitting on her back -->
+            <g>
+              <!-- shoulder strap -->
+              <rect x="-62" y="-58" width="13" height="66" rx="6" fill="#0b4a3c" />
+              <!-- pack body -->
+              <rect x="-45" y="-102" width="86" height="74" rx="17"
+                    fill="url(#packBlue)" stroke="#e6f9ff" stroke-opacity="0.4" stroke-width="2.5" />
+              <!-- front pocket + buckle -->
+              <rect x="-30" y="-56" width="54" height="24" rx="9" fill="#2f8fd0" />
+              <circle cx="-3" cy="-44" r="4" fill="#e6f9ff" />
+              <!-- migrations poking out the top: little database cylinders -->
+              <g stroke="#063f31" stroke-opacity="0.35" stroke-width="1">
+                <g>
+                  <ellipse cx="-25" cy="-106" rx="10" ry="3.5" fill="#7fe8c0" />
+                  <path d="M-35,-106 v12 a10,3.5 0 0 0 20,0 v-12" fill="#2bbd84" />
+                </g>
+                <g>
+                  <ellipse cx="0" cy="-112" rx="10" ry="3.5" fill="#fbfffc" />
+                  <path d="M-10,-112 v18 a10,3.5 0 0 0 20,0 v-18" fill="#d9efe2" />
+                </g>
+                <g>
+                  <ellipse cx="25" cy="-106" rx="10" ry="3.5" fill="#7fe8c0" />
+                  <path d="M15,-106 v12 a10,3.5 0 0 0 20,0 v-12" fill="#2bbd84" />
+                </g>
+              </g>
+              <circle class="mig-glint" cx="-3" cy="-116" r="2.6" fill="#ffffff" />
+            </g>
+
+            <!-- near wing: slim pointed hummingbird blade, swept back -->
+            <g class="wing-near">
+              <path fill="url(#wingGrad)" fill-opacity="0.9"
+                    stroke="#d6fff2" stroke-opacity="0.35" stroke-width="1.5"
+                    d="M20,-40 C 45,-100 75,-150 125,-170 C 112,-118 100,-75 88,-32 C 62,-26 38,-30 20,-40 Z" />
+            </g>
+          </g>
+
+          <!-- neck bridge so the head flows into the body -->
+          <circle cx="288" cy="282" r="52" fill="url(#birdGreen)" />
+
+          <!-- head -->
+          <circle cx="250" cy="238" r="64" fill="url(#birdGreen)" />
+          <!-- white chin/throat (female: no ruby), one smooth sweep into the belly -->
+          <path fill="url(#belly)"
+                d="M203,260
+                   C 190,290 202,320 236,334
+                   C 268,346 296,336 302,318
+                   C 306,302 292,290 272,284
+                   C 246,276 218,266 203,260 Z" />
+          <!-- long needle bill, slightly down-turned -->
+          <path d="M196,244 L62,284 L202,264 Z" fill="#22322c" />
+          <!-- rosy cheek blush -->
+          <ellipse cx="252" cy="262" rx="11" ry="8" transform="rotate(22 252 262)" fill="#f2a0b5" opacity="0.75" />
+          <!-- big cute eye -->
+          <circle cx="238" cy="236" r="14" fill="#0e1f19" />
+          <circle class="eye-glint" cx="243" cy="231" r="4.6" fill="#ffffff" />
+          <circle cx="233" cy="241" r="2" fill="#ffffff" opacity="0.8" />
+          <!-- crown sheen -->
+          <ellipse cx="235" cy="196" rx="34" ry="14" transform="rotate(-18 235 196)" fill="url(#sheen)" opacity="0.65" />
+        </g>
+      </svg>
+    </div>
+
+    <div class="hero-copy">
+      <h1 class="title">migrant</h1>
+      <p class="tagline">
+        <strong>up</strong>/<strong>down</strong> SQL migrations for SQLite,
+        PostgreSQL, and MySQL. Each migration is <strong>atomic</strong> and
+        concurrent runs <strong>serialize</strong> behind an advisory lock. Use
+        the CLI, or embed it in your Rust app.
+      </p>
+
+      <div class="cmds">
+        <div class="then"><span><a href="guide/install.html">install</a></span></div>
+
+        <div class="install" id="install">
+          <div class="tabs" role="tablist" aria-label="Install method">
+            <button class="tab is-active" type="button" role="tab" aria-selected="true" data-tab="cargo">cargo</button>
+            <button class="tab" type="button" role="tab" aria-selected="false" data-tab="releases">releases</button>
+            <button class="tab" type="button" role="tab" aria-selected="false" data-tab="docker">docker</button>
+          </div>
+
+          <div class="panel is-active" role="tabpanel" data-panel="cargo">
+            <div class="cmd">
+              <code><span class="prompt">$</span> cargo install migrant --features 'postgres sqlite mysql update'</code>
+              <button class="copy" type="button" aria-label="Copy cargo install command" data-copy="cargo install migrant --features 'postgres sqlite mysql update'">Copy</button>
+            </div>
+          </div>
+
+          <div class="panel" role="tabpanel" data-panel="releases" hidden>
+            <div class="cmd">
+              <code><span class="prompt">&#8599;</span> github.com/jaemk/migrant/releases</code>
+              <a class="copy copy-link" href="https://github.com/jaemk/migrant/releases" target="_blank" rel="noopener">Open</a>
+            </div>
+          </div>
+
+          <div class="panel" role="tabpanel" data-panel="docker" hidden>
+            <div class="cmd">
+              <code><span class="prompt">$</span> docker run --rm jaemk/migrant:latest migrant --help</code>
+              <button class="copy" type="button" aria-label="Copy docker run command" data-copy="docker run --rm jaemk/migrant:latest migrant --help">Copy</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="then"><span><a href="guide/quickstart.html">init</a></span></div>
+
+        <div class="cmd" id="init">
+          <code><span class="prompt">$</span> migrant init --type postgres</code>
+          <button class="copy" type="button" aria-label="Copy init command" data-copy="migrant init --type postgres">Copy</button>
+        </div>
+
+        <div class="then"><span><a href="guide/migrations.html">new</a></span></div>
+
+        <div class="cmd" id="new">
+          <code><span class="prompt">$</span> migrant new create-users</code>
+          <button class="copy" type="button" aria-label="Copy new command" data-copy="migrant new create-users">Copy</button>
+        </div>
+
+        <div class="then"><span>apply</span></div>
+
+        <div class="cmd" id="apply">
+          <code><span class="prompt">$</span> migrant apply --all</code>
+          <button class="copy" type="button" aria-label="Copy apply command" data-copy="migrant apply --all">Copy</button>
+        </div>
+      </div>
+
+      <div class="cta">
+        <a class="btn btn-primary" href="guide/">Read the docs</a>
+        <a class="btn btn-ghost" href="guide/quickstart.html">Quickstart</a>
+        <a class="btn btn-ghost" href="https://github.com/jaemk/migrant">
+          <svg viewBox="0 0 16 16" width="18" height="18" aria-hidden="true" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+          GitHub
+        </a>
+      </div>
+    </div>
+  </main>
+
+  <section class="features">
+    <article class="card">
+      <h3>Track</h3>
+      <p>Plain <code>up.sql</code>/<code>down.sql</code> files under version
+         control, applied in order and recorded in a
+         <code>__migrant_migrations</code> table. SQLite, PostgreSQL, and MySQL,
+         from the CLI or embedded in your Rust app.</p>
+    </article>
+    <article class="card">
+      <h3>Atomic</h3>
+      <p>Each migration and its bookkeeping row commit or roll back in one
+         transaction, so a failure leaves no partial state. Opt a direction out
+         with <code>-- migrant:no-transaction</code> for DDL a backend cannot run
+         in a transaction.</p>
+    </article>
+    <article class="card">
+      <h3>Safe under concurrency</h3>
+      <p>Runs against a server database take a session advisory lock, so several
+         app instances applying migrations on boot serialize instead of racing.
+         Held across a <code>--force</code> run, released if the process dies.</p>
+    </article>
+  </section>
+
+  <footer class="foot">
+    <span>migrant &middot; embeddable migration management</span>
+    <a href="https://github.com/jaemk/migrant/tree/main/spec">Spec</a>
+  </footer>
+
+  <script src="app.js" defer></script>
+</body>
+</html>

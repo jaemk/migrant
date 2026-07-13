@@ -1,0 +1,135 @@
+/* migrant docs -- retint of the mdBook navy theme to match the landing page:
+   deep teal-green ground, iridescent-green + light-sky-blue accents (the
+   hummingbird's colors). Loaded via `additional-css`. */
+
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap");
+
+:root {
+  --green: #1db47c;
+  --blue: #5cc7f5;
+  --cream: #eafff6;
+  --sidebar-width: 290px;
+  --content-max-width: 760px;
+}
+
+/* Retint the navy theme (default + preferred dark) to teal-green-black. */
+.navy {
+  --bg: #05140f;
+  --fg: #d7f5ea;
+
+  --sidebar-bg: #04110d;
+  --sidebar-fg: #9ec9bd;
+  --sidebar-non-existant: #3a5b52;
+  --sidebar-active: #6ff0c2;
+  --sidebar-spacer: #0d2a24;
+
+  --scrollbar: #1f5347;
+
+  --icons: #6f9c90;
+  --icons-hover: #b6fde6;
+
+  --links: #57e0c2;
+
+  --inline-code-color: #6cd6f5;
+
+  --theme-popup-bg: #07191466;
+  --theme-popup-border: #163b34;
+  --theme-hover: #0f2e28;
+
+  --quote-bg: #0a201b;
+  --quote-border: #14524a;
+
+  --table-border-color: #143b34;
+  --table-header-bg: #0e2f2a;
+  --table-alternate-bg: #08201b;
+
+  --searchbar-border-color: #1a4a42;
+  --searchbar-bg: #071914;
+  --searchbar-fg: #d7f5ea;
+  --searchbar-shadow-color: #02322a;
+  --searchresults-header-fg: #6cae9d;
+  --searchresults-border-color: #143b34;
+  --searchresults-li-bg: #0a221c;
+  --search-mark-bg: #2f7d68;
+}
+
+/* Page background: green/blue glow behind the dark ground. */
+html.navy,
+.navy body {
+  background:
+    radial-gradient(1100px 620px at 80% -8%, #0b2e24 0%, transparent 58%),
+    radial-gradient(820px 540px at 4% 2%, #072a30 0%, transparent 52%),
+    var(--bg);
+}
+
+/* Typography */
+.navy .content {
+  font-family: "Inter", system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+}
+.navy .content h1,
+.navy .content h2,
+.navy .content h3 {
+  font-weight: 700;
+  letter-spacing: -0.4px;
+}
+.navy .content h1 {
+  background: linear-gradient(120deg, #eafff6 20%, var(--green) 60%, var(--blue) 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  /* the gradient only paints the padding box, so leave room for descenders */
+  padding-bottom: 0.12em;
+}
+.navy .content h2 {
+  border-bottom: 1px solid var(--quote-border);
+  padding-bottom: 0.3em;
+}
+
+/* Links: glow on hover. */
+.navy .content a { text-decoration: none; border-bottom: 1px solid transparent; transition: border-color 0.15s, color 0.15s; }
+.navy .content a:hover { color: #8af0d3; border-bottom-color: rgba(87, 224, 194, 0.55); }
+
+/* Code: monospace + soft panel. */
+.navy code { font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace; }
+.navy .content pre {
+  border: 1px solid var(--quote-border);
+  border-radius: 12px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.4);
+}
+.navy .content pre > .buttons button { color: var(--icons); }
+
+/* Tables: readable borders on the dark ground. */
+.navy .content table td,
+.navy .content table th { border: 1px solid var(--table-border-color); }
+
+/* Sidebar: active chapter gets a green spine. */
+.navy .chapter li.chapter-item a { border-radius: 7px; transition: background 0.15s, color 0.15s; padding-left: 8px; }
+.navy .chapter li.chapter-item a:hover { background: var(--theme-hover); color: var(--cream); }
+.navy .chapter li.chapter-item a.active {
+  background: linear-gradient(90deg, rgba(29, 180, 124, 0.16), transparent);
+  border-left: 3px solid var(--green);
+  color: #aef7dc;
+}
+.navy .sidebar .sidebar-title { color: #6cae9d; }
+
+/* Top bar: a hairline glow under the menu. */
+.navy .menu-bar { border-bottom: 1px solid var(--quote-border); backdrop-filter: blur(6px); }
+
+/* Blockquotes as glowing callouts. */
+.navy blockquote {
+  border-left: 3px solid var(--green);
+  border-radius: 0 10px 10px 0;
+}
+
+/* "Back to migrant" link injected into the sidebar by custom.js. */
+.migrant-home {
+  display: block;
+  margin: 0 14px 14px;
+  padding: 9px 12px;
+  border: 1px solid var(--quote-border);
+  border-radius: 9px;
+  font-weight: 600;
+  color: #aef7dc !important;
+  background: linear-gradient(120deg, rgba(29, 180, 124, 0.14), rgba(92, 199, 245, 0.12));
+}
+.migrant-home:hover { border-color: rgba(92, 199, 245, 0.5); }
