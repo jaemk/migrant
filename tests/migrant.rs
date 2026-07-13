@@ -89,3 +89,14 @@ fn kitchen_sink() {
 
     let _ = migrant().args(["apply", "-ad"]).assert();
 }
+
+// TUI-1: with stdout piped (not a terminal) the tui refuses to start,
+// before touching the database
+#[test]
+fn tui_requires_an_interactive_terminal() {
+    migrant()
+        .arg("tui")
+        .assert()
+        .failure()
+        .stderr(contains("requires an interactive terminal"));
+}

@@ -201,3 +201,167 @@ impl App {
         frame.render_widget(footer, footer_area);
     }
 }
+
+#[cfg(all(test, feature = "sqlite"))]
+mod tests {
+    use super::*;
+    use migrant_lib::{EmbeddedMigration, Settings};
+    use ratatui::backend::TestBackend;
+    use ratatui::Terminal;
+
+    fn test_app() -> App {
+        let settings = Settings::configure_sqlite().memory().build().unwrap();
+        let mut config = Config::with_settings(&settings);
+        config
+            .use_migrations(&[
+                EmbeddedMigration::with_tag("create-users")
+                    .up("create table users (id integer primary key);")
+                    .down("drop table users;")
+                    .boxed(),
+                EmbeddedMigration::with_tag("create-posts")
+                    .up("create table posts (id integer primary key);")
+                    .down("drop table posts;")
+                    .boxed(),
+            ])
+            .unwrap();
+        config.setup().unwrap();
+        App::new(&config).unwrap()
+    }
+
+    fn key(code: KeyCode) -> KeyEvent {
+        KeyEvent::new(code, KeyModifiers::NONE)
+    }
+
+    fn applied_count(app: &App) -> usize {
+        app.statuses.iter().filter(|m| m.applied).count()
+    }
+
+    fn buffer_text(app: &mut App) -> String {
+        let mut terminal = Terminal::new(TestBackend::new(60, 16)).unwrap();
+        terminal.draw(|frame| app.render(frame)).unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        let mut text = String::new();
+        for y in 0..buffer.area.height {
+            for x in 0..buffer.area.width {
+                text.push_str(buffer.cell((x, y)).unwrap().symbol());
+            }
+            text.push('\n');
+        }
+        text
+    }
+
+    // TUI-1
+    #[test]
+    fn lists_migrations_with_applied_status() {
+        let mut app = test_app();
+        assert_eq!(2, app.statuses.len());
+
+        let text = buffer_text(&mut app);
+        assert!(text.contains("migrant"));
+        assert!(text.contains("0/2 applied"));
+        assert!(text.contains("[ ] create-users"));
+        assert!(text.contains("[ ] create-posts"));
+
+        app.handle_key(key(KeyCode::Char('u')));
+        let text = buffer_text(&mut app);
+        assert!(text.contains("1/2 applied"));
+        assert!(text.contains("[✓] create-users"));
+        assert!(text.contains("[ ] create-posts"));
+    }
+
+    // TUI-2
+    #[test]
+    fn navigation_moves_selection() {
+        let mut app = test_app();
+        assert_eq!(Some(0), app.list_state.selected());
+
+        app.handle_key(key(KeyCode::Char('j')));
+        assert_eq!(Some(1), app.list_state.selected());
+        // clamped at the last entry
+        app.handle_key(key(KeyCode::Char('j')));
+        assert_eq!(Some(1), app.list_state.selected());
+
+        app.handle_key(key(KeyCode::Char('k')));
+        assert_eq!(Some(0), app.list_state.selected());
+        // clamped at the first entry
+        app.handle_key(key(KeyCode::Char('k')));
+        assert_eq!(Some(0), app.list_state.selected());
+
+        app.handle_key(key(KeyCode::Down));
+        assert_eq!(Some(1), app.list_state.selected());
+        app.handle_key(key(KeyCode::Up));
+        assert_eq!(Some(0), app.list_state.selected());
+    }
+
+    // TUI-3
+    #[test]
+    fn apply_keys_run_migrations() {
+        let mut app = test_app();
+        assert_eq!(0, applied_count(&app));
+
+        // `d` with nothing applied reports there's nothing to do
+        app.handle_key(key(KeyCode::Char('d')));
+        assert_eq!("Nothing to un-apply", app.message);
+
+        // `u` applies one up migration at a time
+        app.handle_key(key(KeyCode::Char('u')));
+        assert_eq!(1, applied_count(&app));
+        assert_eq!("Applied [up] migration", app.message);
+        app.handle_key(key(KeyCode::Char('u')));
+        assert_eq!(2, applied_count(&app));
+
+        // `u` with everything applied reports completion
+        app.handle_key(key(KeyCode::Char('u')));
+        assert_eq!(2, applied_count(&app));
+        assert_eq!("No un-applied migrations", app.message);
+
+        // `D` un-applies everything
+        app.handle_key(key(KeyCode::Char('D')));
+        assert_eq!(0, applied_count(&app));
+        assert_eq!("Applied all [down] migrations", app.message);
+
+        // `a` applies everything
+        app.handle_key(key(KeyCode::Char('a')));
+        assert_eq!(2, applied_count(&app));
+        assert_eq!("Applied all [up] migrations", app.message);
+
+        // `d` un-applies one down migration
+        app.handle_key(key(KeyCode::Char('d')));
+        assert_eq!(1, applied_count(&app));
+        assert_eq!("Applied [down] migration", app.message);
+    }
+
+    // TUI-4
+    #[test]
+    fn refresh_picks_up_external_changes() {
+        let mut app = test_app();
+        assert_eq!(0, applied_count(&app));
+
+        // apply a migration outside the app; config clones share the
+        // same in-memory database
+        Migrator::with_config(&app.config)
+            .show_output(false)
+            .apply()
+            .unwrap();
+        assert_eq!(0, applied_count(&app));
+
+        app.handle_key(key(KeyCode::Char('r')));
+        assert_eq!(1, applied_count(&app));
+        assert_eq!("Refreshed", app.message);
+    }
+
+    // TUI-4
+    #[test]
+    fn quit_keys() {
+        for quit_key in [
+            key(KeyCode::Char('q')),
+            key(KeyCode::Esc),
+            KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL),
+        ] {
+            let mut app = test_app();
+            assert!(!app.quit);
+            app.handle_key(quit_key);
+            assert!(app.quit);
+        }
+    }
+}
