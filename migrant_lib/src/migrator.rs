@@ -245,8 +245,9 @@ impl Migrator {
         }
 
         // Wrap the migration's SQL and its bookkeeping row in one transaction so
-        // they commit or roll back together (see `Migratable::use_transaction`).
-        let transactional = next.use_transaction();
+        // they commit or roll back together, per direction (see
+        // `Migratable::use_transaction`).
+        let transactional = next.use_transaction(self.direction);
         if transactional {
             config.begin_transaction()?;
         }

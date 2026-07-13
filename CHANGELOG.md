@@ -11,7 +11,11 @@
   A server connection is recovered in place on error rather than dropped, so the lock is held
   for the whole run, including a `force`d run continuing past a failed migration
 - `EmbeddedMigration::no_transaction` / `FileMigration::no_transaction` and
-  `Migratable::use_transaction` to opt a migration out of transaction wrapping
+  `Migratable::use_transaction(direction)` to opt a migration out of transaction
+  wrapping, resolved per direction
+- `-- migrant:no-transaction` SQL directive to opt a single direction out from
+  the migration file itself (works for `migrant` CLI file migrations); a
+  directive in the SQL takes precedence over the builder flag
 
 ### Changed
 - Update `migrant_lib` to 0.35
