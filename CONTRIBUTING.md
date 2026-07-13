@@ -31,7 +31,7 @@ Library tests live in `migrant_lib/` (see its CONTRIBUTING for postgres/mysql se
 
 ## Submitting Changes
 
-Pull Requests should be made against master.
+Pull Requests should be made against main.
 GitHub Actions will run the test suite on all PRs.
 Remember to update the changelog!
 

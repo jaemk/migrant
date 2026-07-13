@@ -111,7 +111,7 @@ When both change, tag `lib-v*` first so the published CLI can resolve its `migra
 
 ### Development
 
-See [CONTRIBUTING](https://github.com/jaemk/migrant/blob/master/CONTRIBUTING.md)
+See [CONTRIBUTING](https://github.com/jaemk/migrant/blob/main/CONTRIBUTING.md)
 
 
 ### Docker
