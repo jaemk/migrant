@@ -53,6 +53,33 @@ fn applied_tags(config: &Config) -> Vec<String> {
         .collect()
 }
 
+fn table_exists(config: &Config, name: &str) -> bool {
+    let handle = config.sqlite_connection().unwrap();
+    let conn = handle.lock().unwrap();
+    conn.query_row(
+        "select exists(select 1 from sqlite_master where type = 'table' and name = ?1)",
+        [name],
+        |row| row.get(0),
+    )
+    .unwrap()
+}
+
+/// Build an in-memory config with a single migration whose `up` creates a table
+/// and then runs an invalid statement, so application fails partway through.
+fn failing_migration_config(no_transaction: bool) -> Config {
+    let settings = Settings::configure_sqlite().memory().build().unwrap();
+    let mut migration = EmbeddedMigration::with_tag("bad");
+    migration
+        .up("create table good (x integer); insert into does_not_exist values (1);")
+        .down("drop table good;");
+    if no_transaction {
+        migration.no_transaction();
+    }
+    let mut config = Config::with_settings(&settings);
+    config.use_migrations(&[migration.boxed()]).unwrap();
+    config
+}
+
 #[test]
 fn in_memory_database_end_to_end() {
     let settings = Settings::configure_sqlite().memory().build().unwrap();
@@ -108,6 +135,50 @@ fn in_memory_database_shared_across_clones() {
         .query_row("select count(*) from t", [], |row| row.get(0))
         .unwrap();
     assert_eq!(1, n, "clones share the same in-memory database");
+}
+
+#[test]
+fn failed_migration_rolls_back_atomically() {
+    let config = failing_migration_config(false);
+    config.setup().unwrap();
+    let config = config.reload().unwrap();
+
+    let res = Migrator::with_config(&config).show_output(false).apply();
+    assert!(res.is_err(), "a migration with invalid sql must fail");
+
+    let config = config.reload().unwrap();
+    // The whole migration was wrapped in a transaction: the partial `create
+    // table` is rolled back and the bookkeeping row is never written.
+    assert!(
+        !table_exists(&config, "good"),
+        "partial DDL must be rolled back"
+    );
+    assert!(
+        applied_tags(&config).is_empty(),
+        "the tag must not be recorded when the migration fails"
+    );
+}
+
+#[test]
+fn no_transaction_migration_leaves_partial_state() {
+    let config = failing_migration_config(true);
+    config.setup().unwrap();
+    let config = config.reload().unwrap();
+
+    let res = Migrator::with_config(&config).show_output(false).apply();
+    assert!(res.is_err(), "a migration with invalid sql must fail");
+
+    let config = config.reload().unwrap();
+    // With `no_transaction`, the earlier `create table` is not rolled back...
+    assert!(
+        table_exists(&config, "good"),
+        "without a transaction the create persists"
+    );
+    // ...but a failed migration is still never recorded as applied.
+    assert!(
+        applied_tags(&config).is_empty(),
+        "the tag must not be recorded when the migration fails"
+    );
 }
 
 #[test]

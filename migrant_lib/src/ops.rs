@@ -110,6 +110,7 @@ pub(crate) fn search_for_migrations(mig_root: &Path) -> Result<Vec<FileMigration
             down,
             tag: tag.to_owned(),
             stamp: Some(stamp),
+            no_transaction: false,
         });
     }
 

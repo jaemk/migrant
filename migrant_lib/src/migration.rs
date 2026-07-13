@@ -20,9 +20,11 @@ use crate::DT_FORMAT;
 /// File paths can be absolute or relative. Relative file paths are relative
 /// to the directory from which the program is run.
 ///
-/// *Note:* SQL statements are batch executed as is. If you want your migration
-/// to happen atomically in a transaction you should manually wrap your statements
-/// in a transaction (`begin transaction; ... commit;`).
+/// *Note:* By default the migrator wraps this migration's SQL and its
+/// bookkeeping row in a single transaction, so do **not** add your own
+/// `begin`/`commit` to the SQL. Call [`no_transaction`](FileMigration::no_transaction)
+/// for migrations that must not run inside a transaction block (for example a
+/// Postgres `CREATE INDEX CONCURRENTLY`).
 #[derive(Clone, Debug)]
 pub struct FileMigration {
     /// Migration tag
@@ -32,6 +34,7 @@ pub struct FileMigration {
     /// Path to a `down` migration file
     pub down: Option<PathBuf>,
     pub(crate) stamp: Option<DateTime<Utc>>,
+    pub(crate) no_transaction: bool,
 }
 
 impl FileMigration {
@@ -42,7 +45,18 @@ impl FileMigration {
             up: None,
             down: None,
             stamp: None,
+            no_transaction: false,
         }
+    }
+
+    /// Opt this migration out of the migrator's automatic transaction wrapping.
+    ///
+    /// Use this for statements a backend refuses to run inside a transaction
+    /// block, such as Postgres `CREATE INDEX CONCURRENTLY`. When opted out, the
+    /// migration's SQL and its bookkeeping row are no longer applied atomically.
+    pub fn no_transaction(&mut self) -> &mut Self {
+        self.no_transaction = true;
+        self
     }
 
     fn check_path(path: &Path) -> Result<()> {
@@ -118,6 +132,10 @@ impl Migratable for FileMigration {
             .map(|p| format!("{:?}", p))
             .unwrap_or_else(|| self.tag())
     }
+
+    fn use_transaction(&self) -> bool {
+        !self.no_transaction
+    }
 }
 
 /// Define an embedded migration
@@ -127,9 +145,11 @@ impl Migratable for FileMigration {
 /// standard [`include_str!`](https://doc.rust-lang.org/std/macro.include_str.html) macro
 /// can be used to embed contents of files, or a string literal can be provided.
 ///
-/// *Note:* SQL statements are batch executed as is. If you want your migration
-/// to happen atomically in a transaction you should manually wrap your statements
-/// in a transaction (`begin transaction; ... commit;`).
+/// *Note:* By default the migrator wraps this migration's SQL and its
+/// bookkeeping row in a single transaction, so do **not** add your own
+/// `begin`/`commit` to the SQL. Call [`no_transaction`](EmbeddedMigration::no_transaction)
+/// for migrations that must not run inside a transaction block (for example a
+/// Postgres `CREATE INDEX CONCURRENTLY`).
 ///
 /// A database feature (`d-postgres` / `d-sqlite` / `d-mysql`) is required to
 /// apply this type of migration.
@@ -165,6 +185,7 @@ pub struct EmbeddedMigration {
     pub up: Option<Cow<'static, str>>,
     /// Statements to run for `down` migrations
     pub down: Option<Cow<'static, str>>,
+    pub(crate) no_transaction: bool,
 }
 
 impl EmbeddedMigration {
@@ -174,7 +195,18 @@ impl EmbeddedMigration {
             tag: tag.to_owned(),
             up: None,
             down: None,
+            no_transaction: false,
         }
+    }
+
+    /// Opt this migration out of the migrator's automatic transaction wrapping.
+    ///
+    /// Use this for statements a backend refuses to run inside a transaction
+    /// block, such as Postgres `CREATE INDEX CONCURRENTLY`. When opted out, the
+    /// migration's SQL and its bookkeeping row are no longer applied atomically.
+    pub fn no_transaction(&mut self) -> &mut Self {
+        self.no_transaction = true;
+        self
     }
 
     /// `&'static str` or `String` of statements to use for `up` migrations
@@ -216,6 +248,10 @@ impl Migratable for EmbeddedMigration {
 
     fn description(&self, _: &Direction) -> String {
         self.tag()
+    }
+
+    fn use_transaction(&self) -> bool {
+        !self.no_transaction
     }
 }
 
@@ -322,5 +358,12 @@ where
 
     fn description(&self, _: &Direction) -> String {
         self.tag()
+    }
+
+    /// Function migrations run arbitrary code (and may open their own
+    /// connections), so the migrator cannot wrap them in a single transaction
+    /// on its connection. Always `false`.
+    fn use_transaction(&self) -> bool {
+        false
     }
 }

@@ -22,5 +22,12 @@ without executing migration SQL.
 `show_output(bool)` toggles progress output; `swallow_completion(bool)` converts the
 `MigrationComplete` error into `Ok` so "nothing to apply" is not an error.
 
+## MIGRATOR-5
+
+`synchronized(bool)` (default `true`) serializes migration runs across processes with a
+database advisory lock, and each migration is applied in a transaction with its bookkeeping
+row. See [advisory-locking.md](advisory-locking.md) and
+[transactional-migrations.md](transactional-migrations.md).
+
 Coverage: `migrant_lib/tests/sqlite.rs`, `server_dbs.rs`, `reload_memory.rs`,
 `tests/migrant.rs`; unit tests in `migrant_lib/src/migrator.rs`.

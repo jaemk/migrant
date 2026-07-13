@@ -19,6 +19,8 @@ can be built). Keep each row's status current with `spec.py set`.
 | Library Config API | done | [library-config-api.md](library-config-api.md) |
 | Migration Types | done | [migration-types.md](migration-types.md) |
 | Migrator API | done | [migrator-api.md](migrator-api.md) |
+| Transactional Migrations | done | [transactional-migrations.md](transactional-migrations.md) |
+| Advisory Locking | done | [advisory-locking.md](advisory-locking.md) |
 | Settings Builders | done | [settings-builders.md](settings-builders.md) |
 | In-Memory SQLite | done | [in-memory-sqlite.md](in-memory-sqlite.md) |
 | Database Backends | done | [database-backends.md](database-backends.md) |
