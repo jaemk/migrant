@@ -43,6 +43,6 @@ Postgres and mysql tests are skipped unless `POSTGRES_TEST_CONN_STR` /
 
 ## Submitting Changes
 
-Pull Requests should be made against master.
+Pull Requests should be made against main.
 GitHub Actions will run the test suite on all PRs.
 Remember to update the changelog!
