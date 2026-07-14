@@ -153,6 +153,34 @@ impl DbConnection {
     pub(crate) fn execute_batch(&mut self, sql: &str) -> Result<()> {
         dispatch!(self, c => c.execute_batch(sql))
     }
+
+    /// Begin a transaction on this connection
+    pub(crate) fn begin(&mut self) -> Result<()> {
+        dispatch!(self, c => c.begin())
+    }
+
+    /// Commit the current transaction on this connection
+    pub(crate) fn commit(&mut self) -> Result<()> {
+        dispatch!(self, c => c.commit())
+    }
+
+    /// Roll back the current transaction on this connection
+    pub(crate) fn rollback(&mut self) -> Result<()> {
+        dispatch!(self, c => c.rollback())
+    }
+
+    /// Acquire the session-level advisory lock that serializes migration runs.
+    ///
+    /// Blocks until the lock is available. Sqlite has no advisory lock (and no
+    /// cross-process migration concurrency to guard against), so it is a no-op.
+    pub(crate) fn acquire_lock(&mut self) -> Result<()> {
+        dispatch!(self, c => c.acquire_lock())
+    }
+
+    /// Release the session-level advisory lock. No-op for sqlite.
+    pub(crate) fn release_lock(&mut self) -> Result<()> {
+        dispatch!(self, c => c.release_lock())
+    }
 }
 
 #[cfg(test)]

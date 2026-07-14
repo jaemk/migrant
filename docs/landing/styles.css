@@ -1,0 +1,271 @@
+/* migrant landing page -- palette drawn from the hummingbird hero:
+   iridescent green + light sky blue on a deep teal-green ground. */
+
+:root {
+  --ink: #05140f;
+  --ink-2: #082019;
+  --panel: rgba(12, 40, 33, 0.55);
+  --panel-line: rgba(45, 190, 140, 0.2);
+  --text: #d7f5ea;
+  --muted: #8fbdb0;
+  --green: #1db47c;       /* iridescent back/crown (female ruby-throat: darker) */
+  --green-deep: #0e8a63;
+  --blue: #5cc7f5;        /* light sky blue */
+  --cream: #eafff6;       /* pale throat/belly */
+  --glow: 0 0 40px rgba(29, 180, 124, 0.35);
+  --radius: 16px;
+  --maxw: 1080px;
+}
+
+* { box-sizing: border-box; }
+
+html { scroll-behavior: smooth; }
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  font-family: "Inter", system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+  color: var(--text);
+  background:
+    radial-gradient(1200px 700px at 72% -10%, #0b2e24 0%, transparent 60%),
+    radial-gradient(900px 600px at 8% 8%, #072a30 0%, transparent 55%),
+    var(--ink);
+  overflow-x: hidden;
+  -webkit-font-smoothing: antialiased;
+}
+
+a { color: inherit; text-decoration: none; }
+
+/* ---- animated background ---- */
+.bg { position: fixed; inset: 0; z-index: 0; pointer-events: none; overflow: hidden; }
+.orb {
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(70px);
+  opacity: 0.5;
+  mix-blend-mode: screen;
+  animation: drift 22s ease-in-out infinite;
+}
+.orb-a { width: 460px; height: 460px; left: -80px; top: 6%;
+  background: radial-gradient(circle, #18a873, transparent 65%); }
+.orb-b { width: 540px; height: 540px; right: -120px; top: 22%;
+  background: radial-gradient(circle, #4fb8ec, transparent 65%);
+  animation-delay: -7s; }
+.orb-c { width: 380px; height: 380px; left: 36%; bottom: -120px;
+  background: radial-gradient(circle, #1cb389, transparent 65%);
+  animation-delay: -13s; }
+.grain {
+  position: absolute; inset: 0;
+  background-image: radial-gradient(rgba(120, 230, 190, 0.10) 1px, transparent 1px);
+  background-size: 26px 26px;
+  mask-image: radial-gradient(70% 60% at 50% 30%, #000 40%, transparent 100%);
+  -webkit-mask-image: radial-gradient(70% 60% at 50% 30%, #000 40%, transparent 100%);
+}
+@keyframes drift {
+  0%, 100% { transform: translate(0, 0) scale(1); }
+  33% { transform: translate(40px, -30px) scale(1.08); }
+  66% { transform: translate(-30px, 24px) scale(0.96); }
+}
+
+/* ---- nav ---- */
+.nav {
+  position: relative; z-index: 3;
+  max-width: var(--maxw); margin: 0 auto;
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 22px 24px;
+}
+.brand { display: flex; align-items: center; gap: 10px; font-weight: 800; font-size: 20px; }
+.brand-mark {
+  width: 24px; height: 24px; border-radius: 7px;
+  box-shadow: 0 0 18px rgba(29, 180, 124, 0.45);
+}
+.brand-name { letter-spacing: 0.3px; }
+.nav-links { display: flex; gap: 22px; font-weight: 500; color: var(--muted); }
+.nav-links a { transition: color 0.2s; }
+.nav-links a:hover { color: var(--text); }
+
+/* ---- hero ---- */
+.hero {
+  position: relative; z-index: 2;
+  max-width: var(--maxw); margin: 0 auto;
+  padding: 18px 24px 40px;
+  display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr); gap: 24px; align-items: center;
+  min-height: 72vh;
+}
+.hero-stage { display: flex; justify-content: center; align-items: center; }
+.bird { width: min(100%, 500px); height: auto; overflow: visible; will-change: transform; }
+
+.hero-copy { max-width: 520px; min-width: 0; }
+.title {
+  font-size: clamp(56px, 9vw, 104px); line-height: 1; margin: 0 0 10px;
+  /* the gradient only paints the padding box, so leave room for the g descender */
+  padding-bottom: 0.12em;
+  font-weight: 800; letter-spacing: -2px;
+  background: linear-gradient(120deg, #eafff6 10%, var(--green) 55%, var(--blue) 100%);
+  -webkit-background-clip: text; background-clip: text; color: transparent;
+}
+.tagline { font-size: 19px; line-height: 1.55; color: var(--muted); margin: 0 0 26px; }
+.tagline strong { color: var(--text); font-weight: 600; }
+
+.cmds { margin-bottom: 26px; }
+.cmd {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  background: var(--panel); border: 1px solid var(--panel-line);
+  border-radius: 12px; padding: 12px 12px 12px 16px;
+  backdrop-filter: blur(8px); margin-bottom: 26px;
+}
+.cmds .cmd { margin-bottom: 0; }
+
+/* ---- install box with method tabs ---- */
+.install { margin-bottom: 0; }
+.tabs { display: flex; gap: 6px; margin-bottom: 10px; flex-wrap: wrap; }
+.tab {
+  cursor: pointer; font-family: inherit;
+  border: 1px solid var(--panel-line);
+  background: var(--panel); color: var(--muted);
+  border-radius: 9px; padding: 7px 16px; font-size: 13px; font-weight: 600;
+  backdrop-filter: blur(8px);
+  transition: background 0.2s, color 0.2s, border-color 0.2s, transform 0.1s;
+}
+.tab:hover { color: var(--text); }
+.tab:active { transform: scale(0.97); }
+.tab.is-active {
+  color: #04231b; border-color: transparent;
+  background: linear-gradient(120deg, var(--green), var(--blue));
+  box-shadow: var(--glow);
+}
+.panel { display: none; }
+.panel.is-active { display: block; }
+/* Multi-line install snippets render their newlines and scroll if too wide. */
+.cmd-multiline { align-items: flex-start; }
+.cmd-multiline code { white-space: pre; line-height: 1.7; }
+/* The releases tab's "Open" is a link styled like the Copy button. */
+.copy-link { display: inline-flex; align-items: center; }
+
+/* divider label between steps */
+.then {
+  display: flex; align-items: center; gap: 12px;
+  margin: 12px 2px; color: var(--muted);
+  font-size: 12px; letter-spacing: 0.5px; text-transform: uppercase;
+}
+.then::before, .then::after {
+  content: ""; height: 1px; flex: 1;
+  background: linear-gradient(90deg, transparent, var(--panel-line), transparent);
+}
+.then a {
+  color: inherit; text-decoration: none;
+  border-bottom: 1px solid var(--panel-line);
+  transition: color 0.2s, border-color 0.2s;
+}
+.then a:hover { color: var(--green); border-color: var(--green); }
+
+.cmd code {
+  font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 14px; color: #cbf6e6; white-space: nowrap; overflow-x: auto;
+  min-width: 0; scrollbar-width: none;
+}
+.cmd code::-webkit-scrollbar { display: none; }
+.cmd .prompt { color: var(--green); margin-right: 8px; user-select: none; }
+.copy {
+  flex: none; cursor: pointer; border: 1px solid var(--panel-line);
+  background: rgba(29, 180, 124, 0.12); color: var(--text);
+  border-radius: 8px; padding: 7px 12px; font-size: 13px; font-weight: 600;
+  transition: background 0.2s, transform 0.1s;
+}
+.copy:hover { background: rgba(29, 180, 124, 0.22); }
+.copy:active { transform: scale(0.96); }
+.copy.copied { color: var(--green); border-color: var(--green); }
+
+.cta { display: flex; flex-wrap: wrap; gap: 12px; }
+.btn {
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 12px 20px; border-radius: 11px; font-weight: 600; font-size: 15px;
+  transition: transform 0.12s, box-shadow 0.2s, background 0.2s;
+}
+.btn:active { transform: translateY(1px); }
+.btn-primary {
+  background: linear-gradient(120deg, var(--green), var(--blue));
+  color: #04231b; box-shadow: var(--glow);
+}
+.btn-primary:hover { box-shadow: 0 0 56px rgba(92, 199, 245, 0.5); }
+.btn-ghost {
+  background: var(--panel); color: var(--text);
+  border: 1px solid var(--panel-line); backdrop-filter: blur(8px);
+}
+.btn-ghost:hover { background: rgba(29, 180, 124, 0.14); }
+
+/* ---- features ---- */
+.features {
+  position: relative; z-index: 2;
+  max-width: var(--maxw); margin: 0 auto; padding: 20px 24px 60px;
+  display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px;
+}
+.card {
+  background: var(--panel); border: 1px solid var(--panel-line);
+  border-radius: var(--radius); padding: 22px; backdrop-filter: blur(8px);
+  transition: transform 0.2s, border-color 0.2s;
+}
+.card:hover { transform: translateY(-4px); border-color: rgba(92, 199, 245, 0.4); }
+.card h3 { margin: 0 0 8px; font-size: 18px; color: #eafff6; }
+.card p { margin: 0; color: var(--muted); font-size: 15px; line-height: 1.55; }
+.card code {
+  font-family: "JetBrains Mono", ui-monospace, monospace; font-size: 0.86em;
+  color: var(--blue); background: rgba(92, 199, 245, 0.1);
+  padding: 1px 5px; border-radius: 5px;
+}
+
+/* ---- footer ---- */
+.foot {
+  position: relative; z-index: 2;
+  max-width: var(--maxw); margin: 0 auto; padding: 26px 24px 50px;
+  display: flex; justify-content: space-between; align-items: center;
+  color: var(--muted); font-size: 14px; border-top: 1px solid var(--panel-line);
+}
+.foot a:hover { color: var(--text); }
+
+/* ---- hummingbird hero animation ---- */
+/* The whole bird hovers. */
+.bird-body { animation: hover 4.6s ease-in-out infinite; transform-origin: center; }
+@keyframes hover {
+  0%, 100% { transform: translateY(0) rotate(0deg); }
+  50% { transform: translateY(-12px) rotate(-1.5deg); }
+}
+/* Near wing beats fast around its shoulder; the ghost wing pulses to suggest motion blur. */
+.wing-near { transform-box: fill-box; transform-origin: 2% 90%; animation: flap 0.5s ease-in-out infinite; }
+@keyframes flap {
+  0%, 100% { transform: rotate(-12deg); }
+  50% { transform: rotate(18deg); }
+}
+.wing-ghost { animation: ghost 0.5s ease-in-out infinite; }
+@keyframes ghost { 0%, 100% { opacity: 0.12; } 50% { opacity: 0.32; } }
+/* Tail steadies the hover with a slow wag. */
+.tail-fan { transform-box: fill-box; transform-origin: 6% 23%; animation: wag 4.6s ease-in-out infinite; }
+@keyframes wag {
+  0%, 100% { transform: rotate(-2.5deg); }
+  50% { transform: rotate(3deg); }
+}
+.eye-glint, .mig-glint { animation: twinkle 3.6s ease-in-out infinite; }
+@keyframes twinkle { 0%, 100% { opacity: 0.7; } 50% { opacity: 1; } }
+
+/* ---- responsive ---- */
+@media (max-width: 880px) {
+  .hero { grid-template-columns: minmax(0, 1fr); text-align: center; min-height: auto; padding-top: 8px; gap: 8px; }
+  .hero-copy { width: 100%; margin: 0; }
+  .hero-stage { order: -1; margin-bottom: 6px; }
+  .bird { width: min(78%, 340px); }
+  .cta { justify-content: center; }
+  .tabs { justify-content: center; }
+  .cmd code { font-size: 12.5px; }
+  .features { grid-template-columns: 1fr; }
+  .nav-links { display: none; }
+  .foot { flex-direction: column; gap: 10px; }
+  .orb { opacity: 0.32; filter: blur(60px); }
+  .orb-a { width: 300px; height: 300px; }
+  .orb-b { width: 340px; height: 340px; right: -150px; }
+  .orb-c { width: 280px; height: 280px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .orb, .bird-body, .wing-near, .wing-ghost, .tail-fan, .eye-glint, .mig-glint { animation: none !important; }
+  html { scroll-behavior: auto; }
+}

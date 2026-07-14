@@ -103,11 +103,17 @@ impl Config {
         let conn = guard.as_mut().expect("connection just established");
         let res = f(conn);
         if res.is_err() && self.database_type() != DbKind::Sqlite {
-            // Drop server connections on error: they may be stuck in an
-            // aborted-transaction state. The next operation reconnects.
-            // Sqlite connections are kept (rollback is handled by the driver,
-            // and an in-memory database would be lost).
-            *guard = None;
+            // A server error may leave the connection stuck in an
+            // aborted-transaction state. Recover it in place with a rollback
+            // rather than dropping it, so session-scoped state -- notably the
+            // migration advisory lock -- survives the error and is still held
+            // when a `force`d run continues past it. Only if the rollback fails
+            // (a genuinely dead connection) do we drop it, so the next
+            // operation reconnects. Sqlite is excluded: its driver handles
+            // rollback and an in-memory database would be lost if dropped.
+            if conn.rollback().is_err() {
+                *guard = None;
+            }
         }
         res
     }
@@ -115,6 +121,41 @@ impl Config {
     /// Execute a batch of sql statements on the database
     pub(crate) fn execute_sql(&self, sql: &str) -> Result<()> {
         self.with_conn(|conn| conn.execute_batch(sql))
+    }
+
+    /// Begin a transaction on the live connection
+    pub(crate) fn begin_transaction(&self) -> Result<()> {
+        self.with_conn(|conn| conn.begin())
+    }
+
+    /// Commit the current transaction on the live connection
+    pub(crate) fn commit_transaction(&self) -> Result<()> {
+        self.with_conn(|conn| conn.commit())
+    }
+
+    /// Roll back the current transaction on the live connection.
+    ///
+    /// Best-effort: this runs on error paths where the connection may already
+    /// have been torn down (which itself rolls back the transaction on server
+    /// databases), so failures to issue an explicit `rollback` are ignored.
+    pub(crate) fn rollback_transaction(&self) {
+        let _ = self.with_conn(|conn| conn.rollback());
+    }
+
+    /// Acquire the session-level advisory lock that serializes migration runs.
+    /// Blocks until the lock is available. No-op for sqlite.
+    pub(crate) fn acquire_migration_lock(&self) -> Result<()> {
+        self.with_conn(|conn| conn.acquire_lock())
+    }
+
+    /// Release the migration advisory lock.
+    ///
+    /// Best-effort: server databases release session-level locks automatically
+    /// when the connection drops, so failures to issue an explicit unlock (for
+    /// example after the connection was reconnected on an error path) are
+    /// ignored.
+    pub(crate) fn release_migration_lock(&self) {
+        let _ = self.with_conn(|conn| conn.release_lock());
     }
 
     /// Return a shared handle to the live sqlite connection,

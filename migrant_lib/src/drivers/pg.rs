@@ -9,6 +9,13 @@ use super::sql;
 use crate::errors::*;
 use crate::macros::err;
 
+/// Session-level advisory lock key that serializes concurrent migration runs.
+///
+/// The value is arbitrary but must be identical across every process using
+/// this library so they contend for the same lock. `pg_advisory_lock` takes a
+/// single `bigint`; this constant is stable and namespaced to migrant.
+const ADVISORY_LOCK_KEY: i64 = 30_796_665_483_397_364;
+
 /// A live postgres connection
 pub(crate) struct PgConn {
     client: Client,
@@ -116,6 +123,40 @@ impl PgConn {
             .batch_execute(stmt)
             .map_err(|e| err!(Migration, "{}", e))
     }
+
+    pub(crate) fn begin(&mut self) -> Result<()> {
+        self.client
+            .batch_execute("begin")
+            .map_err(|e| err!(Migration, "{}", e))
+    }
+
+    pub(crate) fn commit(&mut self) -> Result<()> {
+        self.client
+            .batch_execute("commit")
+            .map_err(|e| err!(Migration, "{}", e))
+    }
+
+    pub(crate) fn rollback(&mut self) -> Result<()> {
+        self.client
+            .batch_execute("rollback")
+            .map_err(|e| err!(Migration, "{}", e))
+    }
+
+    /// Take the session-level advisory lock, blocking until it is available.
+    /// Postgres releases it automatically if this connection (session) drops.
+    pub(crate) fn acquire_lock(&mut self) -> Result<()> {
+        self.client
+            .execute("select pg_advisory_lock($1)", &[&ADVISORY_LOCK_KEY])
+            .map_err(|e| err!(Migration, "{}", e))?;
+        Ok(())
+    }
+
+    pub(crate) fn release_lock(&mut self) -> Result<()> {
+        self.client
+            .execute("select pg_advisory_unlock($1)", &[&ADVISORY_LOCK_KEY])
+            .map_err(|e| err!(Migration, "{}", e))?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -201,6 +242,93 @@ mod tests {
         assert_eq!(0, conn.applied_tags().unwrap().len());
 
         conn.execute_batch("drop table __migrant_migrations;")
+            .unwrap();
+    }
+
+    /// Advisory-lock behavior. Both scenarios share the one fixed lock key, so
+    /// they run as a single test rather than racing each other for it under
+    /// cargo's parallel runner. Requires a running postgres instance
+    /// (`POSTGRES_TEST_CONN_STR`).
+    #[test]
+    fn advisory_lock() {
+        let conn_str = match std::env::var("POSTGRES_TEST_CONN_STR") {
+            Ok(s) => s,
+            Err(_) => {
+                eprintln!("POSTGRES_TEST_CONN_STR not set, skipping");
+                return;
+            }
+        };
+        lock_is_exclusive(&conn_str);
+        lock_survives_in_transaction_error(&conn_str);
+    }
+
+    /// While one session holds the lock, another cannot, and it becomes
+    /// available again once released.
+    fn lock_is_exclusive(conn_str: &str) {
+        let mut holder = PgConn::connect(conn_str, None).unwrap();
+        let mut other = PgConn::connect(conn_str, None).unwrap();
+
+        // `pg_try_advisory_lock` returns immediately with whether it got the lock.
+        let try_lock = |c: &mut PgConn| -> bool {
+            c.client
+                .query_one("select pg_try_advisory_lock($1)", &[&ADVISORY_LOCK_KEY])
+                .unwrap()
+                .get(0)
+        };
+
+        holder.acquire_lock().unwrap();
+        assert!(
+            !try_lock(&mut other),
+            "second session must not acquire a held lock"
+        );
+        holder.release_lock().unwrap();
+        assert!(try_lock(&mut other), "lock must be available once released");
+        // release the try-lock we just took so we don't leak it on the session
+        other
+            .client
+            .execute("select pg_advisory_unlock($1)", &[&ADVISORY_LOCK_KEY])
+            .unwrap();
+    }
+
+    /// After an error inside a transaction, recovering the connection in place
+    /// with `rollback` (as `Config::with_conn` does) keeps the session alive, so
+    /// the advisory lock it holds survives the error and the connection stays
+    /// usable. This is what lets a `force`d migration run keep holding the lock
+    /// past a failed migration.
+    fn lock_survives_in_transaction_error(conn_str: &str) {
+        let mut holder = PgConn::connect(conn_str, None).unwrap();
+        let mut other = PgConn::connect(conn_str, None).unwrap();
+
+        holder.acquire_lock().unwrap();
+        // Provoke an error inside an explicit transaction: postgres leaves the
+        // connection in an aborted-transaction state.
+        holder.begin().unwrap();
+        assert!(holder
+            .execute_batch("select * from does_not_exist")
+            .is_err());
+        // Recover in place, exactly as `with_conn` does on a server error.
+        holder.rollback().unwrap();
+
+        // The session survived, so it still holds the lock and another session
+        // cannot take it (`not pg_try_advisory_lock` is true when it is held).
+        let still_held: bool = other
+            .client
+            .query_one("select not pg_try_advisory_lock($1)", &[&ADVISORY_LOCK_KEY])
+            .unwrap()
+            .get(0);
+        assert!(
+            still_held,
+            "advisory lock must survive an in-transaction error"
+        );
+        // The recovered connection is usable again.
+        let one: i32 = holder.client.query_one("select 1", &[]).unwrap().get(0);
+        assert_eq!(1, one);
+
+        holder.release_lock().unwrap();
+        // Drop any advisory locks `other` may have taken so none leak on its session.
+        other
+            .client
+            .execute("select pg_advisory_unlock_all()", &[])
             .unwrap();
     }
 }

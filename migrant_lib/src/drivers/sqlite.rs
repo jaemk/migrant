@@ -97,6 +97,35 @@ impl SqliteConn {
         }
         res.map_err(|e| err!(Migration, "{}", e))
     }
+
+    pub(crate) fn begin(&self) -> Result<()> {
+        self.lock()
+            .execute_batch("begin")
+            .map_err(|e| err!(Migration, "{}", e))
+    }
+
+    pub(crate) fn commit(&self) -> Result<()> {
+        self.lock()
+            .execute_batch("commit")
+            .map_err(|e| err!(Migration, "{}", e))
+    }
+
+    pub(crate) fn rollback(&self) -> Result<()> {
+        self.lock()
+            .execute_batch("rollback")
+            .map_err(|e| err!(Migration, "{}", e))
+    }
+
+    /// Sqlite has no cross-process advisory lock (a single connection already
+    /// serializes writers, and there is no server to coordinate through), so
+    /// migration-run locking is a no-op.
+    pub(crate) fn acquire_lock(&self) -> Result<()> {
+        Ok(())
+    }
+
+    pub(crate) fn release_lock(&self) -> Result<()> {
+        Ok(())
+    }
 }
 
 #[cfg(test)]

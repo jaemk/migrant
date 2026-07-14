@@ -7,6 +7,13 @@ use super::sql;
 use crate::errors::*;
 use crate::macros::{bail, err};
 
+/// Named advisory lock that serializes concurrent migration runs.
+///
+/// MySQL `GET_LOCK`/`RELEASE_LOCK` are keyed by name and scoped to the session,
+/// so the lock is released automatically if this connection drops. The name is
+/// arbitrary but must be identical across every process using this library.
+const ADVISORY_LOCK_NAME: &str = "__migrant_migrations";
+
 /// A live mysql connection
 pub(crate) struct MySqlConn {
     conn: Conn,
@@ -62,6 +69,48 @@ impl MySqlConn {
             .query_drop(stmt)
             .map_err(|e| err!(Migration, "{}", e))
     }
+
+    pub(crate) fn begin(&mut self) -> Result<()> {
+        self.conn
+            .query_drop("begin")
+            .map_err(|e| err!(Migration, "{}", e))
+    }
+
+    pub(crate) fn commit(&mut self) -> Result<()> {
+        self.conn
+            .query_drop("commit")
+            .map_err(|e| err!(Migration, "{}", e))
+    }
+
+    pub(crate) fn rollback(&mut self) -> Result<()> {
+        self.conn
+            .query_drop("rollback")
+            .map_err(|e| err!(Migration, "{}", e))
+    }
+
+    /// Take the named advisory lock, blocking until it is available (a negative
+    /// `GET_LOCK` timeout waits indefinitely). MySQL releases it automatically
+    /// if this connection (session) drops.
+    pub(crate) fn acquire_lock(&mut self) -> Result<()> {
+        let got: Option<Option<i64>> = self
+            .conn
+            .query_first(format!("select get_lock('{}', -1)", ADVISORY_LOCK_NAME))
+            .map_err(|e| err!(Migration, "{}", e))?;
+        match got {
+            Some(Some(1)) => Ok(()),
+            _ => bail!(
+                Migration,
+                "could not acquire mysql advisory lock `{}`",
+                ADVISORY_LOCK_NAME
+            ),
+        }
+    }
+
+    pub(crate) fn release_lock(&mut self) -> Result<()> {
+        self.conn
+            .query_drop(format!("select release_lock('{}')", ADVISORY_LOCK_NAME))
+            .map_err(|e| err!(Migration, "{}", e))
+    }
 }
 
 #[cfg(test)]
@@ -107,5 +156,43 @@ mod tests {
 
         conn.execute_batch("drop table __migrant_migrations;")
             .unwrap();
+    }
+
+    /// The advisory lock is exclusive across connections: while one session
+    /// holds it, another cannot, and it becomes available again once released.
+    /// Requires a running mysql instance (`MYSQL_TEST_CONN_STR`).
+    #[test]
+    fn advisory_lock_is_exclusive() {
+        let conn_str = match std::env::var("MYSQL_TEST_CONN_STR") {
+            Ok(s) => s,
+            Err(_) => {
+                eprintln!("MYSQL_TEST_CONN_STR not set, skipping");
+                return;
+            }
+        };
+        let mut holder = MySqlConn::connect(&conn_str).unwrap();
+        let mut other = MySqlConn::connect(&conn_str).unwrap();
+
+        // `get_lock` with a zero timeout returns immediately: 1 got it, 0 timed out.
+        let try_lock = |c: &mut MySqlConn| -> Option<i64> {
+            c.conn
+                .query_first(format!("select get_lock('{}', 0)", ADVISORY_LOCK_NAME))
+                .unwrap()
+                .flatten()
+        };
+
+        holder.acquire_lock().unwrap();
+        assert_eq!(
+            Some(0),
+            try_lock(&mut other),
+            "second session must not acquire a held lock"
+        );
+        holder.release_lock().unwrap();
+        assert_eq!(
+            Some(1),
+            try_lock(&mut other),
+            "lock must be available once released"
+        );
+        other.release_lock().unwrap();
     }
 }
