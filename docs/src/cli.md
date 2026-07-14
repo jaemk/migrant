@@ -1,0 +1,74 @@
+# The CLI
+
+`migrant` manages migrations that live under `<project-dir>/migrations/`, where
+`project-dir` is the closest parent directory containing a `Migrant.toml`.
+Applied migrations are tracked in a `__migrant_migrations` table. Commands are
+run from anywhere inside the project; migrant searches upward for the config.
+
+## Project setup
+
+`migrant init [--type <sqlite|postgres|mysql>] [--location <dir>] [--default-from-env] [--no-confirm]`
+: Create a `Migrant.toml`. Run interactively (without `--no-confirm`) it also
+  runs `setup`. `--default-from-env` seeds every value as an `env:VAR` reference
+  instead of a literal (see [Configuration](configuration.md)).
+
+`migrant setup`
+: Verify database credentials and create the `__migrant_migrations` table if it
+  is missing.
+
+`migrant which-config`
+: Print the path of the active `Migrant.toml`.
+
+`migrant connect-string`
+: Print the connection string (server databases) or the database file path
+  (SQLite).
+
+## Migrations
+
+`migrant new <tag>`
+: Generate a timestamped `<stamp>_<tag>/` directory with empty `up.sql` and
+  `down.sql`. Tags may contain `[a-z0-9-]`.
+
+`migrant edit <tag> [--down]`
+: Open the `up.sql` (or `down.sql` with `--down`) for a migration matching
+  `<tag>` in `$EDITOR`.
+
+`migrant list`
+: List available migrations and mark those applied.
+
+`migrant apply [--down] [--all] [--force] [--fake]`
+: Apply the next migration. `--down` reverts instead of applying. `--all` runs
+  every remaining migration in the chosen direction. `--force` continues past
+  errors. `--fake` records the migration as (un)applied without running its SQL.
+
+`migrant redo [--all] [--force]`
+: Shortcut for the latest `down` then `up`. Useful while iterating on a migration
+  you are still writing.
+
+## Inspect and connect
+
+`migrant shell`
+: Open a database repl. Requires the matching client on your `PATH`: `sqlite3`
+  for SQLite, `psql` for PostgreSQL, `mysqlsh` for MySQL. The password is passed
+  out of band (`PGPASSWORD`/`MYSQL_PWD`), never on the command line.
+
+`migrant tui`
+: Interactive terminal UI for viewing and applying migrations.
+
+## Maintenance
+
+`migrant self update [--no-confirm] [--quiet]`
+: Replace the running binary with the latest GitHub release. Only works when the
+  binary was built with the `update` feature (release binaries are; a plain
+  `cargo install` is not).
+
+`migrant self bash-completions install [--path <path>]`
+: Generate a bash completion script (default `/etc/bash_completion.d/migrant`).
+
+## Behavior worth knowing
+
+- Each migration and its bookkeeping row are applied in one transaction by
+  default. See [Transactions](transactions.md) and the
+  `-- migrant:no-transaction` directive for DDL that cannot run in a transaction.
+- Runs against PostgreSQL/MySQL take an advisory lock so concurrent `migrant`
+  processes serialize. See [Concurrency and locking](concurrency.md).

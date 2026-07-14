@@ -1,0 +1,67 @@
+name: docs
+
+# Pages source is set to GitHub Actions for this repo. Builds the mdBook and
+# deploys it on docs changes. `workflow_dispatch` allows a manual run.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'docs/**'
+      - '.github/workflows/pages.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+env:
+  MDBOOK_VERSION: '0.5.3'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install mdBook
+        run: |
+          mkdir -p "$HOME/.local/bin"
+          url="https://github.com/rust-lang/mdBook/releases/download/v${MDBOOK_VERSION}/mdbook-v${MDBOOK_VERSION}-x86_64-unknown-linux-gnu.tar.gz"
+          curl -sSL "$url" | tar -xz -C "$HOME/.local/bin"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: Build
+        run: mdbook build docs
+      - name: Assemble site
+        # Landing page at the root, mdBook docs under /guide/.
+        run: |
+          mkdir -p _site
+          cp -r docs/landing/. _site/
+          mkdir -p _site/guide
+          cp -r docs/book/. _site/guide/
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url || steps.deployment_retry.outputs.page_url }}
+    steps:
+      # Pages intermittently returns "Deployment failed, try again later" on the
+      # first status poll. Retry once after a short settle so a transient backend
+      # blip does not fail the run; a persistent failure still fails the retry.
+      - id: deployment
+        uses: actions/deploy-pages@v4
+        continue-on-error: true
+      - if: steps.deployment.outcome == 'failure'
+        run: sleep 30
+      - id: deployment_retry
+        if: steps.deployment.outcome == 'failure'
+        uses: actions/deploy-pages@v4

@@ -26,8 +26,11 @@ If the `migration_location` directory doesn't exist, it will be created the firs
 For example, `database_user = "env:DB_USER"` will use the value of the environment variable `DB_USER`.
 If a `.env` file exists, it will be "sourced" automatically before your `Migrant.toml` is loaded.
 
-*Note:* SQL statements are batch executed as is. If you want your migration to happen atomically in a
-transaction you must manually wrap your statements in a transaction (`begin transaction; ... commit;`).
+*Note:* Each migration and its `__migrant_migrations` bookkeeping row are applied in a single transaction
+by default, so do not wrap your SQL in your own `begin`/`commit`. For DDL a backend cannot run in a
+transaction (e.g. postgres `create index concurrently` or `alter type ... add value`), opt a direction out
+with a `-- migrant:no-transaction` comment line in that migration file. See the
+[docs](https://jaemk.github.io/migrant/).
 
 
 ### Installation

@@ -3,3 +3,5 @@ db
 db.db
 migrant.db
 .idea
+/docs/book
+/local
