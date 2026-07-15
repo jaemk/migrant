@@ -36,8 +36,17 @@ mid-run. A `force`d run therefore keeps holding the lock as it continues past a
 failed migration, with no window for another migrator to interleave. Only a
 genuinely dead connection (its rollback also fails) is dropped.
 
-Coverage: `migrant_lib/src/drivers/pg.rs`, `mysql.rs` (`advisory_lock`,
-`advisory_lock_is_exclusive`, gated on the test connection strings and run via
-`test.sh`); the `advisory_lock` test also covers lock survival across an
-in-transaction error; end-to-end apply/unapply and the `force`-past-failure
-phase through the synchronized path in `migrant_lib/tests/server_dbs.rs`.
+## LOCK-6
+
+A synchronized run never continues after its locked session is gone. If the
+connection had to be dropped and re-established mid-run (LOCK-5's dead-connection
+case), the run aborts with an error before applying or recording anything on the
+new, unlocked session. The applied-state re-read at the start of a run does not
+re-read the settings file or swap the connection (see MIGRATOR-1), so the run
+cannot silently migrate over a different connection than the one it locked.
+
+Coverage: `migrant_lib/src/drivers/pg.rs`, `mysql.rs` (`advisory_lock`, gated on
+the test connection strings and run via `test.sh`); both drivers' `advisory_lock`
+tests cover exclusivity and lock survival across an in-transaction error;
+end-to-end apply/unapply, the `force`-past-failure phase, and the
+`synchronized(false)` skip phase in `migrant_lib/tests/server_dbs.rs`.

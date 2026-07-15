@@ -3,8 +3,8 @@
 #![cfg(feature = "d-sqlite")]
 
 use migrant_lib::{
-    Config, ConnConfig, Direction, EmbeddedMigration, FileMigration, FnMigration, Migrator,
-    Settings,
+    Config, ConnConfig, Direction, EmbeddedMigration, FileMigration, FnMigration, ForceMode,
+    Migrator, Settings,
 };
 
 fn seed_users(conn: ConnConfig) -> Result<(), Box<dyn std::error::Error>> {
@@ -79,6 +79,114 @@ fn failing_migration_config(no_transaction: bool) -> Config {
     let mut config = Config::with_settings(&settings);
     config.use_migrations(&[migration.boxed()]).unwrap();
     config
+}
+
+/// Build an in-memory config where the first migration fails and a second,
+/// valid migration follows it -- the shape `force` runs care about.
+fn failing_then_good_config() -> Config {
+    let settings = Settings::configure_sqlite().memory().build().unwrap();
+    let mut config = Config::with_settings(&settings);
+    config
+        .use_migrations(&[
+            EmbeddedMigration::with_tag("bad")
+                .up("insert into does_not_exist values (1);")
+                .down("select 1;")
+                .boxed(),
+            EmbeddedMigration::with_tag("later")
+                .up("create table later (x integer);")
+                .down("drop table later;")
+                .boxed(),
+        ])
+        .unwrap();
+    config
+}
+
+#[test]
+fn force_accept_failures_records_failed_migration() {
+    let config = failing_then_good_config();
+    config.setup().unwrap();
+
+    Migrator::with_config(&config)
+        .all(true)
+        .force(ForceMode::AcceptFailures)
+        .show_output(false)
+        .swallow_completion(true)
+        .apply()
+        .unwrap();
+
+    let config = config.reload().unwrap();
+    assert!(
+        table_exists(&config, "later"),
+        "the run must continue past the failure and apply later migrations"
+    );
+    assert_eq!(
+        vec!["bad".to_string(), "later".to_string()],
+        applied_tags(&config),
+        "accept-failures records the failed migration as applied"
+    );
+}
+
+#[test]
+fn force_skip_failures_leaves_failed_migration_unrecorded() {
+    let config = failing_then_good_config();
+    config.setup().unwrap();
+
+    Migrator::with_config(&config)
+        .all(true)
+        .force(ForceMode::SkipFailures)
+        .show_output(false)
+        .swallow_completion(true)
+        .apply()
+        .unwrap();
+
+    let config = config.reload().unwrap();
+    assert!(
+        table_exists(&config, "later"),
+        "the run must continue past the failure and apply later migrations"
+    );
+    assert_eq!(
+        vec!["later".to_string()],
+        applied_tags(&config),
+        "skip-failures must not record the failed migration"
+    );
+
+    // The skipped migration is retried on the next run (and fails again
+    // without force).
+    let res = Migrator::with_config(&config).show_output(false).apply();
+    assert!(
+        res.is_err(),
+        "the skipped migration must be selected and fail on the next run"
+    );
+}
+
+#[test]
+fn apply_refreshes_applied_state_without_manual_reload() {
+    // Consumers are not required to call `Config::reload` before applying:
+    // the migrator re-reads applied state itself, so back-to-back runs on the
+    // same un-reloaded config must not re-apply migration 1.
+    let settings = Settings::configure_sqlite().memory().build().unwrap();
+    let config = migrations_config(&settings);
+    config.setup().unwrap();
+
+    // First single apply: create-users.
+    Migrator::with_config(&config)
+        .show_output(false)
+        .apply()
+        .unwrap();
+
+    // Second single apply on the same, never-reloaded config: must pick
+    // seed-users, not fail re-running create-users.
+    Migrator::with_config(&config)
+        .show_output(false)
+        .apply()
+        .unwrap();
+
+    let config = config.reload().unwrap();
+    assert_eq!(
+        vec!["create-users".to_string(), "seed-users".to_string()],
+        applied_tags(&config)
+    );
+    assert_eq!(1, user_count(&config));
 }
 
 #[test]

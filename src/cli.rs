@@ -1,5 +1,24 @@
 use clap::{Arg, ArgAction, Command};
 
+/// `--force[=<mode>]`: continue past failed migrations.
+/// Bare `--force` means `accept-failures` (record the failed migration as
+/// applied); `--force=skip-failures` continues without recording so the
+/// migration is retried on the next run.
+fn force_arg() -> Arg {
+    Arg::new("force")
+        .long("force")
+        .num_args(0..=1)
+        .require_equals(true)
+        .value_parser(["accept-failures", "skip-failures"])
+        .default_missing_value("accept-failures")
+        .value_name("mode")
+        .help(
+            "Continue past failed migrations. `accept-failures` (the default) records a \
+             failed migration as applied; `skip-failures` leaves it unrecorded so it is \
+             retried on the next run",
+        )
+}
+
 pub fn build_cli() -> Command {
     Command::new("migrant")
         .version(env!("CARGO_PKG_VERSION"))
@@ -72,7 +91,7 @@ pub fn build_cli() -> Command {
         .subcommand(Command::new("setup").about("Setup migration table"))
         .subcommand(
             Command::new("connect-string")
-                .about("Print out the connection string for postgres, or file-path for sqlite"),
+                .about("Print out the connection string for server databases (postgres/mysql), or file-path for sqlite"),
         )
         .subcommand(
             Command::new("list").about("List status of applied and available migrations"),
@@ -94,12 +113,7 @@ pub fn build_cli() -> Command {
                         .action(ArgAction::SetTrue)
                         .help("Applies all remaining migrations in the chosen direction (un-applies all with --down)"),
                 )
-                .arg(
-                    Arg::new("force")
-                        .long("force")
-                        .action(ArgAction::SetTrue)
-                        .help("Applies migrations, ignoring errors"),
-                )
+                .arg(force_arg())
                 .arg(
                     Arg::new("fake")
                         .long("fake")
@@ -115,14 +129,9 @@ pub fn build_cli() -> Command {
                         .long("all")
                         .short('a')
                         .action(ArgAction::SetTrue)
-                        .help("Applies all remaining migrations in the chosen direction (un-applies all with --down)"),
+                        .help("Re-applies (down, then up) all applied migrations instead of only the latest"),
                 )
-                .arg(
-                    Arg::new("force")
-                        .long("force")
-                        .action(ArgAction::SetTrue)
-                        .help("Applies migrations, ignoring errors"),
-                ),
+                .arg(force_arg()),
         )
         .subcommand(
             Command::new("new")

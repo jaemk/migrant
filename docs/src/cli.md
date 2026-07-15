@@ -36,12 +36,15 @@ run from anywhere inside the project; migrant searches upward for the config.
 `migrant list`
 : List available migrations and mark those applied.
 
-`migrant apply [--down] [--all] [--force] [--fake]`
+`migrant apply [--down] [--all] [--force[=<mode>]] [--fake]`
 : Apply the next migration. `--down` reverts instead of applying. `--all` runs
-  every remaining migration in the chosen direction. `--force` continues past
-  errors. `--fake` records the migration as (un)applied without running its SQL.
+  every remaining migration in the chosen direction. `--force` continues past a
+  failed migration: bare `--force` (or `--force=accept-failures`) records the
+  failed migration as applied anyway, so it is not retried on later runs;
+  `--force=skip-failures` leaves it unrecorded and retries it on the next run.
+  `--fake` records the migration as (un)applied without running its SQL.
 
-`migrant redo [--all] [--force]`
+`migrant redo [--all] [--force[=<mode>]]`
 : Shortcut for the latest `down` then `up`. Useful while iterating on a migration
   you are still writing.
 
@@ -49,8 +52,9 @@ run from anywhere inside the project; migrant searches upward for the config.
 
 `migrant shell`
 : Open a database repl. Requires the matching client on your `PATH`: `sqlite3`
-  for SQLite, `psql` for PostgreSQL, `mysqlsh` for MySQL. The password is passed
-  out of band (`PGPASSWORD`/`MYSQL_PWD`), never on the command line.
+  for SQLite, `psql` for PostgreSQL, and for MySQL `mysqlsh` when installed,
+  falling back to the classic `mysql` client. The password is passed out of band
+  (`PGPASSWORD`/`MYSQL_PWD`), never on the command line.
 
 `migrant tui`
 : Interactive terminal UI for viewing and applying migrations.

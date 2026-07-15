@@ -37,8 +37,8 @@ config.use_migrations(&[
         .boxed(),
 ])?;
 
-// Load applied state, then apply everything.
-let config = config.reload()?;
+// Apply everything. The migrator re-reads applied state from the database
+// itself, so no manual reload is needed before applying.
 Migrator::with_config(&config)
     .all(true)
     .apply()?;
@@ -46,8 +46,10 @@ Migrator::with_config(&config)
 # }
 ```
 
-`reload()` re-reads the applied set from the database and returns a fresh
-`Config`. Call it after `setup`/`use_migrations` and after each apply cycle.
+`Config::reload()` re-reads the applied set from the database and returns a
+fresh `Config`. It is only needed when *your* code inspects applied state (for
+example via `migration_statuses`) after applying; `Migrator::apply` refreshes
+its own view.
 
 ## Settings builders
 
@@ -66,12 +68,16 @@ Or load from a file: `Config::from_settings_file("Migrant.toml")`.
 Migrator::with_config(&config)
     .direction(migrant_lib::Direction::Up) // or Down
     .all(true)          // every remaining migration, not just the next
-    .force(false)       // continue past errors
+    .force(migrant_lib::ForceMode::Off)    // or AcceptFailures / SkipFailures
     .fake(false)        // record without running SQL
     .synchronized(true) // advisory lock for server databases (default)
     .show_output(true)
     .apply()?;
 ```
+
+`ForceMode` controls failed-migration handling: `Off` (default) aborts the run,
+`AcceptFailures` continues and records the failed migration as applied,
+`SkipFailures` continues without recording it so the next run retries it.
 
 `synchronized` controls the advisory lock; see
 [Concurrency and locking](concurrency.md). Transaction wrapping is per migration;

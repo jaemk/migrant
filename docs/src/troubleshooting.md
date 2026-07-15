@@ -41,8 +41,9 @@ or add the `update` feature.
 
 ## `migrant shell` cannot find the client
 
-`shell` runs the database's own client: `sqlite3`, `psql`, or `mysqlsh`. Install
-the matching client and make sure it is on your `PATH`.
+`shell` runs the database's own client: `sqlite3`, `psql`, or for mysql
+`mysqlsh` when installed and the classic `mysql` client otherwise. Install a
+matching client and make sure it is on your `PATH`.
 
 ## Wrong config is picked up
 

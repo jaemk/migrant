@@ -5,7 +5,11 @@ Migrator builder: direction, all, force, fake, show_output, swallow_completion, 
 ## MIGRATOR-1
 
 `Migrator::with_config(&config)` creates a migrator; `apply()` executes pending
-migrations against the live connection.
+migrations against the live connection. A run re-reads applied state from the
+database itself (for every backend), so consumers do not need to call
+`Config::reload` before applying. The re-read never re-reads the settings file
+or swaps the live connection: the whole run stays on the connection it started
+(and, when synchronized, took the advisory lock) on.
 
 ## MIGRATOR-2
 
@@ -14,8 +18,19 @@ remaining migration in that direction instead of just the next one.
 
 ## MIGRATOR-3
 
-`force(bool)` continues applying past SQL errors; `fake(bool)` updates the tracking table
-without executing migration SQL.
+`force(ForceMode)` controls how a run handles a migration that fails to apply:
+
+- `ForceMode::Off` (default): the failure aborts the run with an error and the
+  migration is not recorded.
+- `ForceMode::AcceptFailures`: the run continues and the failed migration is
+  recorded as applied anyway, so it is not retried on later runs.
+- `ForceMode::SkipFailures`: the run continues without recording the failed
+  migration; it is skipped for the remainder of the run (so an `all` run
+  terminates) and retried on the next run.
+
+`ForceMode` parses from `off` / `accept-failures` / `skip-failures`
+(`FromStr`). `fake(bool)` updates the tracking table without executing
+migration SQL.
 
 ## MIGRATOR-4
 

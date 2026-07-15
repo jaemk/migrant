@@ -1,5 +1,19 @@
 # Changelog
 
+## [Unreleased]
+### Added
+- `--force` takes an optional mode: bare `--force` (or `--force=accept-failures`) records a
+  failed migration as applied and continues; `--force=skip-failures` continues without
+  recording it, so the next run retries it
+- `migrant shell` falls back to the classic `mysql` client when `mysqlsh` is not on `PATH`
+- `database_port` in `Migrant.toml` accepts a TOML integer or a string
+
+### Changed
+- Running any subcommand other than `init` without a `Migrant.toml` now errors with a
+  pointer to `migrant init`, instead of starting the interactive config-creation flow
+- `apply`/`redo` no longer need a manual reload before running: the migrator re-reads
+  applied state itself (see migrant_lib changelog)
+
 ## [0.15.0]
 ### Added
 - `migrant tui` subcommand: interactive terminal UI for viewing and applying migrations

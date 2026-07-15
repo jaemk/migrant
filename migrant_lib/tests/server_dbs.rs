@@ -5,7 +5,7 @@
 //! and `MYSQL_TEST_CONN_STR` (e.g. `mysql://user:pass@localhost:3306/db`).
 #![cfg(any(feature = "d-postgres", feature = "d-mysql"))]
 
-use migrant_lib::{Config, Direction, EmbeddedMigration, Migrator, Settings};
+use migrant_lib::{Config, Direction, EmbeddedMigration, ForceMode, Migrator, Settings};
 
 struct ConnParts {
     name: String,
@@ -125,6 +125,54 @@ fn postgres_end_to_end() {
     // force-past-failure phase, also against the same database
     assert_force_continues_holding_lock(&conn_str, &settings);
     drop_pg_migration_table(&conn_str);
+    // synchronized(false) phase, also against the same database
+    assert_unsynchronized_run_skips_lock(&conn_str, &settings);
+    drop_pg_migration_table(&conn_str);
+}
+
+/// With `synchronized(false)` a run must not take the migration advisory lock:
+/// it completes even while another session holds that lock. Shares the
+/// postgres database with `postgres_end_to_end`, so it runs as one of its
+/// phases.
+#[cfg(feature = "d-postgres")]
+fn assert_unsynchronized_run_skips_lock(conn_str: &str, settings: &Settings) {
+    // Must match `ADVISORY_LOCK_KEY` in `src/drivers/pg.rs`.
+    const ADVISORY_LOCK_KEY: i64 = 30_796_665_483_397_364;
+
+    let mut client = postgres::Client::connect(conn_str, postgres::NoTls).unwrap();
+    let got: bool = client
+        .query_one("select pg_try_advisory_lock($1)", &[&ADVISORY_LOCK_KEY])
+        .unwrap()
+        .get(0);
+    assert!(got, "test precondition: advisory lock must be acquirable");
+
+    // Run the migrator on another thread so a regression (taking the lock and
+    // blocking on it forever) fails the test instead of hanging it.
+    let (tx, rx) = std::sync::mpsc::channel();
+    let settings = settings.clone();
+    std::thread::spawn(move || {
+        let run = || -> Result<(), migrant_lib::Error> {
+            let mut config = Config::with_settings(&settings);
+            config.use_migrations(&[EmbeddedMigration::with_tag("unsync")
+                .up("select 1;")
+                .down("select 1;")
+                .boxed()])?;
+            config.setup()?;
+            Migrator::with_config(&config)
+                .synchronized(false)
+                .show_output(false)
+                .apply()
+        };
+        tx.send(run()).expect("send unsynchronized run result");
+    });
+    let res = rx
+        .recv_timeout(std::time::Duration::from_secs(30))
+        .expect("unsynchronized run must not block on the held advisory lock");
+    res.expect("unsynchronized run must apply cleanly");
+
+    client
+        .execute("select pg_advisory_unlock_all()", &[])
+        .unwrap();
 }
 
 /// A migration whose SQL fails partway is rolled back atomically on postgres:
@@ -199,7 +247,7 @@ fn assert_force_continues_holding_lock(conn_str: &str, settings: &Settings) {
     // the second on the same session that still holds the advisory lock.
     Migrator::with_config(&config)
         .all(true)
-        .force(true)
+        .force(ForceMode::AcceptFailures)
         .show_output(false)
         .swallow_completion(true)
         .apply()

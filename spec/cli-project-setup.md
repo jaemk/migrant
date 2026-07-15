@@ -17,11 +17,15 @@ tracking table if it does not exist.
 ## CLIPRO-3
 
 `migrant which-config` prints the path of the active `Migrant.toml`. The active config is
-found by searching upward from the current directory.
+found by searching upward from the current directory. When no config is found, every
+subcommand except `init` (and `self`) errors with a pointer to `migrant init` rather than
+starting the interactive config-creation flow.
 
 ## CLIPRO-4
 
-`migrant connect-string` prints the database connection string, or the database file path
-for SQLite.
+`migrant connect-string` prints the database connection string (postgres/mysql), or the
+database file path for SQLite.
 
-Coverage: `tests/migrant.rs` (kitchen_sink) and backend integration tests.
+Coverage: `tests/migrant.rs` (kitchen_sink, no_config_errors_and_points_at_init,
+init_non_interactive_creates_config, init_rejects_invalid_database_type) and backend
+integration tests.

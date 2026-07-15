@@ -158,11 +158,12 @@ mod tests {
             .unwrap();
     }
 
-    /// The advisory lock is exclusive across connections: while one session
-    /// holds it, another cannot, and it becomes available again once released.
+    /// Advisory-lock behavior. The two scenarios share the one fixed lock
+    /// name, so they run sequentially inside a single `#[test]` rather than
+    /// racing each other under cargo's parallel runner.
     /// Requires a running mysql instance (`MYSQL_TEST_CONN_STR`).
     #[test]
-    fn advisory_lock_is_exclusive() {
+    fn advisory_lock() {
         let conn_str = match std::env::var("MYSQL_TEST_CONN_STR") {
             Ok(s) => s,
             Err(_) => {
@@ -170,16 +171,23 @@ mod tests {
                 return;
             }
         };
-        let mut holder = MySqlConn::connect(&conn_str).unwrap();
-        let mut other = MySqlConn::connect(&conn_str).unwrap();
+        lock_is_exclusive(&conn_str);
+        lock_survives_in_transaction_error(&conn_str);
+    }
 
-        // `get_lock` with a zero timeout returns immediately: 1 got it, 0 timed out.
-        let try_lock = |c: &mut MySqlConn| -> Option<i64> {
-            c.conn
-                .query_first(format!("select get_lock('{}', 0)", ADVISORY_LOCK_NAME))
-                .unwrap()
-                .flatten()
-        };
+    /// `get_lock` with a zero timeout returns immediately: 1 got it, 0 timed out.
+    fn try_lock(c: &mut MySqlConn) -> Option<i64> {
+        c.conn
+            .query_first(format!("select get_lock('{}', 0)", ADVISORY_LOCK_NAME))
+            .unwrap()
+            .flatten()
+    }
+
+    /// While one session holds the lock, another cannot, and it becomes
+    /// available again once released.
+    fn lock_is_exclusive(conn_str: &str) {
+        let mut holder = MySqlConn::connect(conn_str).unwrap();
+        let mut other = MySqlConn::connect(conn_str).unwrap();
 
         holder.acquire_lock().unwrap();
         assert_eq!(
@@ -193,6 +201,36 @@ mod tests {
             try_lock(&mut other),
             "lock must be available once released"
         );
+        other.release_lock().unwrap();
+    }
+
+    /// The session-scoped lock survives a failed statement inside an explicit
+    /// transaction followed by the in-place rollback recovery `with_conn`
+    /// performs on server errors.
+    fn lock_survives_in_transaction_error(conn_str: &str) {
+        let mut holder = MySqlConn::connect(conn_str).unwrap();
+        let mut other = MySqlConn::connect(conn_str).unwrap();
+
+        holder.acquire_lock().unwrap();
+        // Provoke an error inside an explicit transaction.
+        holder.begin().unwrap();
+        assert!(holder
+            .execute_batch("select * from does_not_exist")
+            .is_err());
+        // Recover in place, exactly as `with_conn` does on a server error.
+        holder.rollback().unwrap();
+
+        // The session survived, so it still holds the lock.
+        assert_eq!(
+            Some(0),
+            try_lock(&mut other),
+            "advisory lock must survive an in-transaction error"
+        );
+        // The recovered connection is usable again.
+        let one: Option<i64> = holder.conn.query_first("select 1").unwrap();
+        assert_eq!(Some(1), one);
+
+        holder.release_lock().unwrap();
         other.release_lock().unwrap();
     }
 }
