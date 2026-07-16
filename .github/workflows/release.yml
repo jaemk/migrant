@@ -21,6 +21,7 @@ permissions:
 jobs:
   publish-lib:
     if: startsWith(github.ref_name, 'lib-v')
+    environment: Release
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -37,6 +38,7 @@ jobs:
 
   publish-cli:
     if: startsWith(github.ref_name, 'cli-v')
+    environment: Release
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -54,6 +56,7 @@ jobs:
   release-binaries:
     needs: publish-cli
     if: startsWith(github.ref_name, 'cli-v')
+    environment: Release
     permissions:
       contents: write
     strategy:
@@ -116,6 +119,7 @@ jobs:
   docker-publish:
     needs: release-binaries
     if: startsWith(github.ref_name, 'cli-v')
+    environment: Release
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
