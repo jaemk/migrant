@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [1.0.0-rc.1]
 ### Added
 - `--force` takes an optional mode: bare `--force` (or `--force=accept-failures`) records a
   failed migration as applied and continues; `--force=skip-failures` continues without
@@ -9,6 +9,9 @@
 - `database_port` in `Migrant.toml` accepts a TOML integer or a string
 
 ### Changed
+- Update `migrant_lib` to 1.0.0-rc.1
+- `apply` and `redo` no longer treat an already-up-to-date database as an error; a run with
+  nothing to apply now succeeds
 - Running any subcommand other than `init` without a `Migrant.toml` now errors with a
   pointer to `migrant init`, instead of starting the interactive config-creation flow
 - `apply`/`redo` no longer need a manual reload before running: the migrator re-reads

@@ -10,8 +10,8 @@ CLI-compatible tag mode.
 
 ## LIBRAR-2
 
-`Config::with_settings(&settings)` builds a config from an explicit `Settings` value,
-with no config file on disk.
+`Config::with_settings(settings)` builds a config from an explicit `Settings` value
+(taken by value), with no config file on disk.
 
 ## LIBRAR-3
 
@@ -26,8 +26,9 @@ migration list. For in-memory SQLite the live connection is preserved across rel
 ## LIBRAR-5
 
 `Config::use_cli_compatible_tags(bool)` toggles timestamp-prefixed tag validation so
-library-managed migrations interoperate with CLI-created ones; `is_cli_compatible()`
-reports the current mode.
+library-managed migrations interoperate with CLI-created ones, and returns `&mut Self`
+so it can be chained onto construction before `use_migrations`/`reload`;
+`is_cli_compatible()` reports the current mode.
 
 Coverage: `migrant_lib/tests/sqlite.rs`, `server_dbs.rs`, `reload_memory.rs`; unit tests in
 `migrant_lib/src/tags.rs`.

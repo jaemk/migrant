@@ -5,20 +5,21 @@ you only build the drivers you need.
 
 | Database | CLI feature | Library feature | Driver |
 |----------|-------------|-----------------|--------|
-| SQLite | `sqlite` | `d-sqlite` | rusqlite |
-| PostgreSQL | `postgres` | `d-postgres` | postgres |
-| MySQL | `mysql` | `d-mysql` | mysql |
+| SQLite | `sqlite` | `sqlite` | rusqlite |
+| PostgreSQL | `postgres` | `postgres` | postgres |
+| MySQL | `mysql` | `mysql` | mysql |
 
-The library also has `d-all` to enable all three. No backend is enabled by
+The library also has `all` to enable all three. No backend is enabled by
 default; invoking an operation whose feature is disabled returns
-`Error::FeatureRequired` rather than panicking.
+`Error::FeatureRequired` rather than panicking. The pre-1.0 `d-sqlite` /
+`d-postgres` / `d-mysql` / `d-all` names remain as deprecated aliases.
 
 ## SQLite
 
 File-backed or in-memory. The `sqlite` CLI feature bundles SQLite; the library's
-`d-sqlite` does not bundle it (enable rusqlite's `bundled` feature in your own
-project if you want that). DDL is transactional, so migrations roll back cleanly
-on failure.
+`sqlite` feature does not bundle it (enable rusqlite's `bundled` feature in your
+own project if you want that). DDL is transactional, so migrations roll back
+cleanly on failure.
 
 An in-memory database (`:memory:`) lives entirely in one connection. migrant
 keeps that connection alive for the life of the `Config` and its clones, so

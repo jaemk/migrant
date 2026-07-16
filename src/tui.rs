@@ -107,16 +107,19 @@ impl App {
             .show_output(false)
             .apply();
         let message = match res {
-            Ok(()) => format!(
-                "Applied {}[{}] migration{}",
-                if all { "all " } else { "" },
-                direction.to_string().to_lowercase(),
-                if all { "s" } else { "" }
-            ),
-            Err(e) if e.is_migration_complete() => match direction {
+            Ok(report) if report.is_empty() => match direction {
                 Direction::Up => "No un-applied migrations".to_string(),
                 Direction::Down => "Nothing to un-apply".to_string(),
             },
+            Ok(report) => {
+                let n = report.len();
+                format!(
+                    "Applied {} {} migration{}",
+                    n,
+                    direction.to_string().to_lowercase(),
+                    if n == 1 { "" } else { "s" }
+                )
+            }
             Err(e) => format!("{}", e),
         };
         self.refresh(&message);
@@ -211,7 +214,7 @@ mod tests {
 
     fn test_app() -> App {
         let settings = Settings::configure_sqlite().memory().build().unwrap();
-        let mut config = Config::with_settings(&settings);
+        let mut config = Config::with_settings(settings);
         config
             .use_migrations(&[
                 EmbeddedMigration::with_tag("create-users")
@@ -306,7 +309,7 @@ mod tests {
         // `u` applies one up migration at a time
         app.handle_key(key(KeyCode::Char('u')));
         assert_eq!(1, applied_count(&app));
-        assert_eq!("Applied [up] migration", app.message);
+        assert_eq!("Applied 1 up migration", app.message);
         app.handle_key(key(KeyCode::Char('u')));
         assert_eq!(2, applied_count(&app));
 
@@ -318,17 +321,17 @@ mod tests {
         // `D` un-applies everything
         app.handle_key(key(KeyCode::Char('D')));
         assert_eq!(0, applied_count(&app));
-        assert_eq!("Applied all [down] migrations", app.message);
+        assert_eq!("Applied 2 down migrations", app.message);
 
         // `a` applies everything
         app.handle_key(key(KeyCode::Char('a')));
         assert_eq!(2, applied_count(&app));
-        assert_eq!("Applied all [up] migrations", app.message);
+        assert_eq!("Applied 2 up migrations", app.message);
 
         // `d` un-applies one down migration
         app.handle_key(key(KeyCode::Char('d')));
         assert_eq!(1, applied_count(&app));
-        assert_eq!("Applied [down] migration", app.message);
+        assert_eq!("Applied 1 down migration", app.message);
     }
 
     // TUI-4

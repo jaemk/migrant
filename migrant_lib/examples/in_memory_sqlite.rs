@@ -6,10 +6,10 @@ clones -- so migrations and application queries all operate on the same
 database. Use `Config::sqlite_connection` (or `ConnConfig::sqlite_connection`
 inside function-migrations) to access the live connection.
 
-This should be run with `cargo run --example in_memory_sqlite --features d-sqlite`
+This should be run with `cargo run --example in_memory_sqlite --features sqlite`
 */
 
-#[cfg(feature = "d-sqlite")]
+#[cfg(feature = "sqlite")]
 fn run() -> Result<(), Box<dyn std::error::Error>> {
     use migrant_lib::{Config, ConnConfig, EmbeddedMigration, FnMigration, Migrator, Settings};
 
@@ -23,7 +23,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let settings = Settings::configure_sqlite().memory().build()?;
-    let mut config = Config::with_settings(&settings);
+    let mut config = Config::with_settings(settings);
     config.setup()?;
 
     config.use_migrations(&[
@@ -41,7 +41,6 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     Migrator::with_config(&config)
         .all(true)
         .show_output(false)
-        .swallow_completion(true)
         .apply()?;
 
     // The application can now use the same live in-memory database
@@ -52,9 +51,9 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-#[cfg(not(feature = "d-sqlite"))]
+#[cfg(not(feature = "sqlite"))]
 fn run() -> Result<(), Box<dyn std::error::Error>> {
-    Err("d-sqlite database feature required".into())
+    Err("sqlite database feature required".into())
 }
 
 pub fn main() {

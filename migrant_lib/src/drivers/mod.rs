@@ -31,33 +31,33 @@ pub(crate) mod sql {
     pub static MYSQL_MIGRATION_TABLE_EXISTS: &str = "select exists(select 1 from information_schema.tables where table_name='__migrant_migrations' and table_schema = database()) as tag;";
 }
 
-#[cfg(feature = "d-mysql")]
+#[cfg(feature = "mysql")]
 pub(crate) mod mysql;
-#[cfg(feature = "d-postgres")]
+#[cfg(feature = "postgres")]
 pub(crate) mod pg;
-#[cfg(feature = "d-sqlite")]
+#[cfg(feature = "sqlite")]
 pub(crate) mod sqlite;
 
 /// A live connection to one of the supported databases
 ///
 /// Server connections are boxed to keep the enum small
 pub(crate) enum DbConnection {
-    #[cfg(feature = "d-sqlite")]
+    #[cfg(feature = "sqlite")]
     Sqlite(sqlite::SqliteConn),
-    #[cfg(feature = "d-postgres")]
+    #[cfg(feature = "postgres")]
     Postgres(Box<pg::PgConn>),
-    #[cfg(feature = "d-mysql")]
+    #[cfg(feature = "mysql")]
     MySql(Box<mysql::MySqlConn>),
 }
 
 impl fmt::Debug for DbConnection {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let kind = match self {
-            #[cfg(feature = "d-sqlite")]
+            #[cfg(feature = "sqlite")]
             DbConnection::Sqlite(_) => "sqlite",
-            #[cfg(feature = "d-postgres")]
+            #[cfg(feature = "postgres")]
             DbConnection::Postgres(_) => "postgres",
-            #[cfg(feature = "d-mysql")]
+            #[cfg(feature = "mysql")]
             DbConnection::MySql(_) => "mysql",
             #[allow(unreachable_patterns)]
             _ => "unknown",
@@ -70,14 +70,14 @@ impl fmt::Debug for DbConnection {
 macro_rules! dispatch {
     ($self:expr, $conn:ident => $body:expr) => {
         match $self {
-            #[cfg(feature = "d-sqlite")]
+            #[cfg(feature = "sqlite")]
             DbConnection::Sqlite($conn) => $body,
-            #[cfg(feature = "d-postgres")]
+            #[cfg(feature = "postgres")]
             DbConnection::Postgres($conn) => $body,
-            #[cfg(feature = "d-mysql")]
+            #[cfg(feature = "mysql")]
             DbConnection::MySql($conn) => $body,
             #[allow(unreachable_patterns)]
-            _ => Err(Error::FeatureRequired("d-sqlite / d-postgres / d-mysql")),
+            _ => Err(Error::FeatureRequired("sqlite / postgres / mysql")),
         }
     };
 }
@@ -89,16 +89,16 @@ impl DbConnection {
     pub(crate) fn connect(config: &Config) -> Result<Self> {
         match config.database_type() {
             DbKind::Sqlite => {
-                #[cfg(feature = "d-sqlite")]
+                #[cfg(feature = "sqlite")]
                 {
                     let path = config.database_path_string()?;
                     Ok(DbConnection::Sqlite(sqlite::SqliteConn::open(&path)?))
                 }
-                #[cfg(not(feature = "d-sqlite"))]
-                Err(Error::FeatureRequired("d-sqlite"))
+                #[cfg(not(feature = "sqlite"))]
+                Err(Error::FeatureRequired("sqlite"))
             }
             DbKind::Postgres => {
-                #[cfg(feature = "d-postgres")]
+                #[cfg(feature = "postgres")]
                 {
                     let conn_str = config.connect_string()?;
                     let cert = config.ssl_cert_file();
@@ -107,19 +107,19 @@ impl DbConnection {
                         cert.as_deref(),
                     )?)))
                 }
-                #[cfg(not(feature = "d-postgres"))]
-                Err(Error::FeatureRequired("d-postgres"))
+                #[cfg(not(feature = "postgres"))]
+                Err(Error::FeatureRequired("postgres"))
             }
             DbKind::MySql => {
-                #[cfg(feature = "d-mysql")]
+                #[cfg(feature = "mysql")]
                 {
                     let conn_str = config.connect_string()?;
                     Ok(DbConnection::MySql(Box::new(mysql::MySqlConn::connect(
                         &conn_str,
                     )?)))
                 }
-                #[cfg(not(feature = "d-mysql"))]
-                Err(Error::FeatureRequired("d-mysql"))
+                #[cfg(not(feature = "mysql"))]
+                Err(Error::FeatureRequired("mysql"))
             }
         }
     }

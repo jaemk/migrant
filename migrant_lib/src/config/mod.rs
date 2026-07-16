@@ -83,7 +83,7 @@ impl Config {
     ///     .database_path("/absolute/path/to/db.db")?
     ///     .migration_location("/absolute/path/to/migration_dir")?
     ///     .build()?;
-    /// let config = Config::with_settings(&settings);
+    /// let config = Config::with_settings(settings);
     /// // Setup migrations table
     /// config.setup()?;
     ///
@@ -93,8 +93,8 @@ impl Config {
     /// # Ok(())
     /// # }
     /// ```
-    pub fn with_settings(s: &Settings) -> Config {
-        Self::from_parts(s.clone(), None)
+    pub fn with_settings(settings: Settings) -> Config {
+        Self::from_parts(settings, None)
     }
 
     /// Initialize a new settings file in the given directory
@@ -185,7 +185,7 @@ impl Config {
     /// ```rust,no_run
     /// # fn run() -> Result<(), Box<dyn std::error::Error>> {
     /// let settings = migrant_lib::Settings::configure_sqlite().memory().build()?;
-    /// let config = migrant_lib::Config::with_settings(&settings);
+    /// let config = migrant_lib::Config::with_settings(settings);
     /// config.setup()?;
     /// // ... apply migrations ...
     /// let conn = config.sqlite_connection()?;
@@ -195,7 +195,7 @@ impl Config {
     /// # Ok(())
     /// # }
     /// ```
-    #[cfg(feature = "d-sqlite")]
+    #[cfg(feature = "sqlite")]
     pub fn sqlite_connection(&self) -> Result<Arc<Mutex<rusqlite::Connection>>> {
         self.with_conn(|conn| match conn {
             DbConnection::Sqlite(s) => Ok(s.handle()),
@@ -244,15 +244,15 @@ impl Config {
     /// let p = search_for_settings_file(&std::env::current_dir()?)
     ///     .ok_or_else(|| "Settings file not found")?;
     /// let mut config = Config::from_settings_file(&p)?;
-    /// # #[cfg(any(feature="d-sqlite", feature="d-postgres", feature="d-mysql"))]
+    /// # #[cfg(any(feature="sqlite", feature="postgres", feature="mysql"))]
     /// config.use_migrations(&[
     ///     EmbeddedMigration::with_tag("create-users-table")
     ///         .up(include_str!("../../migrations/embedded/create_users_table/up.sql"))
     ///         .down(include_str!("../../migrations/embedded/create_users_table/down.sql"))
     ///         .boxed(),
     ///     FileMigration::with_tag("create-places-table")
-    ///         .up("migrations/embedded/create_places_table/up.sql")?
-    ///         .down("migrations/embedded/create_places_table/down.sql")?
+    ///         .up("migrations/embedded/create_places_table/up.sql")
+    ///         .down("migrations/embedded/create_places_table/down.sql")
     ///         .boxed(),
     ///     FnMigration::with_tag("custom")
     ///         .up(migrations::Custom::up)
@@ -308,17 +308,30 @@ impl Config {
 
     /// Toggle cli compatible tag validation.
     ///
-    /// **Note:** Make sure any calls to `Config::use_cli_compatible_tags` happen
-    /// **before** any calls to `Config::reload` or `Config::use_migrations` since
-    /// this is dependent on the tag format being used.
+    /// Returns `&mut Self` so it can be chained directly onto construction,
+    /// before `use_migrations`/`reload`:
+    ///
+    /// ```rust,no_run
+    /// # fn run() -> Result<(), Box<dyn std::error::Error>> {
+    /// let mut config = migrant_lib::Config::from_settings_file("Migrant.toml")?;
+    /// config.use_cli_compatible_tags(true);
+    /// let config = config.reload()?;
+    /// # let _ = config;
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// **Note:** Because both `Config::use_migrations` and `Config::reload`
+    /// depend on the tag format in use, set this **before** calling either.
     ///
     /// Defaults to `false`. When `cli_compatible` is set to `true`, migration
     /// tags will be validated in a manner compatible with the migrant CLI tool.
     /// Tags must be prefixed with a timestamp, following: `[0-9]{14}_[a-z0-9-]+`.
     /// When not enabled (the default), tag timestamps are optional and
     /// the migrant CLI tool will not be able to identify tags.
-    pub fn use_cli_compatible_tags(&mut self, compat: bool) {
+    pub fn use_cli_compatible_tags(&mut self, compat: bool) -> &mut Self {
         self.cli_compatible = compat;
+        self
     }
 
     /// Check the current cli compatibility

@@ -20,11 +20,11 @@ jobs:
       - name: rustfmt
         run: cargo fmt --all --check
       - name: clippy (lib)
-        run: cargo clippy -p migrant_lib --all-targets --features d-all -- -D warnings
+        run: cargo clippy -p migrant_lib --all-targets --features all -- -D warnings
       - name: clippy (cli)
         run: cargo clippy -p migrant --all-targets --features sqlite,postgres,mysql,update,integration_tests -- -D warnings
       - name: docs
-        run: cargo doc -p migrant_lib --features d-all --no-deps
+        run: cargo doc -p migrant_lib --features all --no-deps
         env:
           RUSTDOCFLAGS: -D warnings
 
@@ -68,9 +68,9 @@ jobs:
       - name: test (no db features)
         run: cargo test -p migrant_lib
       - name: test (all db features)
-        run: cargo test -p migrant_lib --features d-all
+        run: cargo test -p migrant_lib --features all
       - name: examples
-        run: cargo run -p migrant_lib --example in_memory_sqlite --features d-sqlite
+        run: cargo run -p migrant_lib --example in_memory_sqlite --features sqlite
 
   test-cli:
     strategy:

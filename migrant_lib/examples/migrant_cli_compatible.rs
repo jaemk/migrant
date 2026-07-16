@@ -11,7 +11,7 @@ For CLI compatibility and embedded capabilities, see the
 [embedded_cli_compatible](https://github.com/jaemk/migrant_lib/blob/master/examples/embedded_cli_compatible.rs)
 example.
 
-This should be run with `cargo run --example migrant_cli_compatible --features d-sqlite`
+This should be run with `cargo run --example migrant_cli_compatible --features sqlite`
 */
 use migrant_lib::config::SqliteSettingsBuilder;
 use migrant_lib::Config;

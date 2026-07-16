@@ -150,7 +150,7 @@ fn run(dir: &Path, matches: &clap::ArgMatches) -> Result<()> {
             migrant_lib::list(&config)?;
         }
         Some(("shell", _)) => {
-            migrant_lib::shell(&config)?;
+            migrant_lib::cli::shell(&config)?;
         }
         Some(("edit", matches)) => {
             let tag = matches.get_one::<String>("tag").expect("required arg");
@@ -159,7 +159,7 @@ fn run(dir: &Path, matches: &clap::ArgMatches) -> Result<()> {
             } else {
                 Direction::Up
             };
-            migrant_lib::edit(&config, tag, &up_down)?;
+            migrant_lib::cli::edit(&config, tag, &up_down)?;
         }
         Some(("which-config", _)) => {
             let path = config_path

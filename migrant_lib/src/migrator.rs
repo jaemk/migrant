@@ -6,7 +6,7 @@ use std::fmt;
 
 use crate::config::Config;
 use crate::errors::*;
-use crate::macros::{bail, err};
+use crate::macros::bail;
 use crate::migratable::Migratable;
 use crate::ops;
 use crate::util::print_flush;
@@ -72,7 +72,73 @@ impl std::str::FromStr for ForceMode {
     }
 }
 
+/// Summary of a migration run returned by [`Migrator::apply`].
+///
+/// `tags` holds the migration tags whose bookkeeping this run changed, in the
+/// order they were processed: for an `Up` run the migrations applied, for a
+/// `Down` run the migrations reverted. A `force`d `accept-failures` run includes
+/// a tag it recorded despite the migration failing; a `skip-failures` run does
+/// not include a skipped tag. An empty report means the database was already up
+/// to date (or fully reverted) and nothing ran.
+#[derive(Debug, Clone)]
+pub struct Report {
+    direction: Direction,
+    tags: Vec<String>,
+}
+
+impl Report {
+    fn new(direction: Direction) -> Self {
+        Self {
+            direction,
+            tags: Vec::new(),
+        }
+    }
+
+    /// The direction this run applied migrations in.
+    pub fn direction(&self) -> Direction {
+        self.direction
+    }
+
+    /// The migration tags whose bookkeeping this run changed, in order.
+    pub fn tags(&self) -> &[String] {
+        &self.tags
+    }
+
+    /// `true` if nothing ran (the database was already up to date, or fully
+    /// reverted for a `Down` run).
+    pub fn is_empty(&self) -> bool {
+        self.tags.is_empty()
+    }
+
+    /// The number of migrations applied (`Up`) or reverted (`Down`).
+    pub fn len(&self) -> usize {
+        self.tags.len()
+    }
+}
+
+/// Outcome of attempting the next migration in a run.
+enum Step {
+    /// A migration's bookkeeping was changed (applied/reverted, faked, or
+    /// force-recorded); carries its tag.
+    Applied(String),
+    /// A migration failed and was skipped under `ForceMode::SkipFailures`.
+    Skipped,
+    /// No further migration is available in this direction.
+    Complete,
+}
+
 /// Migration applicator
+///
+/// By default each migration's SQL and its `__migrant_migrations` bookkeeping
+/// row are applied in one transaction, so a failure leaves neither behind.
+///
+/// **MySQL caveat:** MySQL/MariaDB implicitly commit the current transaction on
+/// most DDL (`CREATE TABLE`, `ALTER TABLE`, ...). A migration whose `up`/`down`
+/// runs such DDL is therefore *not* atomic with its bookkeeping row on MySQL: if
+/// a later statement in the same migration fails, the DDL that already ran is not
+/// rolled back. Write MySQL DDL migrations to be individually safe to re-run
+/// (idempotent), and prefer one schema change per migration. Postgres and sqlite
+/// run DDL inside transactions and are unaffected.
 #[derive(Debug, Clone)]
 pub struct Migrator {
     config: Config,
@@ -81,7 +147,6 @@ pub struct Migrator {
     fake: bool,
     all: bool,
     show_output: bool,
-    swallow_completion: bool,
     synchronized: bool,
 }
 
@@ -95,7 +160,6 @@ impl Migrator {
             fake: false,
             all: false,
             show_output: true,
-            swallow_completion: false,
             synchronized: true,
         }
     }
@@ -140,14 +204,6 @@ impl Migrator {
         self
     }
 
-    /// Don't return any `Error::MigrationComplete` errors when running `Migrator::apply`
-    ///
-    /// All other errors will still be returned
-    pub fn swallow_completion(&mut self, swallow_completion: bool) -> &mut Self {
-        self.swallow_completion = swallow_completion;
-        self
-    }
-
     /// Serialize migration runs across processes using a database advisory lock.
     /// Default is `true`.
     ///
@@ -165,24 +221,18 @@ impl Migrator {
         self
     }
 
-    /// Apply migrations using current configuration
+    /// Apply migrations using the current configuration.
     ///
-    /// Returns an `Error::MigrationComplete` if all migrations in the given
-    /// direction have already been applied, unless `swallow_completion` is set to `true`.
-    pub fn apply(&self) -> Result<()> {
-        let res = self.run();
-        if self.swallow_completion {
-            match res {
-                Err(ref e) if e.is_migration_complete() => Ok(()),
-                other => other,
-            }
-        } else {
-            res
-        }
+    /// Returns a [`Report`] of the migration tags whose bookkeeping this run
+    /// changed (applied for `Up`, reverted for `Down`), in order. When the
+    /// database is already up to date (or fully reverted) nothing runs and the
+    /// report is empty ([`Report::is_empty`]) -- this is not an error.
+    pub fn apply(&self) -> Result<Report> {
+        self.run()
     }
 
     /// Apply migrations until complete (`all`) or a single one has been applied
-    fn run(&self) -> Result<()> {
+    fn run(&self) -> Result<Report> {
         let mut config = self.config.clone();
 
         // For server databases, take the migration advisory lock so concurrent
@@ -214,17 +264,24 @@ impl Migrator {
         // Tags that failed under `ForceMode::SkipFailures`, excluded from
         // migration selection for the remainder of this run.
         let mut skipped = HashSet::new();
-        let mut applied_any = false;
+        let mut report = Report::new(self.direction);
         loop {
             self.check_lock_still_held(&config, lock_generation)?;
-            match self.apply_next(&config, &mut skipped, lock_generation) {
-                Ok(()) => {}
-                Err(e) if e.is_migration_complete() && self.all && applied_any => return Ok(()),
-                Err(e) => return Err(e),
-            }
-            applied_any = true;
-            if !self.all {
-                return Ok(());
+            match self.apply_next(&config, &mut skipped, lock_generation)? {
+                Step::Applied(tag) => {
+                    report.tags.push(tag);
+                    if !self.all {
+                        return Ok(report);
+                    }
+                }
+                Step::Skipped => {
+                    // The migration failed and was left unrecorded; a single-step
+                    // run has taken its one attempt, so stop.
+                    if !self.all {
+                        return Ok(report);
+                    }
+                }
+                Step::Complete => return Ok(report),
             }
             config.refresh_applied()?;
         }
@@ -308,16 +365,13 @@ impl Migrator {
         config: &Config,
         skipped: &mut HashSet<String>,
         lock_generation: Option<u64>,
-    ) -> Result<()> {
+    ) -> Result<Step> {
         let migrations = Self::available_migrations(config)?;
-        let next = Self::next_available(self.direction, &migrations, &config.applied, skipped)?
-            .ok_or_else(|| {
-                err!(
-                    MigrationComplete,
-                    "No un-applied `{}` migrations found",
-                    self.direction
-                )
-            })?;
+        let next =
+            match Self::next_available(self.direction, &migrations, &config.applied, skipped)? {
+                Some(next) => next,
+                None => return Ok(Step::Complete),
+            };
 
         self.print(&format!(
             "Applying[{}]: {}",
@@ -329,7 +383,8 @@ impl Migrator {
 
         if self.fake {
             self.println("  ✓ (fake)");
-            return self.record_tag(config, &tag);
+            self.record_tag(config, &tag)?;
+            return Ok(Step::Applied(tag));
         }
 
         // Wrap the migration's SQL and its bookkeeping row in one transaction so
@@ -346,7 +401,7 @@ impl Migrator {
                     config.commit_transaction()?;
                 }
                 self.println("  ✓");
-                Ok(())
+                Ok(Step::Applied(tag))
             }
             Err(msg) => {
                 if transactional {
@@ -370,7 +425,8 @@ impl Migrator {
                         self.check_lock_still_held(config, lock_generation)?;
                         // The transaction (if any) was rolled back, so this
                         // bookkeeping row stands alone.
-                        self.record_tag(config, &tag)
+                        self.record_tag(config, &tag)?;
+                        Ok(Step::Applied(tag))
                     }
                     ForceMode::SkipFailures => {
                         self.println(&format!(
@@ -380,7 +436,7 @@ impl Migrator {
                             msg
                         ));
                         skipped.insert(tag);
-                        Ok(())
+                        Ok(Step::Skipped)
                     }
                 }
             }

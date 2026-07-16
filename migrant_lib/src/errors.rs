@@ -17,10 +17,6 @@ pub enum Error {
     #[error("MigrationError: {0}")]
     Migration(String),
 
-    /// All migrations in the requested direction have already been applied
-    #[error("MigrationComplete: {0}")]
-    MigrationComplete(String),
-
     /// A referenced migration could not be found
     #[error("MigrationNotFound: {0}")]
     MigrationNotFound(String),
@@ -62,25 +58,55 @@ pub enum Error {
     ChronoParse(#[from] chrono::ParseError),
 
     /// Sqlite driver error
-    #[cfg(feature = "d-sqlite")]
+    #[cfg(feature = "sqlite")]
     #[error(transparent)]
     Sqlite(#[from] rusqlite::Error),
 
     /// Postgres driver error
-    #[cfg(feature = "d-postgres")]
+    #[cfg(feature = "postgres")]
     #[error(transparent)]
     Postgres(#[from] postgres::Error),
 
     /// MySQL driver error
-    #[cfg(feature = "d-mysql")]
+    #[cfg(feature = "mysql")]
     #[error(transparent)]
     MySql(#[from] mysql::Error),
 }
 
 impl Error {
-    /// Return `true` if the error is `Error::MigrationComplete`
-    pub fn is_migration_complete(&self) -> bool {
-        matches!(self, Error::MigrationComplete(_))
+    /// `true` for [`Error::Config`]
+    pub fn is_config(&self) -> bool {
+        matches!(self, Error::Config(_))
+    }
+
+    /// `true` for [`Error::Migration`]
+    pub fn is_migration(&self) -> bool {
+        matches!(self, Error::Migration(_))
+    }
+
+    /// `true` for [`Error::MigrationNotFound`]
+    pub fn is_migration_not_found(&self) -> bool {
+        matches!(self, Error::MigrationNotFound(_))
+    }
+
+    /// `true` for [`Error::ShellCommand`]
+    pub fn is_shell_command(&self) -> bool {
+        matches!(self, Error::ShellCommand(_))
+    }
+
+    /// `true` for [`Error::TagError`]
+    pub fn is_tag_error(&self) -> bool {
+        matches!(self, Error::TagError(_))
+    }
+
+    /// `true` for [`Error::InvalidDbKind`]
+    pub fn is_invalid_db_kind(&self) -> bool {
+        matches!(self, Error::InvalidDbKind(_))
+    }
+
+    /// `true` for [`Error::FeatureRequired`]
+    pub fn is_feature_required(&self) -> bool {
+        matches!(self, Error::FeatureRequired(_))
     }
 }
 
@@ -89,14 +115,17 @@ mod tests {
     use super::*;
 
     #[test]
-    fn is_migration_complete_true_for_migration_complete() {
-        let err = Error::MigrationComplete("nothing to apply".to_string());
-        assert!(err.is_migration_complete());
+    fn predicates_match_their_variant() {
+        assert!(Error::TagError("dup".to_string()).is_tag_error());
+        assert!(Error::MigrationNotFound("x".to_string()).is_migration_not_found());
+        assert!(Error::FeatureRequired("sqlite").is_feature_required());
     }
 
     #[test]
-    fn is_migration_complete_false_for_other_errors() {
+    fn predicates_reject_other_variants() {
         let err = Error::Migration("boom".to_string());
-        assert!(!err.is_migration_complete());
+        assert!(err.is_migration());
+        assert!(!err.is_config());
+        assert!(!err.is_tag_error());
     }
 }

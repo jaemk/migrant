@@ -1,6 +1,6 @@
 [package]
 name = "migrant"
-version = "0.15.0"
+version = "1.0.0-rc.1"
 edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true
@@ -26,7 +26,7 @@ authors = ["James Kominick <james@kominick.com>"]
 license = "MIT"
 
 [workspace.dependencies]
-migrant_lib = { path = "migrant_lib", version = "0.35" }
+migrant_lib = { path = "migrant_lib", version = "1.0.0-rc.1" }
 
 # shared between the cli and the library
 rusqlite = "0.40"
@@ -73,9 +73,9 @@ tempfile = { workspace = true }
 
 [features]
 default = []
-sqlite = ["migrant_lib/d-sqlite", "dep:rusqlite"]
-postgres = ["migrant_lib/d-postgres"]
-mysql = ["migrant_lib/d-mysql"]
+sqlite = ["migrant_lib/sqlite", "dep:rusqlite"]
+postgres = ["migrant_lib/postgres"]
+mysql = ["migrant_lib/mysql"]
 update = ["dep:self_update"]
 vendored-openssl = ["migrant_lib/vendored-openssl"]
 integration_tests = []

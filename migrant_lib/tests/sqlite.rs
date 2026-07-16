@@ -1,6 +1,6 @@
 //! End-to-end sqlite tests, covering in-memory databases where the
 //! connection handle must be kept alive across all operations.
-#![cfg(feature = "d-sqlite")]
+#![cfg(feature = "sqlite")]
 
 use migrant_lib::{
     Config, ConnConfig, Direction, EmbeddedMigration, FileMigration, FnMigration, ForceMode,
@@ -22,7 +22,7 @@ fn unseed_users(conn: ConnConfig) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn migrations_config(settings: &Settings) -> Config {
-    let mut config = Config::with_settings(settings);
+    let mut config = Config::with_settings(settings.clone());
     config
         .use_migrations(&[
             EmbeddedMigration::with_tag("create-users")
@@ -69,14 +69,13 @@ fn table_exists(config: &Config, name: &str) -> bool {
 /// and then runs an invalid statement, so application fails partway through.
 fn failing_migration_config(no_transaction: bool) -> Config {
     let settings = Settings::configure_sqlite().memory().build().unwrap();
-    let mut migration = EmbeddedMigration::with_tag("bad");
-    migration
+    let mut migration = EmbeddedMigration::with_tag("bad")
         .up("create table good (x integer); insert into does_not_exist values (1);")
         .down("drop table good;");
     if no_transaction {
-        migration.no_transaction();
+        migration = migration.no_transaction();
     }
-    let mut config = Config::with_settings(&settings);
+    let mut config = Config::with_settings(settings);
     config.use_migrations(&[migration.boxed()]).unwrap();
     config
 }
@@ -85,7 +84,7 @@ fn failing_migration_config(no_transaction: bool) -> Config {
 /// valid migration follows it -- the shape `force` runs care about.
 fn failing_then_good_config() -> Config {
     let settings = Settings::configure_sqlite().memory().build().unwrap();
-    let mut config = Config::with_settings(&settings);
+    let mut config = Config::with_settings(settings);
     config
         .use_migrations(&[
             EmbeddedMigration::with_tag("bad")
@@ -110,7 +109,6 @@ fn force_accept_failures_records_failed_migration() {
         .all(true)
         .force(ForceMode::AcceptFailures)
         .show_output(false)
-        .swallow_completion(true)
         .apply()
         .unwrap();
 
@@ -135,7 +133,6 @@ fn force_skip_failures_leaves_failed_migration_unrecorded() {
         .all(true)
         .force(ForceMode::SkipFailures)
         .show_output(false)
-        .swallow_completion(true)
         .apply()
         .unwrap();
 
@@ -200,7 +197,6 @@ fn in_memory_database_end_to_end() {
     Migrator::with_config(&config)
         .all(true)
         .show_output(false)
-        .swallow_completion(true)
         .apply()
         .unwrap();
 
@@ -217,7 +213,6 @@ fn in_memory_database_end_to_end() {
         .all(true)
         .direction(Direction::Down)
         .show_output(false)
-        .swallow_completion(true)
         .apply()
         .unwrap();
 
@@ -296,7 +291,7 @@ fn embedded_directive_opts_up_out_of_transaction() {
     // Without a wrapping transaction the earlier `create table` persists,
     // proving the directive was read from the embedded up SQL.
     let settings = Settings::configure_sqlite().memory().build().unwrap();
-    let mut config = Config::with_settings(&settings);
+    let mut config = Config::with_settings(settings);
     config
         .use_migrations(&[EmbeddedMigration::with_tag("bad-up")
             .up("-- migrant:no-transaction\ncreate table up_good (x integer); insert into nope values (1);")
@@ -323,7 +318,7 @@ fn directive_applies_per_direction() {
     // (non-transactional). Applying up succeeds; a failing down then leaves its
     // partial state behind, demonstrating the flag is resolved per direction.
     let settings = Settings::configure_sqlite().memory().build().unwrap();
-    let mut config = Config::with_settings(&settings);
+    let mut config = Config::with_settings(settings);
     config
         .use_migrations(&[EmbeddedMigration::with_tag("thing")
             .up("create table thing (x integer);")
@@ -335,7 +330,6 @@ fn directive_applies_per_direction() {
 
     Migrator::with_config(&config)
         .show_output(false)
-        .swallow_completion(true)
         .apply()
         .unwrap();
     let config = config.reload().unwrap();
@@ -369,14 +363,9 @@ fn file_migration_reads_no_transaction_directive() {
     std::fs::write(&down, "select 1;").unwrap();
 
     let settings = Settings::configure_sqlite().memory().build().unwrap();
-    let mut config = Config::with_settings(&settings);
+    let mut config = Config::with_settings(settings);
     config
-        .use_migrations(&[FileMigration::with_tag("filed")
-            .up(&up)
-            .unwrap()
-            .down(&down)
-            .unwrap()
-            .boxed()])
+        .use_migrations(&[FileMigration::with_tag("filed").up(&up).down(&down).boxed()])
         .unwrap();
     config.setup().unwrap();
     let config = config.reload().unwrap();
@@ -409,7 +398,6 @@ fn file_database_end_to_end() {
     Migrator::with_config(&config)
         .all(true)
         .show_output(false)
-        .swallow_completion(true)
         .apply()
         .unwrap();
 

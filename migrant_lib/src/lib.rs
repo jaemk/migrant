@@ -15,16 +15,16 @@
 
 | Feature       |    Backend                   |
 |---------------|------------------------------|
-| `d-postgres`  | Enable postgres connectivity |
-| `d-sqlite`    | Enable sqlite connectivity   |
-| `d-mysql`     | Enable mysql connectivity    |
-| `d-all`       | Enable all backends          |
+| `postgres`  | Enable postgres connectivity |
+| `sqlite`    | Enable sqlite connectivity   |
+| `mysql`     | Enable mysql connectivity    |
+| `all`       | Enable all backends          |
 
 
 *Notes:*
 
 - No features are enabled by default
-- The `d-sqlite` feature does not use `rusqlite`s `bundled` feature.
+- The `sqlite` feature does not use `rusqlite`s `bundled` feature.
   If you would like `sqlite` to be bundled with your application, you will have to
   include `rusqlite` and enable the `bundled` feature in your project.
 
@@ -43,7 +43,7 @@
   See the [embedded_programmable](https://github.com/jaemk/migrant/blob/master/migrant_lib/examples/embedded_programmable.rs)
   example for a working sample of function migrations.
 - When working with embedded and function migrations, the respective database feature must be
-  enabled (`d-postgres` / `d-sqlite` / `d-mysql`).
+  enabled (`postgres` / `sqlite` / `mysql`).
 
 
 ```rust,no_run
@@ -59,11 +59,11 @@ fn down(_: migrant_lib::ConnConfig) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-# #[cfg(any(feature="d-sqlite", feature="d-postgres", feature="d-mysql"))]
+# #[cfg(any(feature="sqlite", feature="postgres", feature="mysql"))]
 config.use_migrations(&[
     migrant_lib::FileMigration::with_tag("create-users-table")
-        .up("migrations/embedded/create_users_table/up.sql")?
-        .down("migrations/embedded/create_users_table/down.sql")?
+        .up("migrations/embedded/create_users_table/up.sql")
+        .down("migrations/embedded/create_users_table/down.sql")
         .boxed(),
     migrant_lib::EmbeddedMigration::with_tag("create-places-table")
         .up(include_str!("../migrations/embedded/create_places_table/up.sql"))
@@ -82,19 +82,19 @@ config.use_migrations(&[
 
 ## In-memory sqlite databases
 
-With the `d-sqlite` feature, the special database path `:memory:` selects an
+With the `sqlite` feature, the special database path `:memory:` selects an
 in-memory sqlite database. The underlying connection is established once and
 kept alive by the `Config` (and shared by all of its clones), so migrations
 and application queries all see the same database. Function migrations can
 access the live connection through `ConnConfig::sqlite_connection`.
 
 ```rust,no_run
-# #[cfg(feature = "d-sqlite")]
+# #[cfg(feature = "sqlite")]
 # fn run() -> Result<(), Box<dyn std::error::Error>> {
 let settings = migrant_lib::Settings::configure_sqlite()
     .memory()
     .build()?;
-let config = migrant_lib::Config::with_settings(&settings);
+let config = migrant_lib::Config::with_settings(settings);
 config.setup()?;
 # Ok(())
 # }
@@ -146,15 +146,23 @@ pub use crate::config::{Config, Settings};
 pub use crate::connection::ConnConfig;
 pub use crate::errors::{Error, Result};
 pub use crate::migratable::Migratable;
-pub use crate::migration::{EmbeddedMigration, FileMigration, FnMigration};
-pub use crate::migrator::{Direction, ForceMode, Migrator};
+pub use crate::migration::{noop, EmbeddedMigration, FileMigration, FnMigration};
+pub use crate::migrator::{Direction, ForceMode, Migrator, Report};
 pub use crate::ops::{
-    edit, list, migration_statuses, new, search_for_settings_file, shell, MigrationStatus,
+    list, migration_statuses, new, pending_migrations, search_for_settings_file, MigrationStatus,
 };
+
+/// Interactive, terminal-oriented operations used by the `migrant` CLI.
+///
+/// These prompt on stdin and/or spawn external programs (a database shell, an
+/// editor), so they are kept out of the crate root and grouped here.
+pub mod cli {
+    pub use crate::ops::{edit, shell};
+}
 
 /// Re-export of the `rusqlite` crate used by this library, so downstream
 /// code interacting with [`Config::sqlite_connection`] can use matching types
-#[cfg(feature = "d-sqlite")]
+#[cfg(feature = "sqlite")]
 pub use rusqlite;
 
 /// Settings file name: `Migrant.toml`

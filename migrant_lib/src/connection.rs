@@ -42,7 +42,7 @@ impl<'a> ConnConfig<'a> {
     /// # Example
     ///
     /// ```rust,no_run
-    /// # #[cfg(feature = "d-sqlite")]
+    /// # #[cfg(feature = "sqlite")]
     /// fn add_data(config: migrant_lib::ConnConfig) -> Result<(), Box<dyn std::error::Error>> {
     ///     let conn = config.sqlite_connection()?;
     ///     let conn = conn.lock().unwrap();
@@ -50,7 +50,7 @@ impl<'a> ConnConfig<'a> {
     ///     Ok(())
     /// }
     /// ```
-    #[cfg(feature = "d-sqlite")]
+    #[cfg(feature = "sqlite")]
     pub fn sqlite_connection(
         &self,
     ) -> Result<std::sync::Arc<std::sync::Mutex<rusqlite::Connection>>> {

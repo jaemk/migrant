@@ -9,20 +9,20 @@ NOTE: The feature-gates are only required here so the example will compile when 
       tests with and without features. In regular usage, the `cfg`s are not required since
       the specified database feature should be enabled in your `Cargo.toml` entry.
 
-This should be run with `cargo run --example embedded_cli_compatible --features d-sqlite`
+This should be run with `cargo run --example embedded_cli_compatible --features sqlite`
 */
-#[cfg(feature = "d-sqlite")]
+#[cfg(feature = "sqlite")]
 use migrant_lib::{Config, Direction, Migrator, Settings};
-#[cfg(feature = "d-sqlite")]
+#[cfg(feature = "sqlite")]
 use std::env;
 
-#[cfg(feature = "d-sqlite")]
+#[cfg(feature = "sqlite")]
 fn run() -> Result<(), Box<dyn std::error::Error>> {
     let path = env::current_dir()?;
     let path = path.join("db/embedded_example.db");
     let settings = Settings::configure_sqlite().database_path(&path)?.build()?;
 
-    let mut config = Config::with_settings(&settings);
+    let mut config = Config::with_settings(settings);
 
     // Initialize database migrations table
     config.setup()?;
@@ -62,7 +62,6 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     Migrator::with_config(&config)
         .all(true)
         .show_output(false)
-        .swallow_completion(true)
         .apply()?;
 
     let config = config.reload()?;
@@ -72,7 +71,6 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     Migrator::with_config(&config)
         .all(true)
         .direction(Direction::Down)
-        .swallow_completion(true)
         .apply()?;
 
     let config = config.reload()?;
@@ -80,9 +78,9 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-#[cfg(not(feature = "d-sqlite"))]
+#[cfg(not(feature = "sqlite"))]
 fn run() -> Result<(), Box<dyn std::error::Error>> {
-    Err("d-sqlite database feature required")?;
+    Err("sqlite database feature required")?;
     Ok(())
 }
 
