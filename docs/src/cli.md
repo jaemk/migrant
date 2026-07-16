@@ -57,7 +57,10 @@ run from anywhere inside the project; migrant searches upward for the config.
   (`PGPASSWORD`/`MYSQL_PWD`), never on the command line.
 
 `migrant tui`
-: Interactive terminal UI for viewing and applying migrations.
+: Interactive terminal UI for viewing and applying migrations. Keys: `j`/`k`
+  (or Down/Up) move the selection, `u` applies the next migration and `d` reverts
+  the last, `a` applies all and `D` reverts all, `r` refreshes from the database,
+  and `q` (or Esc / Ctrl-C) quits.
 
 ## Maintenance
 
@@ -66,8 +69,11 @@ run from anywhere inside the project; migrant searches upward for the config.
   binary was built with the `update` feature (release binaries are; a plain
   `cargo install` is not).
 
-`migrant self bash-completions install [--path <path>]`
-: Generate a bash completion script (default `/etc/bash_completion.d/migrant`).
+`migrant self bash-completions [install [--path <path>]]`
+: Generate a bash completion script. Without `install` it is written to stdout,
+  so you can redirect it yourself. With `install` it is written to a file
+  (default `/etc/bash_completion.d/migrant`) and the success message goes to
+  stderr.
 
 ## Behavior worth knowing
 

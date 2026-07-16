@@ -9,7 +9,8 @@ portable (musl) builds.
 
 Pre-built binaries for Linux (gnu and musl), macOS (x86_64 and aarch64), and
 Windows are attached to each [GitHub release](https://github.com/jaemk/migrant/releases).
-Release binaries are built with all features, so they can self-update:
+Release binaries are built with all three database backends and the `update`
+feature, so they can self-update:
 
 ```sh
 migrant self update

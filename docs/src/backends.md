@@ -53,4 +53,5 @@ application is safe to retry.
 ## Static builds
 
 The CLI's `vendored-openssl` feature statically links OpenSSL for portable
-(musl) builds. Release binaries are built with all features.
+(musl) builds. Release binaries are built with all three database backends and
+the `update` feature (the musl target also enables `vendored-openssl`).
