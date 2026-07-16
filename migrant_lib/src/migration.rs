@@ -8,8 +8,6 @@ use chrono::{DateTime, Utc};
 
 use crate::config::Config;
 use crate::connection::ConnConfig;
-use crate::errors::*;
-use crate::macros::bail;
 use crate::migratable::Migratable;
 use crate::migrator::Direction;
 use crate::DT_FORMAT;
@@ -70,12 +68,9 @@ fn file_opts_out_of_transaction(path: &Option<PathBuf>) -> bool {
 /// works for migrations discovered from disk by the `migrant` CLI.
 #[derive(Clone, Debug)]
 pub struct FileMigration {
-    /// Migration tag
-    pub tag: String,
-    /// Path to an `up` migration file
-    pub up: Option<PathBuf>,
-    /// Path to a `down` migration file
-    pub down: Option<PathBuf>,
+    pub(crate) tag: String,
+    pub(crate) up: Option<PathBuf>,
+    pub(crate) down: Option<PathBuf>,
     pub(crate) stamp: Option<DateTime<Utc>>,
     pub(crate) no_transaction: bool,
 }
@@ -101,45 +96,36 @@ impl FileMigration {
     /// in the relevant SQL file instead; a file directive takes precedence over
     /// this flag. When opted out, that direction's SQL and its bookkeeping row
     /// are no longer applied atomically.
-    pub fn no_transaction(&mut self) -> &mut Self {
+    pub fn no_transaction(mut self) -> Self {
         self.no_transaction = true;
         self
     }
 
-    fn check_path(path: &Path) -> Result<()> {
-        if !path.exists() {
-            bail!(MigrationNotFound, "Migration file not found: {:?}", path)
-        }
-        Ok(())
-    }
-
     /// Define the file to use for running `up` migrations.
     ///
-    /// *Note:* Files defined in this migration must be present at run-time.
-    /// File paths can be absolute or relative. Relative file paths are relative
-    /// to the directory from which the program is run.
-    pub fn up<T: AsRef<Path>>(&mut self, up_file: T) -> Result<&mut Self> {
-        let path = up_file.as_ref();
-        Self::check_path(path)?;
-        self.up = Some(path.to_owned());
-        Ok(self)
+    /// *Note:* Files defined in this migration must be present at run-time; a
+    /// missing file surfaces as an error when the migration is applied. File
+    /// paths can be absolute or relative. Relative file paths are relative to
+    /// the directory from which the program is run.
+    pub fn up<T: AsRef<Path>>(mut self, up_file: T) -> Self {
+        self.up = Some(up_file.as_ref().to_owned());
+        self
     }
 
     /// Define the file to use for running `down` migrations.
     ///
-    /// *Note:* Files defined in this migration must be present at run-time.
-    /// File paths can be absolute or relative. Relative file paths are relative
-    /// to the directory from which the program is run.
-    pub fn down<T: AsRef<Path>>(&mut self, down_file: T) -> Result<&mut Self> {
-        let path = down_file.as_ref();
-        Self::check_path(path)?;
-        self.down = Some(path.to_owned());
-        Ok(self)
+    /// *Note:* Files defined in this migration must be present at run-time; a
+    /// missing file surfaces as an error when the migration is applied. File
+    /// paths can be absolute or relative. Relative file paths are relative to
+    /// the directory from which the program is run.
+    pub fn down<T: AsRef<Path>>(mut self, down_file: T) -> Self {
+        self.down = Some(down_file.as_ref().to_owned());
+        self
     }
 
     /// Box this migration up so it can be stored with other migrations
-    pub fn boxed(&self) -> Box<dyn Migratable> {
-        Box::new(self.clone())
+    pub fn boxed(self) -> Box<dyn Migratable> {
+        Box::new(self)
     }
 
     fn apply_file(
@@ -211,7 +197,7 @@ impl Migratable for FileMigration {
 /// [`no_transaction`](EmbeddedMigration::no_transaction) to opt out both
 /// directions. A directive in the SQL takes precedence over the builder flag.
 ///
-/// A database feature (`d-postgres` / `d-sqlite` / `d-mysql`) is required to
+/// A database feature (`postgres` / `sqlite` / `mysql`) is required to
 /// apply this type of migration.
 ///
 /// # Example
@@ -239,12 +225,9 @@ impl Migratable for FileMigration {
 /// ```
 #[derive(Clone, Debug)]
 pub struct EmbeddedMigration {
-    /// Migration tag
-    pub tag: String,
-    /// Statements to run for `up` migrations
-    pub up: Option<Cow<'static, str>>,
-    /// Statements to run for `down` migrations
-    pub down: Option<Cow<'static, str>>,
+    pub(crate) tag: String,
+    pub(crate) up: Option<Cow<'static, str>>,
+    pub(crate) down: Option<Cow<'static, str>>,
     pub(crate) no_transaction: bool,
 }
 
@@ -268,26 +251,26 @@ impl EmbeddedMigration {
     /// in the relevant direction's SQL instead; a directive in the SQL takes
     /// precedence over this flag. When opted out, that direction's SQL and its
     /// bookkeeping row are no longer applied atomically.
-    pub fn no_transaction(&mut self) -> &mut Self {
+    pub fn no_transaction(mut self) -> Self {
         self.no_transaction = true;
         self
     }
 
     /// `&'static str` or `String` of statements to use for `up` migrations
-    pub fn up<T: Into<Cow<'static, str>>>(&mut self, stmt: T) -> &mut Self {
+    pub fn up<T: Into<Cow<'static, str>>>(mut self, stmt: T) -> Self {
         self.up = Some(stmt.into());
         self
     }
 
     /// `&'static str` or `String` of statements to use for `down` migrations
-    pub fn down<T: Into<Cow<'static, str>>>(&mut self, stmt: T) -> &mut Self {
+    pub fn down<T: Into<Cow<'static, str>>>(mut self, stmt: T) -> Self {
         self.down = Some(stmt.into());
         self
     }
 
     /// Box this migration up so it can be stored with other migrations
-    pub fn boxed(&self) -> Box<dyn Migratable> {
-        Box::new(self.clone())
+    pub fn boxed(self) -> Box<dyn Migratable> {
+        Box::new(self)
     }
 }
 
@@ -366,12 +349,9 @@ pub fn noop(_: ConnConfig) -> std::result::Result<(), Box<dyn std::error::Error>
 /// ```
 #[derive(Clone, Debug)]
 pub struct FnMigration<T, U> {
-    /// Migration tag
-    pub tag: String,
-    /// Function to run for `up` migrations
-    pub up: Option<T>,
-    /// Function to run for `down` migrations
-    pub down: Option<U>,
+    pub(crate) tag: String,
+    pub(crate) up: Option<T>,
+    pub(crate) down: Option<U>,
 }
 
 impl<T, U> FnMigration<T, U>
@@ -391,7 +371,7 @@ where
     /// Function to use for `up` migrations
     ///
     /// Function must have the signature `fn(ConnConfig) -> Result<(), Box<dyn std::error::Error>>`.
-    pub fn up(&mut self, f_up: T) -> &mut Self {
+    pub fn up(mut self, f_up: T) -> Self {
         self.up = Some(f_up);
         self
     }
@@ -399,14 +379,14 @@ where
     /// Function to use for `down` migrations
     ///
     /// Function must have the signature `fn(ConnConfig) -> Result<(), Box<dyn std::error::Error>>`.
-    pub fn down(&mut self, f_down: U) -> &mut Self {
+    pub fn down(mut self, f_down: U) -> Self {
         self.down = Some(f_down);
         self
     }
 
     /// Box this migration up so it can be stored with other migrations
-    pub fn boxed(&self) -> Box<dyn Migratable> {
-        Box::new(self.clone())
+    pub fn boxed(self) -> Box<dyn Migratable> {
+        Box::new(self)
     }
 }
 
@@ -487,15 +467,17 @@ mod tests {
     fn embedded_use_transaction_is_per_direction_and_directive_wins() {
         // `up` opts out via directive, `down` does not: transactionality differs
         // by direction, and the directive overrides the (unset) builder flag.
-        let mut m = EmbeddedMigration::with_tag("m");
-        m.up("-- migrant:no-transaction\nalter type mood add value 'x';")
+        let m = EmbeddedMigration::with_tag("m")
+            .up("-- migrant:no-transaction\nalter type mood add value 'x';")
             .down("drop type mood;");
         assert!(!m.use_transaction(Direction::Up));
         assert!(m.use_transaction(Direction::Down));
 
         // builder-level opt-out applies to any direction without a directive
-        let mut m2 = EmbeddedMigration::with_tag("m2");
-        m2.up("select 1;").down("select 1;").no_transaction();
+        let m2 = EmbeddedMigration::with_tag("m2")
+            .up("select 1;")
+            .down("select 1;")
+            .no_transaction();
         assert!(!m2.use_transaction(Direction::Up));
         assert!(!m2.use_transaction(Direction::Down));
     }

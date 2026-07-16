@@ -2,11 +2,11 @@
 
 `migrant_lib` embeds migration management in your own program. The CLI is a thin
 wrapper around it, so anything the CLI does can be done from Rust. Enable a
-backend feature (`d-sqlite`, `d-postgres`, `d-mysql`, or `d-all`):
+backend feature (`sqlite`, `postgres`, `mysql`, or `all`):
 
 ```toml
 [dependencies]
-migrant_lib = { version = "0.35", features = ["d-postgres"] }
+migrant_lib = { version = "1.0.0-rc.1", features = ["postgres"] }
 ```
 
 ## The pieces
@@ -27,7 +27,7 @@ let settings = Settings::configure_sqlite()
     .database_path("/abs/path/to/db.db")?
     .build()?;
 
-let mut config = Config::with_settings(&settings);
+let mut config = Config::with_settings(settings);
 config.setup()?; // create the __migrant_migrations table
 
 config.use_migrations(&[
@@ -38,10 +38,12 @@ config.use_migrations(&[
 ])?;
 
 // Apply everything. The migrator re-reads applied state from the database
-// itself, so no manual reload is needed before applying.
-Migrator::with_config(&config)
+// itself, so no manual reload is needed before applying. `apply` returns a
+// `Report` of the tags it applied; an empty report means nothing was pending.
+let report = Migrator::with_config(&config)
     .all(true)
     .apply()?;
+println!("applied {} migration(s)", report.len());
 # Ok(())
 # }
 ```

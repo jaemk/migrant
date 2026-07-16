@@ -153,6 +153,20 @@ pub fn migration_statuses(config: &Config) -> Result<Vec<MigrationStatus>> {
         .collect())
 }
 
+/// Preview the managed migrations that have not yet been applied, in the order
+/// they would be applied (definition order for explicit migrations, timestamp
+/// order for file migrations).
+///
+/// This does not apply anything. Make sure the `Config` has been `reload`ed so
+/// its set of applied migrations is current.
+pub fn pending_migrations(config: &Config) -> Result<Vec<String>> {
+    Ok(migration_statuses(config)?
+        .into_iter()
+        .filter(|status| !status.applied)
+        .map(|status| status.tag)
+        .collect())
+}
+
 /// List the currently applied and available migrations under `migration_location`
 pub fn list(config: &Config) -> Result<()> {
     let statuses = migration_statuses(config)?;
@@ -482,7 +496,7 @@ mod tests {
             .database_port(5432)
             .build()
             .unwrap();
-        Config::with_settings(&settings)
+        Config::with_settings(settings)
     }
 
     fn mysql_config() -> Config {
@@ -494,7 +508,7 @@ mod tests {
             .database_port(3306)
             .build()
             .unwrap();
-        Config::with_settings(&settings)
+        Config::with_settings(settings)
     }
 
     fn assert_no_password_in_args(args: &[String]) {
@@ -581,7 +595,7 @@ mod tests {
             .unwrap()
             .build()
             .unwrap();
-        let config = Config::with_settings(&settings);
+        let config = Config::with_settings(settings);
         let spec = build_shell_command(&config, false).unwrap();
         assert_eq!(spec.program, "sqlite3");
         assert_eq!(spec.args, vec!["/tmp/some.db"]);
@@ -594,7 +608,7 @@ mod tests {
             .memory()
             .build()
             .unwrap();
-        let config = Config::with_settings(&settings);
+        let config = Config::with_settings(settings);
         let res = build_shell_command(&config, true);
         assert!(
             res.is_err(),

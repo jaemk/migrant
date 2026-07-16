@@ -1,15 +1,38 @@
 # Changelog
 
-## [Unreleased]
+## [1.0.0-rc.1]
+Breaking pre-1.0 release. See the "Changed"/"Removed" sections for migration notes.
+
 ### Added
 - `ForceMode` (`Off`/`AcceptFailures`/`SkipFailures`) controls how a run handles a failed
   migration: `AcceptFailures` records it as applied anyway, `SkipFailures` continues without
   recording so the next run retries it. Parses from `off`/`accept-failures`/`skip-failures`
+- `Report`, returned by `Migrator::apply`, listing the migration tags a run applied (`Up`)
+  or reverted (`Down`); an empty report means nothing needed to run
+- `pending_migrations` previews the managed migrations not yet applied, without running them
+- `Error` predicate methods (`is_config`, `is_migration`, `is_migration_not_found`,
+  `is_shell_command`, `is_tag_error`, `is_invalid_db_kind`, `is_feature_required`)
+- `noop` (for `FnMigration`) is re-exported at the crate root
 - `env:VAR` resolution now also covers `ssl_cert_file` and `database_params` keys
 - `database_port` in `Migrant.toml` accepts a TOML integer or a string
 - `shell` falls back to the classic `mysql` client when `mysqlsh` is not on `PATH`
 
 ### Changed
+- Cargo features renamed: `d-sqlite`/`d-postgres`/`d-mysql`/`d-all` are now
+  `sqlite`/`postgres`/`mysql`/`all`. The `d-*` names remain as deprecated aliases and will
+  be removed in a future release
+- `Migrator::apply` returns `Result<Report>` instead of `Result<()>`. An already-up-to-date
+  run returns an empty `Report` rather than an error
+- Migration builders (`FileMigration`/`EmbeddedMigration`/`FnMigration`) are now owned
+  chains: `with_tag`/`up`/`down`/`no_transaction` take and return `self`, and `boxed(self)`
+  consumes. Their fields are no longer public
+- `FileMigration::up`/`down` are infallible and no longer probe for the file up front; a
+  missing file surfaces when the migration is applied
+- `Config::with_settings` takes `Settings` by value
+- `Config::use_cli_compatible_tags` returns `&mut Self` so it can be chained before
+  `use_migrations`/`reload`
+- Interactive `shell`/`edit` moved from the crate root to the `cli` module
+  (`migrant_lib::cli::{shell, edit}`)
 - `Migrator::force` takes a `ForceMode` instead of a `bool`
 - `Migrator::apply` re-reads applied state from the database itself (all backends), so a
   manual `Config::reload` before applying is no longer needed. The re-read stays on the
@@ -18,6 +41,8 @@
   mid-run, instead of continuing without the advisory lock
 
 ### Removed
+- `Migrator::swallow_completion` and the `Error::MigrationComplete` variant. An empty
+  `Report` now signals that a run had nothing to apply
 
 ## [0.35.0]
 ### Added

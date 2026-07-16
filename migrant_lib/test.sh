@@ -45,7 +45,7 @@ set -x
 cargo test
 POSTGRES_TEST_CONN_STR="postgres://migrant:pass@localhost:$PG_PORT/migrant_test" \
 MYSQL_TEST_CONN_STR="mysql://migrant:pass@localhost:$MYSQL_PORT/migrant_test" \
-    cargo test --features d-all -- --nocapture
+    cargo test --features all -- --nocapture
 set +x
 
 echo ""

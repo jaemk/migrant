@@ -11,18 +11,18 @@ NOTE: The feature-gates are only required here so the example will compile when 
       tests with and without features. In regular usage, the `cfg`s are not required since
       the specified database feature should be enabled in your `Cargo.toml` entry.
 
-This should be run with `cargo run --example embedded_programmable --features d-sqlite`
+This should be run with `cargo run --example embedded_programmable --features sqlite`
 
 */
-#[cfg(feature = "d-sqlite")]
+#[cfg(feature = "sqlite")]
 use migrant_lib::{
     Config, ConnConfig, Direction, EmbeddedMigration, FileMigration, FnMigration, Migrator,
     Settings,
 };
-#[cfg(feature = "d-sqlite")]
+#[cfg(feature = "sqlite")]
 use std::env;
 
-#[cfg(feature = "d-sqlite")]
+#[cfg(feature = "sqlite")]
 mod migrations {
     use super::*;
     use migrant_lib::rusqlite;
@@ -57,13 +57,13 @@ mod migrations {
     }
 }
 
-#[cfg(feature = "d-sqlite")]
+#[cfg(feature = "sqlite")]
 fn run() -> Result<(), Box<dyn std::error::Error>> {
     let path = env::current_dir()?;
     let path = path.join("db/embedded_example.db");
     let settings = Settings::configure_sqlite().database_path(&path)?.build()?;
 
-    let mut config = Config::with_settings(&settings);
+    let mut config = Config::with_settings(settings);
     config.setup()?;
 
     // Define migrations
@@ -81,8 +81,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             .down(migrations::AddUserData::down)
             .boxed(),
         FileMigration::with_tag("create-places-table")
-            .up("migrations/embedded/create_places_table/up.sql")?
-            .down("migrations/embedded/create_places_table/down.sql")?
+            .up("migrations/embedded/create_places_table/up.sql")
+            .down("migrations/embedded/create_places_table/down.sql")
             .boxed(),
         EmbeddedMigration::with_tag("alter-places-table-add-address")
             .up(String::from("alter table places add column address text;"))
@@ -102,7 +102,6 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     Migrator::with_config(&config)
         .all(true)
         .show_output(false)
-        .swallow_completion(true)
         .apply()?;
 
     let config = config.reload()?;
@@ -112,7 +111,6 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     Migrator::with_config(&config)
         .all(true)
         .direction(Direction::Down)
-        .swallow_completion(true)
         .apply()?;
 
     let config = config.reload()?;
@@ -120,9 +118,9 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-#[cfg(not(feature = "d-sqlite"))]
+#[cfg(not(feature = "sqlite"))]
 fn run() -> Result<(), Box<dyn std::error::Error>> {
-    Err("d-sqlite database feature required")?;
+    Err("sqlite database feature required")?;
     Ok(())
 }
 

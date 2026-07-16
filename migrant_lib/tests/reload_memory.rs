@@ -5,7 +5,7 @@
 //! produced a fresh, unconnected config and silently discarded the live
 //! in-memory database. The applied migrations (and any data) must survive a
 //! reload when the settings on disk are unchanged.
-#![cfg(feature = "d-sqlite")]
+#![cfg(feature = "sqlite")]
 
 use std::io::Write;
 
@@ -59,7 +59,6 @@ fn reload_preserves_in_memory_database() {
     Migrator::with_config(&config)
         .all(true)
         .show_output(false)
-        .swallow_completion(true)
         .apply()
         .unwrap();
 

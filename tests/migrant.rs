@@ -22,13 +22,14 @@ fn kitchen_sink() {
     migrant().arg("setup").assert().success();
     let _ = migrant().args(["apply", "-ad"]).assert();
 
+    // A down run with nothing left to un-apply is not an error; it succeeds and
+    // reports the (all-unapplied) status.
     migrant()
         .args(["apply", "-ad"])
         .assert()
-        .failure()
-        .stderr(contains(
-            "MigrationComplete: No un-applied `Down` migrations found",
-        ));
+        .success()
+        .stdout(contains("[ ] 20170812145327_initial"))
+        .stdout(contains("[ ] 20171126194042_second"));
 
     migrant()
         .arg("list")

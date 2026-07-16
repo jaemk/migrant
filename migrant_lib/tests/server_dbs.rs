@@ -3,7 +3,7 @@
 //! These are skipped unless the corresponding connection string is provided:
 //! `POSTGRES_TEST_CONN_STR` (e.g. `postgres://user:pass@localhost:5432/db`)
 //! and `MYSQL_TEST_CONN_STR` (e.g. `mysql://user:pass@localhost:3306/db`).
-#![cfg(any(feature = "d-postgres", feature = "d-mysql"))]
+#![cfg(any(feature = "postgres", feature = "mysql"))]
 
 use migrant_lib::{Config, Direction, EmbeddedMigration, ForceMode, Migrator, Settings};
 
@@ -27,7 +27,7 @@ fn parse_conn_str(conn_str: &str, default_port: u16) -> ConnParts {
 }
 
 fn apply_and_unapply(settings: &Settings) {
-    let mut config = Config::with_settings(settings);
+    let mut config = Config::with_settings(settings.clone());
     config.setup().unwrap();
     config
         .use_migrations(&[
@@ -48,7 +48,6 @@ fn apply_and_unapply(settings: &Settings) {
         .direction(Direction::Down)
         .all(true)
         .show_output(false)
-        .swallow_completion(true)
         .apply()
         .unwrap();
 
@@ -77,7 +76,7 @@ fn apply_and_unapply(settings: &Settings) {
 }
 
 /// Drop the migration table so the next run starts from a clean database.
-#[cfg(feature = "d-postgres")]
+#[cfg(feature = "postgres")]
 fn drop_pg_migration_table(conn_str: &str) {
     let mut client = postgres::Client::connect(conn_str, postgres::NoTls)
         .expect("connect to drop postgres migration table");
@@ -87,7 +86,7 @@ fn drop_pg_migration_table(conn_str: &str) {
 }
 
 /// Drop the migration table so the next run starts from a clean database.
-#[cfg(feature = "d-mysql")]
+#[cfg(feature = "mysql")]
 fn drop_mysql_migration_table(conn_str: &str) {
     use mysql::prelude::Queryable;
     let opts = mysql::Opts::from_url(conn_str).expect("parse mysql connection string");
@@ -96,7 +95,7 @@ fn drop_mysql_migration_table(conn_str: &str) {
         .expect("drop mysql migration table");
 }
 
-#[cfg(feature = "d-postgres")]
+#[cfg(feature = "postgres")]
 #[test]
 fn postgres_end_to_end() {
     let conn_str = match std::env::var("POSTGRES_TEST_CONN_STR") {
@@ -134,7 +133,7 @@ fn postgres_end_to_end() {
 /// it completes even while another session holds that lock. Shares the
 /// postgres database with `postgres_end_to_end`, so it runs as one of its
 /// phases.
-#[cfg(feature = "d-postgres")]
+#[cfg(feature = "postgres")]
 fn assert_unsynchronized_run_skips_lock(conn_str: &str, settings: &Settings) {
     // Must match `ADVISORY_LOCK_KEY` in `src/drivers/pg.rs`.
     const ADVISORY_LOCK_KEY: i64 = 30_796_665_483_397_364;
@@ -152,7 +151,7 @@ fn assert_unsynchronized_run_skips_lock(conn_str: &str, settings: &Settings) {
     let settings = settings.clone();
     std::thread::spawn(move || {
         let run = || -> Result<(), migrant_lib::Error> {
-            let mut config = Config::with_settings(&settings);
+            let mut config = Config::with_settings(settings);
             config.use_migrations(&[EmbeddedMigration::with_tag("unsync")
                 .up("select 1;")
                 .down("select 1;")
@@ -161,7 +160,8 @@ fn assert_unsynchronized_run_skips_lock(conn_str: &str, settings: &Settings) {
             Migrator::with_config(&config)
                 .synchronized(false)
                 .show_output(false)
-                .apply()
+                .apply()?;
+            Ok(())
         };
         tx.send(run()).expect("send unsynchronized run result");
     });
@@ -181,12 +181,12 @@ fn assert_unsynchronized_run_skips_lock(conn_str: &str, settings: &Settings) {
 /// Not a standalone `#[test]`: it shares the one postgres database (and the
 /// single `__migrant_migrations` table) with `postgres_end_to_end`, so it runs
 /// as a phase of that test rather than racing it under cargo's parallel runner.
-#[cfg(feature = "d-postgres")]
+#[cfg(feature = "postgres")]
 fn assert_failed_migration_rolls_back(conn_str: &str, settings: &Settings) {
     let mut client = postgres::Client::connect(conn_str, postgres::NoTls).unwrap();
     client.batch_execute("drop table if exists good;").unwrap();
 
-    let mut config = Config::with_settings(settings);
+    let mut config = Config::with_settings(settings.clone());
     config
         .use_migrations(&[EmbeddedMigration::with_tag("bad")
             .up("create table good (x integer); insert into does_not_exist values (1);")
@@ -222,12 +222,12 @@ fn assert_failed_migration_rolls_back(conn_str: &str, settings: &Settings) {
 /// same locked session (the connection is recovered in place on the error, so
 /// the advisory lock is never released mid-run). Shares the postgres database
 /// with `postgres_end_to_end`, so it runs as one of its phases.
-#[cfg(feature = "d-postgres")]
+#[cfg(feature = "postgres")]
 fn assert_force_continues_holding_lock(conn_str: &str, settings: &Settings) {
     let mut client = postgres::Client::connect(conn_str, postgres::NoTls).unwrap();
     client.batch_execute("drop table if exists later;").unwrap();
 
-    let mut config = Config::with_settings(settings);
+    let mut config = Config::with_settings(settings.clone());
     config
         .use_migrations(&[
             EmbeddedMigration::with_tag("bad")
@@ -249,7 +249,6 @@ fn assert_force_continues_holding_lock(conn_str: &str, settings: &Settings) {
         .all(true)
         .force(ForceMode::AcceptFailures)
         .show_output(false)
-        .swallow_completion(true)
         .apply()
         .unwrap();
 
@@ -275,7 +274,7 @@ fn assert_force_continues_holding_lock(conn_str: &str, settings: &Settings) {
     client.batch_execute("drop table if exists later;").unwrap();
 }
 
-#[cfg(feature = "d-mysql")]
+#[cfg(feature = "mysql")]
 #[test]
 fn mysql_end_to_end() {
     let conn_str = match std::env::var("MYSQL_TEST_CONN_STR") {

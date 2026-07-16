@@ -1,15 +1,20 @@
 # Migrator API
 
-Migrator builder: direction, all, force, fake, show_output, swallow_completion, apply.
+Migrator builder: direction, all, force, fake, show_output, synchronized, apply.
 
 ## MIGRATOR-1
 
 `Migrator::with_config(&config)` creates a migrator; `apply()` executes pending
-migrations against the live connection. A run re-reads applied state from the
-database itself (for every backend), so consumers do not need to call
-`Config::reload` before applying. The re-read never re-reads the settings file
-or swaps the live connection: the whole run stays on the connection it started
-(and, when synchronized, took the advisory lock) on.
+migrations against the live connection and returns a `Report`. A run re-reads
+applied state from the database itself (for every backend), so consumers do not
+need to call `Config::reload` before applying. The re-read never re-reads the
+settings file or swaps the live connection: the whole run stays on the
+connection it started (and, when synchronized, took the advisory lock) on.
+
+`apply()` returns `Result<Report>`. `Report::tags()` lists the migration tags
+whose bookkeeping the run changed, in order (applied for `Up`, reverted for
+`Down`); `Report::is_empty()`/`len()` report the count. A run with nothing to
+apply returns an empty `Report`, not an error.
 
 ## MIGRATOR-2
 
@@ -34,8 +39,9 @@ migration SQL.
 
 ## MIGRATOR-4
 
-`show_output(bool)` toggles progress output; `swallow_completion(bool)` converts the
-`MigrationComplete` error into `Ok` so "nothing to apply" is not an error.
+`show_output(bool)` toggles progress output. There is no separate "nothing to
+apply" error to suppress: a run with no pending migrations returns an empty
+`Report` (see MIGRATOR-1).
 
 ## MIGRATOR-5
 
