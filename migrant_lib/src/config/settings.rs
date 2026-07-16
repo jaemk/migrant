@@ -37,6 +37,38 @@ fn resolve_env_opt(value: &Option<String>) -> Result<Option<String>> {
     value.as_deref().map(resolve_env).transpose()
 }
 
+fn resolve_env_path_opt(value: &Option<PathBuf>) -> Result<Option<PathBuf>> {
+    value
+        .as_deref()
+        .map(|path| {
+            let s = path
+                .to_str()
+                .ok_or_else(|| err!(Config, "Invalid utf8 path in settings: {:?}", path))?;
+            Ok(PathBuf::from(resolve_env(s)?))
+        })
+        .transpose()
+}
+
+/// Deserialize an optional port from either a TOML integer or a string,
+/// so both `database_port = 5432` and `database_port = "5432"` work.
+fn de_port_opt<'de, D>(deserializer: D) -> std::result::Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Port {
+        Int(u64),
+        Str(String),
+    }
+    Ok(
+        Option::<Port>::deserialize(deserializer)?.map(|port| match port {
+            Port::Int(n) => n.to_string(),
+            Port::Str(s) => s,
+        }),
+    )
+}
+
 /// Sqlite connection settings
 #[derive(Deserialize, Debug, Clone, PartialEq)]
 pub(crate) struct SqliteSettings {
@@ -64,6 +96,7 @@ pub(crate) struct ServerSettings {
     pub(crate) database_user: String,
     pub(crate) database_password: String,
     pub(crate) database_host: Option<String>,
+    #[serde(default, deserialize_with = "de_port_opt")]
     pub(crate) database_port: Option<String>,
     pub(crate) database_params: Option<BTreeMap<String, String>>,
     pub(crate) ssl_cert_file: Option<PathBuf>,
@@ -71,16 +104,26 @@ pub(crate) struct ServerSettings {
 }
 
 impl ServerSettings {
+    /// The configured host, or `localhost` when unset/empty
+    pub(crate) fn host_or_default(&self) -> String {
+        match self.database_host.as_deref() {
+            Some(host) if !host.is_empty() => host.to_string(),
+            _ => "localhost".to_string(),
+        }
+    }
+
+    /// The configured port, or the given backend default when unset/empty
+    pub(crate) fn port_or_default(&self, default_port: &str) -> String {
+        match self.database_port.as_deref() {
+            Some(port) if !port.is_empty() => port.to_string(),
+            _ => default_port.to_string(),
+        }
+    }
+
     /// Build a `<scheme>://user:pass@host:port/db_name?params` url
     pub(crate) fn connect_string(&self, scheme: &str, default_port: &str) -> Result<String> {
-        let non_empty_or = |val: &Option<String>, default: &str| -> String {
-            match val.as_deref() {
-                Some(v) if !v.is_empty() => v.to_string(),
-                _ => default.to_string(),
-            }
-        };
-        let host = encode(&non_empty_or(&self.database_host, "localhost"));
-        let port = encode(&non_empty_or(&self.database_port, default_port));
+        let host = encode(&self.host_or_default());
+        let port = encode(&self.port_or_default(default_port));
 
         let s = format!(
             "{scheme}://{user}:{pass}@{host}:{port}/{db_name}",
@@ -110,7 +153,7 @@ impl ServerSettings {
             Some(params) => {
                 let mut resolved = BTreeMap::new();
                 for (k, v) in params {
-                    resolved.insert(k.clone(), resolve_env(v)?);
+                    resolved.insert(resolve_env(k)?, resolve_env(v)?);
                 }
                 Some(resolved)
             }
@@ -123,7 +166,7 @@ impl ServerSettings {
             database_host: resolve_env_opt(&self.database_host)?,
             database_port: resolve_env_opt(&self.database_port)?,
             database_params,
-            ssl_cert_file: self.ssl_cert_file.clone(),
+            ssl_cert_file: resolve_env_path_opt(&self.ssl_cert_file)?,
             migration_location: resolve_env_opt(&self.migration_location)?,
         })
     }
@@ -292,6 +335,49 @@ mod tests {
             url,
             "postgres://user%20name:p%40ss%3Aword@my%20host:5432/mydb"
         );
+    }
+
+    #[test]
+    fn database_port_deserializes_from_integer_or_string() {
+        // The book's example config uses a bare TOML integer; both forms must work.
+        #[derive(Deserialize)]
+        struct Probe {
+            #[serde(default, deserialize_with = "de_port_opt")]
+            database_port: Option<String>,
+        }
+        let int_form: Probe = toml::from_str("database_port = 5432").unwrap();
+        assert_eq!(int_form.database_port.as_deref(), Some("5432"));
+        let str_form: Probe = toml::from_str("database_port = \"5432\"").unwrap();
+        assert_eq!(str_form.database_port.as_deref(), Some("5432"));
+        let absent: Probe = toml::from_str("").unwrap();
+        assert_eq!(absent.database_port, None);
+    }
+
+    #[test]
+    fn resolve_env_vars_covers_ssl_cert_file_and_param_keys() {
+        let cert_var = "MIGRANT_TEST_SSL_CERT_FILE_5D2B91";
+        let key_var = "MIGRANT_TEST_PARAM_KEY_5D2B91";
+        env::set_var(cert_var, "/certs/db.pem");
+        env::set_var(key_var, "sslmode");
+
+        let mut settings = server_settings();
+        settings.ssl_cert_file = Some(PathBuf::from(format!("env:{}", cert_var)));
+        let mut params = BTreeMap::new();
+        params.insert(format!("env:{}", key_var), "require".to_string());
+        settings.database_params = Some(params);
+
+        let resolved = settings.resolve_env_vars().unwrap();
+        assert_eq!(
+            resolved.ssl_cert_file.as_deref(),
+            Some(Path::new("/certs/db.pem"))
+        );
+        assert_eq!(
+            resolved.database_params.unwrap().get("sslmode"),
+            Some(&"require".to_string())
+        );
+
+        env::remove_var(cert_var);
+        env::remove_var(key_var);
     }
 
     #[test]

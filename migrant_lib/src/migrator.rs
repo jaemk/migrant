@@ -1,6 +1,7 @@
 /*!
 Migration application
 */
+use std::collections::HashSet;
 use std::fmt;
 
 use crate::config::Config;
@@ -31,12 +32,52 @@ impl fmt::Display for Direction {
     }
 }
 
+/// How a run handles a migration that fails to apply.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ForceMode {
+    /// A failed migration aborts the run with an error (default).
+    #[default]
+    Off,
+    /// Continue past a failed migration and record it as applied anyway.
+    /// The failed migration will *not* be retried on the next run.
+    AcceptFailures,
+    /// Continue past a failed migration without recording it. The migration
+    /// is skipped for the remainder of this run and retried on the next run.
+    SkipFailures,
+}
+
+impl fmt::Display for ForceMode {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            ForceMode::Off => write!(f, "off"),
+            ForceMode::AcceptFailures => write!(f, "accept-failures"),
+            ForceMode::SkipFailures => write!(f, "skip-failures"),
+        }
+    }
+}
+
+impl std::str::FromStr for ForceMode {
+    type Err = Error;
+    fn from_str(s: &str) -> Result<Self> {
+        Ok(match s {
+            "off" => ForceMode::Off,
+            "accept-failures" => ForceMode::AcceptFailures,
+            "skip-failures" => ForceMode::SkipFailures,
+            _ => bail!(
+                Migration,
+                "Invalid force mode: `{}`. Expected one of: off, accept-failures, skip-failures",
+                s
+            ),
+        })
+    }
+}
+
 /// Migration applicator
 #[derive(Debug, Clone)]
 pub struct Migrator {
     config: Config,
     direction: Direction,
-    force: bool,
+    force: ForceMode,
     fake: bool,
     all: bool,
     show_output: bool,
@@ -50,7 +91,7 @@ impl Migrator {
         Self {
             config: config.clone(),
             direction: Direction::Up,
-            force: false,
+            force: ForceMode::Off,
             fake: false,
             all: false,
             show_output: true,
@@ -67,8 +108,15 @@ impl Migrator {
         self
     }
 
-    /// Set `force` to forcefully apply migrations regardless of errors
-    pub fn force(&mut self, force: bool) -> &mut Self {
+    /// Set how the run handles a migration that fails to apply.
+    /// Default is `ForceMode::Off`: a failed migration aborts the run.
+    ///
+    /// `ForceMode::AcceptFailures` continues past a failed migration and
+    /// records it as applied anyway, so it will *not* be retried on the next
+    /// run. `ForceMode::SkipFailures` continues without recording it: the
+    /// migration is skipped for the remainder of this run and retried on the
+    /// next run, so it must be safe to re-attempt after a partial application.
+    pub fn force(&mut self, force: ForceMode) -> &mut Self {
         self.force = force;
         self
     }
@@ -139,24 +187,37 @@ impl Migrator {
 
         // For server databases, take the migration advisory lock so concurrent
         // migrators (e.g. several app instances booting at once) serialize
-        // instead of racing. Acquire it *before* re-reading applied state, then
-        // reload under the lock so we observe any migrations a peer committed
-        // while we were waiting and don't re-run them. Sqlite has no such lock
-        // (and no cross-process concurrency), so its path is unchanged.
-        let _lock = if self.synchronized && config.database_type() != DbKind::Sqlite {
+        // instead of racing. Acquire it *before* re-reading applied state so we
+        // observe any migrations a peer committed while we were waiting and
+        // don't re-run them. Sqlite has no such lock (and no cross-process
+        // concurrency), so it skips the lock.
+        let lock = if self.synchronized && config.database_type() != DbKind::Sqlite {
             config.acquire_migration_lock()?;
-            // Guard is created before `reload` so the lock is released even if
-            // the reload fails; the reloaded config shares this connection.
-            let guard = MigrationLock::new(&config);
-            config = config.reload()?;
-            Some(guard)
+            Some(MigrationLock::new(&config))
         } else {
             None
         };
+        // Generation of the connection the lock was taken on. If that
+        // connection is ever dropped and re-established mid-run, the session
+        // -- and the advisory lock with it -- is gone, so a synchronized run
+        // must abort rather than continue unserialized.
+        let lock_generation = lock.as_ref().map(|_| config.connection_generation());
 
+        // Re-read applied state from the database on the (locked) connection.
+        // This intentionally does not use `Config::reload`, which re-reads the
+        // settings file and can swap in a *new* connection if the settings
+        // changed -- the whole run must stay on the connection the lock was
+        // acquired on. It also means consumers don't need to remember to call
+        // `Config::reload` themselves before applying.
+        config.refresh_applied()?;
+
+        // Tags that failed under `ForceMode::SkipFailures`, excluded from
+        // migration selection for the remainder of this run.
+        let mut skipped = HashSet::new();
         let mut applied_any = false;
         loop {
-            match self.apply_next(&config) {
+            self.check_lock_still_held(&config, lock_generation)?;
+            match self.apply_next(&config, &mut skipped, lock_generation) {
                 Ok(()) => {}
                 Err(e) if e.is_migration_complete() && self.all && applied_any => return Ok(()),
                 Err(e) => return Err(e),
@@ -165,8 +226,25 @@ impl Migrator {
             if !self.all {
                 return Ok(());
             }
-            config = config.reload()?;
+            config.refresh_applied()?;
         }
+    }
+
+    /// Bail out of a synchronized run if the connection the advisory lock was
+    /// acquired on has been dropped and re-established: the lock died with the
+    /// original session, so continuing would run unserialized.
+    fn check_lock_still_held(&self, config: &Config, lock_generation: Option<u64>) -> Result<()> {
+        if let Some(generation) = lock_generation {
+            if config.connection_generation() != generation {
+                bail!(
+                    Migration,
+                    "The database connection was lost mid-run and re-established; \
+                     the migration advisory lock was released with the original \
+                     session. Aborting this run -- re-run migrations."
+                )
+            }
+        }
+        Ok(())
     }
 
     /// The set of migrations being managed: either those explicitly defined
@@ -184,16 +262,18 @@ impl Migrator {
         })
     }
 
-    /// Return the next available up or down migration
+    /// Return the next available up or down migration, excluding any tags
+    /// skipped earlier in this run (`ForceMode::SkipFailures`)
     fn next_available<'a>(
         direction: Direction,
         available: &'a [Box<dyn Migratable>],
         applied: &[String],
+        skipped: &HashSet<String>,
     ) -> Result<Option<&'a dyn Migratable>> {
         Ok(match direction {
             Direction::Up => available
                 .iter()
-                .find(|m| !applied.contains(&m.tag()))
+                .find(|m| !applied.contains(&m.tag()) && !skipped.contains(&m.tag()))
                 .map(AsRef::as_ref),
             Direction::Down => {
                 if applied.is_empty() {
@@ -205,31 +285,39 @@ impl Migrator {
                     // unordered `select tag from __migrant_migrations` unless
                     // running in cli-compatible mode), so we must not rely on
                     // `applied.last()`.
-                    match available.iter().rev().find(|m| applied.contains(&m.tag())) {
-                        Some(mig) => Some(mig.as_ref()),
-                        None => bail!(
+                    if !available.iter().any(|m| applied.contains(&m.tag())) {
+                        bail!(
                             MigrationNotFound,
                             "Applied migration not found in available migrations: {}",
                             applied[0]
-                        ),
+                        )
                     }
+                    available
+                        .iter()
+                        .rev()
+                        .find(|m| applied.contains(&m.tag()) && !skipped.contains(&m.tag()))
+                        .map(AsRef::as_ref)
                 }
             }
         })
     }
 
     /// Try applying the next available migration in the specified `Direction`
-    fn apply_next(&self, config: &Config) -> Result<()> {
+    fn apply_next(
+        &self,
+        config: &Config,
+        skipped: &mut HashSet<String>,
+        lock_generation: Option<u64>,
+    ) -> Result<()> {
         let migrations = Self::available_migrations(config)?;
-        let next = Self::next_available(self.direction, &migrations, &config.applied)?.ok_or_else(
-            || {
+        let next = Self::next_available(self.direction, &migrations, &config.applied, skipped)?
+            .ok_or_else(|| {
                 err!(
                     MigrationComplete,
                     "No un-applied `{}` migrations found",
                     self.direction
                 )
-            },
-        )?;
+            })?;
 
         self.print(&format!(
             "Applying[{}]: {}",
@@ -268,16 +356,32 @@ impl Migrator {
                     config.rollback_transaction();
                 }
                 self.println("");
-                if self.force {
-                    self.println(&format!(
-                        " ** Error ** (Continuing because `--force` flag was specified)\n ** {}",
-                        msg
-                    ));
-                    // Legacy `force` behavior: record the tag anyway. The
-                    // transaction (if any) was rolled back, so this stands alone.
-                    self.record_tag(config, &tag)
-                } else {
-                    bail!(Migration, "Migration was unsucessful...\n{}", msg)
+                match self.force {
+                    ForceMode::Off => bail!(Migration, "Migration was unsuccessful...\n{}", msg),
+                    ForceMode::AcceptFailures => {
+                        self.println(&format!(
+                            " ** Error ** (Continuing and recording the migration \
+                             as applied because force is `accept-failures`)\n ** {}",
+                            msg
+                        ));
+                        // The failure may have killed the connection; recording
+                        // the tag would silently reconnect without the advisory
+                        // lock, so verify the locked session is still alive first.
+                        self.check_lock_still_held(config, lock_generation)?;
+                        // The transaction (if any) was rolled back, so this
+                        // bookkeeping row stands alone.
+                        self.record_tag(config, &tag)
+                    }
+                    ForceMode::SkipFailures => {
+                        self.println(&format!(
+                            " ** Error ** (Continuing without recording because force \
+                             is `skip-failures`; the migration will be retried on the \
+                             next run)\n ** {}",
+                            msg
+                        ));
+                        skipped.insert(tag);
+                        Ok(())
+                    }
                 }
             }
         }
@@ -359,11 +463,19 @@ mod tests {
         strs.iter().map(|s| (*s).to_owned()).collect()
     }
 
+    fn no_skips() -> HashSet<String> {
+        HashSet::new()
+    }
+
+    fn skips(strs: &[&str]) -> HashSet<String> {
+        strs.iter().map(|s| (*s).to_owned()).collect()
+    }
+
     #[test]
     fn up_picks_first_unapplied_in_definition_order() {
         let avail = available(&["a", "b", "c"]);
         let applied = tags(&["a"]);
-        let next = Migrator::next_available(Direction::Up, &avail, &applied)
+        let next = Migrator::next_available(Direction::Up, &avail, &applied, &no_skips())
             .unwrap()
             .expect("expected an un-applied migration");
         assert_eq!(next.tag(), "b");
@@ -373,7 +485,27 @@ mod tests {
     fn up_returns_none_when_all_applied() {
         let avail = available(&["a", "b"]);
         let applied = tags(&["a", "b"]);
-        let next = Migrator::next_available(Direction::Up, &avail, &applied).unwrap();
+        let next = Migrator::next_available(Direction::Up, &avail, &applied, &no_skips()).unwrap();
+        assert!(next.is_none());
+    }
+
+    #[test]
+    fn up_skips_run_skipped_tags() {
+        let avail = available(&["a", "b", "c"]);
+        let applied = tags(&["a"]);
+        // `b` failed under skip-failures earlier in the run: `c` is next.
+        let next = Migrator::next_available(Direction::Up, &avail, &applied, &skips(&["b"]))
+            .unwrap()
+            .expect("expected an un-applied migration");
+        assert_eq!(next.tag(), "c");
+    }
+
+    #[test]
+    fn up_with_all_remaining_skipped_returns_none() {
+        let avail = available(&["a", "b"]);
+        let applied = tags(&["a"]);
+        let next =
+            Migrator::next_available(Direction::Up, &avail, &applied, &skips(&["b"])).unwrap();
         assert!(next.is_none());
     }
 
@@ -384,17 +516,38 @@ mod tests {
         // migration `d`. The Down target must be `c` (the last applied tag in
         // definition order), not `applied.last()` which would be `a`.
         let applied = tags(&["b", "c", "a"]);
-        let next = Migrator::next_available(Direction::Down, &avail, &applied)
+        let next = Migrator::next_available(Direction::Down, &avail, &applied, &no_skips())
             .unwrap()
             .expect("expected a down migration");
         assert_eq!(next.tag(), "c");
     }
 
     #[test]
+    fn down_skips_run_skipped_tags() {
+        let avail = available(&["a", "b", "c"]);
+        let applied = tags(&["a", "b", "c"]);
+        // `c`'s down failed under skip-failures: `b` is next.
+        let next = Migrator::next_available(Direction::Down, &avail, &applied, &skips(&["c"]))
+            .unwrap()
+            .expect("expected a down migration");
+        assert_eq!(next.tag(), "b");
+    }
+
+    #[test]
+    fn down_with_all_applied_skipped_returns_none() {
+        let avail = available(&["a", "b"]);
+        let applied = tags(&["a", "b"]);
+        let next = Migrator::next_available(Direction::Down, &avail, &applied, &skips(&["a", "b"]))
+            .unwrap();
+        assert!(next.is_none());
+    }
+
+    #[test]
     fn down_with_empty_applied_returns_none() {
         let avail = available(&["a", "b"]);
         let applied: Vec<String> = Vec::new();
-        let next = Migrator::next_available(Direction::Down, &avail, &applied).unwrap();
+        let next =
+            Migrator::next_available(Direction::Down, &avail, &applied, &no_skips()).unwrap();
         assert!(next.is_none());
     }
 
@@ -402,7 +555,7 @@ mod tests {
     fn down_with_applied_tags_absent_from_available_errors() {
         let avail = available(&["a", "b"]);
         let applied = tags(&["x", "y"]);
-        match Migrator::next_available(Direction::Down, &avail, &applied) {
+        match Migrator::next_available(Direction::Down, &avail, &applied, &no_skips()) {
             Err(Error::MigrationNotFound(_)) => {}
             Err(other) => panic!("expected MigrationNotFound, got: {:?}", other),
             Ok(_) => panic!("expected MigrationNotFound error, got Ok"),

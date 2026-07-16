@@ -2,7 +2,21 @@
 
 ## [Unreleased]
 ### Added
+- `ForceMode` (`Off`/`AcceptFailures`/`SkipFailures`) controls how a run handles a failed
+  migration: `AcceptFailures` records it as applied anyway, `SkipFailures` continues without
+  recording so the next run retries it. Parses from `off`/`accept-failures`/`skip-failures`
+- `env:VAR` resolution now also covers `ssl_cert_file` and `database_params` keys
+- `database_port` in `Migrant.toml` accepts a TOML integer or a string
+- `shell` falls back to the classic `mysql` client when `mysqlsh` is not on `PATH`
+
 ### Changed
+- `Migrator::force` takes a `ForceMode` instead of a `bool`
+- `Migrator::apply` re-reads applied state from the database itself (all backends), so a
+  manual `Config::reload` before applying is no longer needed. The re-read stays on the
+  run's own connection and never re-reads the settings file
+- A synchronized run aborts with an error if its connection dies and is re-established
+  mid-run, instead of continuing without the advisory lock
+
 ### Removed
 
 ## [0.35.0]

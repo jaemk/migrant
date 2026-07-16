@@ -209,14 +209,14 @@ pub fn new(config: &Config, tag: &str) -> Result<()> {
 ///
 /// Note, the respective database shell utility is expected to be available in `$PATH`.
 ///
-/// | Database    |    Utility                  |
-/// |-------------|-----------------------------|
-/// | `postgres`  | `psql`                      |
-/// | `sqlite`    | `sqlite3`                   |
-/// | `mysql`     | `mysqlsh` (`mysql-shell`)   |
+/// | Database    |    Utility                                                 |
+/// |-------------|------------------------------------------------------------|
+/// | `postgres`  | `psql`                                                     |
+/// | `sqlite`    | `sqlite3`                                                  |
+/// | `mysql`     | `mysqlsh` (`mysql-shell`) if installed, otherwise `mysql`  |
 ///
 pub fn shell(config: &Config) -> Result<()> {
-    let spec = build_shell_command(config)?;
+    let spec = build_shell_command(config, program_on_path("mysqlsh"))?;
     let mut command = Command::new(&spec.program);
     command.args(&spec.args);
     for (key, value) in &spec.envs {
@@ -249,12 +249,23 @@ struct ShellCommandSpec {
     envs: Vec<(String, String)>,
 }
 
+/// Check whether an executable with the given name exists on `$PATH`.
+fn program_on_path(name: &str) -> bool {
+    let Some(path) = std::env::var_os("PATH") else {
+        return false;
+    };
+    std::env::split_paths(&path).any(|dir| dir.join(name).is_file())
+}
+
 /// Build the shell invocation for the given `Config` without spawning anything.
+///
+/// `mysqlsh_available` selects the mysql client: MySQL Shell (`mysqlsh`) when
+/// it is installed, otherwise the classic `mysql` client.
 ///
 /// This is factored out of `shell()` so the command construction (in
 /// particular, that the password is kept out of `argv`) is unit-testable
 /// without a live database or an installed shell utility.
-fn build_shell_command(config: &Config) -> Result<ShellCommandSpec> {
+fn build_shell_command(config: &Config, mysqlsh_available: bool) -> Result<ShellCommandSpec> {
     match config.database_type() {
         DbKind::Sqlite => {
             if config.settings.inner.is_memory_sqlite() {
@@ -281,12 +292,35 @@ fn build_shell_command(config: &Config) -> Result<ShellCommandSpec> {
         }
         DbKind::MySql => {
             let (uri, password) = connect_uri_without_password(config)?;
-            // MySQL Shell honors `MYSQL_PWD` for classic-protocol password auth.
-            Ok(ShellCommandSpec {
-                program: "mysqlsh".to_string(),
-                args: vec!["--sql".to_string(), "--uri".to_string(), uri],
-                envs: vec![("MYSQL_PWD".to_string(), password)],
-            })
+            // Both clients honor `MYSQL_PWD` for classic-protocol password auth.
+            if mysqlsh_available {
+                Ok(ShellCommandSpec {
+                    program: "mysqlsh".to_string(),
+                    args: vec!["--sql".to_string(), "--uri".to_string(), uri],
+                    envs: vec![("MYSQL_PWD".to_string(), password)],
+                })
+            } else {
+                // The classic `mysql` client does not accept a URI; build its
+                // flags from the settings directly.
+                let server = match &config.settings.inner {
+                    DbSettings::MySql(s) => s,
+                    _ => unreachable!("database_type checked above"),
+                };
+                Ok(ShellCommandSpec {
+                    program: "mysql".to_string(),
+                    args: vec![
+                        "-h".to_string(),
+                        server.host_or_default(),
+                        "-P".to_string(),
+                        server.port_or_default("3306"),
+                        "-u".to_string(),
+                        server.database_user.clone(),
+                        "-D".to_string(),
+                        server.database_name.clone(),
+                    ],
+                    envs: vec![("MYSQL_PWD".to_string(), password)],
+                })
+            }
         }
     }
 }
@@ -480,7 +514,7 @@ mod tests {
 
     #[test]
     fn postgres_shell_keeps_password_out_of_argv() {
-        let spec = build_shell_command(&postgres_config()).unwrap();
+        let spec = build_shell_command(&postgres_config(), true).unwrap();
         assert_eq!(spec.program, "psql");
         assert_no_password_in_args(&spec.args);
         // The connect uri is still present as an argument (sans password).
@@ -496,8 +530,8 @@ mod tests {
     }
 
     #[test]
-    fn mysql_shell_keeps_password_out_of_argv() {
-        let spec = build_shell_command(&mysql_config()).unwrap();
+    fn mysqlsh_shell_keeps_password_out_of_argv() {
+        let spec = build_shell_command(&mysql_config(), true).unwrap();
         assert_eq!(spec.program, "mysqlsh");
         assert_no_password_in_args(&spec.args);
         assert!(spec.args.iter().any(|a| a.starts_with("mysql://")));
@@ -512,13 +546,56 @@ mod tests {
     }
 
     #[test]
+    fn mysql_classic_shell_fallback_keeps_password_out_of_argv() {
+        // Without mysqlsh installed, the classic `mysql` client is used with
+        // explicit host/port/user/db flags; the password stays in MYSQL_PWD.
+        let spec = build_shell_command(&mysql_config(), false).unwrap();
+        assert_eq!(spec.program, "mysql");
+        assert_no_password_in_args(&spec.args);
+        assert_eq!(
+            spec.args,
+            vec![
+                "-h",
+                "localhost",
+                "-P",
+                "3306",
+                "-u",
+                "myuser",
+                "-D",
+                "mydb"
+            ]
+        );
+        assert!(
+            spec.envs
+                .iter()
+                .any(|(k, v)| k == "MYSQL_PWD" && v == RAW_PASSWORD),
+            "MYSQL_PWD with raw password not found in {:?}",
+            spec.envs
+        );
+    }
+
+    #[test]
+    fn sqlite_shell_opens_database_path() {
+        let settings = crate::config::Settings::configure_sqlite()
+            .database_path("/tmp/some.db")
+            .unwrap()
+            .build()
+            .unwrap();
+        let config = Config::with_settings(&settings);
+        let spec = build_shell_command(&config, false).unwrap();
+        assert_eq!(spec.program, "sqlite3");
+        assert_eq!(spec.args, vec!["/tmp/some.db"]);
+        assert!(spec.envs.is_empty());
+    }
+
+    #[test]
     fn in_memory_sqlite_shell_errors() {
         let settings = crate::config::Settings::configure_sqlite()
             .memory()
             .build()
             .unwrap();
         let config = Config::with_settings(&settings);
-        let res = build_shell_command(&config);
+        let res = build_shell_command(&config, true);
         assert!(
             res.is_err(),
             "expected an error for in-memory sqlite, got {:?}",

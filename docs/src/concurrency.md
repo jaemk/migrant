@@ -32,8 +32,9 @@ connection, so the session, and the advisory lock it holds, survives the error. 
 migrator to interleave.
 
 The one case where the lock is unavoidably lost mid-run is a genuinely dead
-connection. If the session ends, the database has already released the lock;
-migrant reconnects and continues, but that new session does not hold it.
+connection: if the session ends, the database has already released the lock. A
+synchronized run detects this and aborts with an error rather than continuing
+unserialized on a new, unlocked session. Re-run migrations to continue.
 
 ## Library control
 

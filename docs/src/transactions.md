@@ -79,6 +79,11 @@ in the file stay applied. migrant still does not record the migration as applied
 when it fails, so a re-run will attempt it again. Write opted-out migrations so a
 partial application is safe to retry.
 
+Note that `--force` changes the recording rule: bare `--force`
+(`accept-failures`) records a failed migration as applied anyway, while
+`--force=skip-failures` keeps the not-recorded/retry behavior described above.
+See [the apply flags](cli.md).
+
 ## Interaction with locking
 
 Transaction wrapping is independent of the migration advisory lock. The lock

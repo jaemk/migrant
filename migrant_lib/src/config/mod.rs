@@ -5,6 +5,7 @@ use std::collections::HashSet;
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use log::{debug, error};
@@ -40,6 +41,13 @@ pub struct Config {
     pub(crate) migrations: Option<Vec<Box<dyn Migratable>>>,
     pub(crate) cli_compatible: bool,
     conn: Arc<Mutex<Option<DbConnection>>>,
+    /// Bumped whenever an established connection is dropped (and will be
+    /// re-established on next use). Session-scoped state -- notably the
+    /// migration advisory lock -- does not survive such a drop, so the
+    /// migrator uses this to detect a lost lock mid-run. Shared with the
+    /// connection itself: clones and reloads that carry the connection over
+    /// carry the generation with it.
+    conn_generation: Arc<AtomicU64>,
 }
 
 impl Config {
@@ -51,6 +59,7 @@ impl Config {
             migrations: None,
             cli_compatible: false,
             conn: Arc::new(Mutex::new(None)),
+            conn_generation: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -113,9 +122,16 @@ impl Config {
             // rollback and an in-memory database would be lost if dropped.
             if conn.rollback().is_err() {
                 *guard = None;
+                self.conn_generation.fetch_add(1, Ordering::SeqCst);
             }
         }
         res
+    }
+
+    /// Generation of the current connection. Changes whenever an established
+    /// connection had to be dropped (see `conn_generation`).
+    pub(crate) fn connection_generation(&self) -> u64 {
+        self.conn_generation.load(Ordering::SeqCst)
     }
 
     /// Execute a batch of sql statements on the database
@@ -357,6 +373,7 @@ impl Config {
                 // reloaded config connects using the new settings.
                 if reloaded.settings == self.settings {
                     reloaded.conn = Arc::clone(&self.conn);
+                    reloaded.conn_generation = Arc::clone(&self.conn_generation);
                 }
                 reloaded
             }
@@ -366,6 +383,15 @@ impl Config {
         config.migrations = self.migrations.clone();
         config.applied = config.load_applied()?;
         Ok(config)
+    }
+
+    /// Re-read applied migrations from the database in place, without
+    /// re-reading the settings file or touching the live connection (unlike
+    /// `Config::reload`). Used by the migrator so a run stays on the
+    /// connection its advisory lock was acquired on.
+    pub(crate) fn refresh_applied(&mut self) -> Result<()> {
+        self.applied = self.load_applied()?;
+        Ok(())
     }
 
     /// Load the applied migrations from the database migration table

@@ -41,7 +41,8 @@ migration_location = "migrations"
 sslmode = "require"
 ```
 
-MySQL uses the same server keys with `database_type = "mysql"`.
+MySQL uses the same server keys with `database_type = "mysql"`. `database_port`
+accepts a TOML integer or a string.
 
 ## Environment variables
 
@@ -54,8 +55,11 @@ database_password = "env:DB_PASSWORD"
 
 `migrant init --default-from-env` seeds every value in this form.
 
-A `.env` file in scope is loaded automatically (via dotenvy) before values are
-resolved, so `env:` references can come from `.env` during local development.
+The `migrant` CLI loads a `.env` file automatically (via dotenvy) before values
+are resolved, so `env:` references can come from `.env` during local
+development. The library does not load `.env`: `Config::from_settings_file`
+resolves `env:` references from the process environment as-is, so load any
+`.env` file yourself before creating the config.
 
 ## Connection strings and SSL
 

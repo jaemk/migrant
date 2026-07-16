@@ -4,7 +4,7 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
 use migrant_lib::config::{MySqlSettingsBuilder, PostgresSettingsBuilder, SqliteSettingsBuilder};
-use migrant_lib::{Config, DbKind, Direction, Migrator};
+use migrant_lib::{Config, DbKind, Direction, ForceMode, Migrator};
 
 mod cli;
 mod tui;
@@ -31,43 +31,45 @@ fn run(dir: &Path, matches: &clap::ArgMatches) -> Result<()> {
         return run_self(self_matches);
     }
 
-    let config_path = migrant_lib::search_for_settings_file(dir);
-
-    if matches.subcommand_matches("init").is_some() || config_path.is_none() {
-        let initializer = match matches.subcommand_matches("init") {
-            None => Config::init_in(dir),
-            Some(init_matches) => {
-                let from_env = init_matches.get_flag("default-from-env");
-                let dir = init_matches
-                    .get_one::<String>("location")
-                    .map(PathBuf::from)
-                    .unwrap_or_else(|| dir.to_owned());
-                let mut initializer = Config::init_in(&dir);
-                initializer.interactive(!init_matches.get_flag("no-confirm"));
-                initializer.with_env_defaults(from_env);
-                if let Some(db_kind) = init_matches.get_one::<String>("type") {
-                    match db_kind.parse::<DbKind>()? {
-                        DbKind::Sqlite => {
-                            initializer.with_sqlite_options(&SqliteSettingsBuilder::empty());
-                        }
-                        DbKind::Postgres => {
-                            initializer.with_postgres_options(&PostgresSettingsBuilder::empty());
-                        }
-                        DbKind::MySql => {
-                            initializer.with_mysql_options(&MySqlSettingsBuilder::empty());
-                        }
-                    }
+    if let Some(init_matches) = matches.subcommand_matches("init") {
+        let from_env = init_matches.get_flag("default-from-env");
+        let dir = init_matches
+            .get_one::<String>("location")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| dir.to_owned());
+        let mut initializer = Config::init_in(&dir);
+        initializer.interactive(!init_matches.get_flag("no-confirm"));
+        initializer.with_env_defaults(from_env);
+        if let Some(db_kind) = init_matches.get_one::<String>("type") {
+            match db_kind.parse::<DbKind>()? {
+                DbKind::Sqlite => {
+                    initializer.with_sqlite_options(&SqliteSettingsBuilder::empty());
                 }
-                initializer
+                DbKind::Postgres => {
+                    initializer.with_postgres_options(&PostgresSettingsBuilder::empty());
+                }
+                DbKind::MySql => {
+                    initializer.with_mysql_options(&MySqlSettingsBuilder::empty());
+                }
             }
-        };
+        }
         initializer.initialize()?;
         return Ok(());
     }
 
-    // Absolute path of `Migrant.toml` file
-    // This file must exist at this point, created by the block above
-    let config_path = config_path.expect("Settings file must exist");
+    // Absolute path of the `Migrant.toml` file. Only `init` creates one;
+    // everything else requires it to already exist.
+    let config_path = match migrant_lib::search_for_settings_file(dir) {
+        Some(path) => path,
+        None => {
+            return Err(format!(
+                "No `Migrant.toml` found in `{}` or any parent directory. \
+                 Run `migrant init` to create one.",
+                dir.display()
+            )
+            .into())
+        }
+    };
     let mut config = Config::from_settings_file(&config_path)?;
     config.use_cli_compatible_tags(true);
 
@@ -105,7 +107,7 @@ fn run(dir: &Path, matches: &clap::ArgMatches) -> Result<()> {
             // load applied migrations from the database
             let config = config.reload()?;
 
-            let force = matches.get_flag("force");
+            let force = force_mode(matches)?;
             let fake = matches.get_flag("fake");
             let all = matches.get_flag("all");
             let direction = if matches.get_flag("down") {
@@ -128,7 +130,7 @@ fn run(dir: &Path, matches: &clap::ArgMatches) -> Result<()> {
             // load applied migrations from the database
             let config = config.reload()?;
 
-            let force = matches.get_flag("force");
+            let force = force_mode(matches)?;
             let all = matches.get_flag("all");
 
             Migrator::with_config(&config)
@@ -173,6 +175,15 @@ fn run(dir: &Path, matches: &clap::ArgMatches) -> Result<()> {
         }
     };
     Ok(())
+}
+
+/// Map the optional-valued `--force[=<mode>]` flag to a `ForceMode`.
+/// Bare `--force` carries the default-missing-value `accept-failures`.
+fn force_mode(matches: &clap::ArgMatches) -> Result<ForceMode> {
+    Ok(match matches.get_one::<String>("force") {
+        None => ForceMode::Off,
+        Some(mode) => mode.parse::<ForceMode>()?,
+    })
 }
 
 fn run_self(self_matches: &clap::ArgMatches) -> Result<()> {

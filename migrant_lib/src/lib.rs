@@ -147,7 +147,7 @@ pub use crate::connection::ConnConfig;
 pub use crate::errors::{Error, Result};
 pub use crate::migratable::Migratable;
 pub use crate::migration::{EmbeddedMigration, FileMigration, FnMigration};
-pub use crate::migrator::{Direction, Migrator};
+pub use crate::migrator::{Direction, ForceMode, Migrator};
 pub use crate::ops::{
     edit, list, migration_statuses, new, search_for_settings_file, shell, MigrationStatus,
 };
