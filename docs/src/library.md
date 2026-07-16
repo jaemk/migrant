@@ -64,6 +64,19 @@ its own view.
 
 Or load from a file: `Config::from_settings_file("Migrant.toml")`.
 
+Relative paths resolve against the settings file's directory when there is one.
+With `Config::with_settings` (no file on disk) there is nothing to resolve
+against: a relative `migration_location` falls back to the current directory,
+and a relative sqlite `database_path` is an error, so give an absolute path (or
+`:memory:`).
+
+## Inspecting status
+
+`migration_statuses(&config)` returns every managed migration with an `applied`
+flag; `pending_migrations(&config)` returns just the un-applied tags, in the
+order they would run. Both read the config's current applied set, so `reload()`
+first if you need it fresh.
+
 ## The Migrator
 
 ```rust

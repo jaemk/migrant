@@ -3,12 +3,12 @@ The functionality of the Migrant CLI tool can be used as a library so you can em
 database & migration management in your binary and don't need to use a secondary tool
 in production environments.
 
-Select functionality can be copied from https://github.com/jaemk/migrant/blob/master/src/main.rs
+Select functionality can be copied from https://github.com/jaemk/migrant/blob/main/src/main.rs
 
 This example shows using `migrant_lib` in a CLI compatible manner in environments where
 the database configuration file (`Migrant.toml`) and migration files are available to run-time.
 For CLI compatibility and embedded capabilities, see the
-[embedded_cli_compatible](https://github.com/jaemk/migrant_lib/blob/master/examples/embedded_cli_compatible.rs)
+[embedded_cli_compatible](https://github.com/jaemk/migrant/blob/main/migrant_lib/examples/embedded_cli_compatible.rs)
 example.
 
 This should be run with `cargo run --example migrant_cli_compatible --features sqlite`
