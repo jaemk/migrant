@@ -180,12 +180,13 @@ jobs:
             MIGRANT_VERSION=${{ github.ref_name }}
           tags: ${{ steps.tags.outputs.tags }}
 
-  # crates.io publish is last: it cannot be undone. Runs only after the
-  # binaries, GitHub release, and Docker image are done, and once the required
-  # `migrant_lib` version is on the crates.io index.
+  # crates.io publish is last: it cannot be undone. Runs after the binaries are
+  # built and the GitHub release is created, and once the required `migrant_lib`
+  # version is on the crates.io index. It does not depend on the Docker push, so
+  # a Docker Hub failure never blocks publishing `migrant` to crates.io.
   publish-cli:
     if: startsWith(github.ref_name, 'cli-v')
-    needs: [github-release, docker-publish]
+    needs: github-release
     environment: Release
     runs-on: ubuntu-latest
     permissions:
