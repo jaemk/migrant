@@ -44,10 +44,24 @@ jobs:
             | jq -r '.packages[] | select(.name == "migrant_lib") | .version')"
           echo "tag: $tag_version, crate: $crate_version"
           test "$tag_version" = "$crate_version"
+      - name: Skip if already published
+        id: check
+        run: |
+          version="$(cargo metadata --no-deps --format-version 1 \
+            | jq -r '.packages[] | select(.name == "migrant_lib") | .version')"
+          if curl -sf "https://index.crates.io/mi/gr/migrant_lib" \
+               | grep -qF "\"vers\":\"${version}\""; then
+            echo "migrant_lib ${version} is already on crates.io; skipping publish"
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          fi
       - name: Authenticate to crates.io
+        if: steps.check.outputs.publish == 'true'
         uses: rust-lang/crates-io-auth-action@v1
         id: auth
       - name: Publish migrant_lib to crates.io
+        if: steps.check.outputs.publish == 'true'
         run: cargo publish -p migrant_lib --locked
         env:
           CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
@@ -123,6 +137,7 @@ jobs:
             migrant-*.tar.gz
             migrant-*.zip
           if-no-files-found: error
+          overwrite: true
 
   # Assemble the GitHub release from the pre-built artifacts. Reversible.
   github-release:
@@ -211,10 +226,24 @@ jobs:
           done
           echo "timed out waiting for migrant_lib ${lib_version} on crates.io"
           exit 1
+      - name: Skip if already published
+        id: check
+        run: |
+          version="$(cargo metadata --no-deps --format-version 1 \
+            | jq -r '.packages[] | select(.name == "migrant") | .version')"
+          if curl -sf "https://index.crates.io/mi/gr/migrant" \
+               | grep -qF "\"vers\":\"${version}\""; then
+            echo "migrant ${version} is already on crates.io; skipping publish"
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          fi
       - name: Authenticate to crates.io
+        if: steps.check.outputs.publish == 'true'
         uses: rust-lang/crates-io-auth-action@v1
         id: auth
       - name: Publish migrant to crates.io
+        if: steps.check.outputs.publish == 'true'
         run: cargo publish -p migrant --locked
         env:
           CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
