@@ -1,11 +1,18 @@
 name: release
 
-# Library releases are tagged `lib-v<version>` and published to crates.io.
-# CLI releases are tagged `cli-v<version>`, published to crates.io, and
-# release binaries are built and attached to a GitHub release.
+# Library releases are tagged `lib-v<version>`; CLI releases are tagged
+# `cli-v<version>`. Both can be tagged and pushed together.
 #
-# Note: a `cli-v*` release requires the `migrant_lib` version it depends on
-# to already be published, so tag `lib-v*` first when both change.
+# A `lib-v*` tag publishes `migrant_lib` to crates.io.
+#
+# A `cli-v*` tag builds the release binaries first, attaches them to a GitHub
+# release, publishes the Docker image, and only then publishes `migrant` to
+# crates.io. Because `migrant` depends on `migrant_lib`, the crates.io publish
+# waits for the required `migrant_lib` version to appear on the index, so the
+# two tags can be pushed at the same time (the `lib-v*` run publishes the
+# library while the `cli-v*` run builds and releases).
+#
+# crates.io publishes come last in each run because they cannot be undone.
 on:
   push:
     tags:
@@ -19,6 +26,7 @@ permissions:
   contents: read
 
 jobs:
+  # --- library release (lib-v*) ---------------------------------------------
   publish-lib:
     if: startsWith(github.ref_name, 'lib-v')
     environment: Release
@@ -40,41 +48,15 @@ jobs:
         uses: rust-lang/crates-io-auth-action@v1
         id: auth
       - name: Publish migrant_lib to crates.io
-        run: cargo publish -p migrant_lib
+        run: cargo publish -p migrant_lib --locked
         env:
           CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
 
-  publish-cli:
+  # --- cli release (cli-v*) -------------------------------------------------
+  # Build all target binaries first. Nothing here is irreversible, so a build
+  # failure never leaves a partial release behind.
+  build-cli:
     if: startsWith(github.ref_name, 'cli-v')
-    environment: Release
-    runs-on: ubuntu-latest
-    permissions:
-      id-token: write
-      contents: read
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - name: Verify tag matches crate version
-        run: |
-          tag_version="${GITHUB_REF_NAME#cli-v}"
-          crate_version="$(cargo metadata --no-deps --format-version 1 \
-            | jq -r '.packages[] | select(.name == "migrant") | .version')"
-          echo "tag: $tag_version, crate: $crate_version"
-          test "$tag_version" = "$crate_version"
-      - name: Authenticate to crates.io
-        uses: rust-lang/crates-io-auth-action@v1
-        id: auth
-      - name: Publish migrant to crates.io
-        run: cargo publish -p migrant
-        env:
-          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
-
-  release-binaries:
-    needs: publish-cli
-    if: startsWith(github.ref_name, 'cli-v')
-    environment: Release
-    permissions:
-      contents: write
     strategy:
       fail-fast: false
       matrix:
@@ -100,6 +82,14 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
+      - name: Verify tag matches crate version
+        if: matrix.os != 'windows-latest'
+        run: |
+          tag_version="${GITHUB_REF_NAME#cli-v}"
+          crate_version="$(cargo metadata --no-deps --format-version 1 \
+            | jq -r '.packages[] | select(.name == "migrant") | .version')"
+          echo "tag: $tag_version, crate: $crate_version"
+          test "$tag_version" = "$crate_version"
       - name: Install musl tools
         if: matrix.target == 'x86_64-unknown-linux-musl'
         run: sudo apt-get update && sudo apt-get install -y musl-tools
@@ -125,16 +115,40 @@ jobs:
           Copy-Item "target/${{ matrix.target }}/release/migrant.exe" $name
           Copy-Item README.md,LICENSE $name
           Compress-Archive -Path $name -DestinationPath "$name.zip"
-      - name: Upload release assets
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-${{ matrix.target }}
+          path: |
+            migrant-*.tar.gz
+            migrant-*.zip
+          if-no-files-found: error
+
+  # Assemble the GitHub release from the pre-built artifacts. Reversible.
+  github-release:
+    if: startsWith(github.ref_name, 'cli-v')
+    needs: build-cli
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: dist-*
+          path: dist
+          merge-multiple: true
+      - name: Create release and upload binaries
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            migrant-*.tar.gz
-            migrant-*.zip
+            dist/migrant-*.tar.gz
+            dist/migrant-*.zip
 
+  # Build and push the Docker image from the released musl binary. Reversible.
   docker-publish:
-    needs: release-binaries
     if: startsWith(github.ref_name, 'cli-v')
+    needs: github-release
     environment: Release
     runs-on: ubuntu-latest
     steps:
@@ -165,3 +179,41 @@ jobs:
           build-args: |
             MIGRANT_VERSION=${{ github.ref_name }}
           tags: ${{ steps.tags.outputs.tags }}
+
+  # crates.io publish is last: it cannot be undone. Runs only after the
+  # binaries, GitHub release, and Docker image are done, and once the required
+  # `migrant_lib` version is on the crates.io index.
+  publish-cli:
+    if: startsWith(github.ref_name, 'cli-v')
+    needs: [github-release, docker-publish]
+    environment: Release
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Wait for migrant_lib on crates.io
+        run: |
+          lib_version="$(cargo metadata --no-deps --format-version 1 \
+            | jq -r '.packages[] | select(.name == "migrant_lib") | .version')"
+          echo "waiting for migrant_lib ${lib_version} on the crates.io index"
+          for i in $(seq 1 30); do
+            if curl -sf "https://index.crates.io/mi/gr/migrant_lib" \
+                 | grep -qF "\"vers\":\"${lib_version}\""; then
+              echo "migrant_lib ${lib_version} is available"
+              exit 0
+            fi
+            echo "not yet available, retrying in 10s ($i/30)"
+            sleep 10
+          done
+          echo "timed out waiting for migrant_lib ${lib_version} on crates.io"
+          exit 1
+      - name: Authenticate to crates.io
+        uses: rust-lang/crates-io-auth-action@v1
+        id: auth
+      - name: Publish migrant to crates.io
+        run: cargo publish -p migrant --locked
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
