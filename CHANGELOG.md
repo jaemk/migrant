@@ -2,6 +2,8 @@
 
 ## [1.0.0-rc.2]
 ### Added
+- `migrant status` reports every managed migration's applied/pending state with summary counts,
+  as pretty text (`--format text`, the default) or JSON (`--format json`) for scripting
 - `apply` and `redo` accept `--no-sync` to disable the cross-process advisory lock, for when
   migration runs are serialized by an external mechanism. On `redo` it applies to both the down
   and up runs

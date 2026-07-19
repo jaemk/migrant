@@ -108,6 +108,19 @@ pub fn build_cli() -> Command {
             Command::new("list").about("List status of applied and available migrations"),
         )
         .subcommand(
+            Command::new("status")
+                .about("Report the applied/pending status of every managed migration")
+                .arg(
+                    Arg::new("format")
+                        .long("format")
+                        .short('f')
+                        .value_parser(["text", "json"])
+                        .default_value("text")
+                        .value_name("format")
+                        .help("Output format: `text` (default) or `json`"),
+                ),
+        )
+        .subcommand(
             Command::new("apply")
                 .about("Moves up or down (applies up/down.sql) one migration. Default direction is up unless specified with `-d/--down`.")
                 .arg(

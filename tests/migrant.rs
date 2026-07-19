@@ -91,6 +91,61 @@ fn kitchen_sink() {
     let _ = migrant().args(["apply", "-ad"]).assert();
 }
 
+// CLIMIG-6: `status` reports every managed migration in text and json.
+#[test]
+fn status_reports_text_and_json() {
+    let dir = sqlite_project();
+    migrant()
+        .current_dir(dir.path())
+        .arg("setup")
+        .assert()
+        .success();
+    new_migration(
+        dir.path(),
+        "first",
+        "create table status_a (x integer);",
+        "drop table status_a;",
+    );
+    new_migration(
+        dir.path(),
+        "second",
+        "create table status_b (x integer);",
+        "drop table status_b;",
+    );
+
+    // apply only the first migration so we have one applied, one pending
+    migrant()
+        .current_dir(dir.path())
+        .arg("apply")
+        .assert()
+        .success();
+
+    // default (text) format: summary line plus a marked row per migration
+    migrant()
+        .current_dir(dir.path())
+        .arg("status")
+        .assert()
+        .success()
+        .stdout(contains("Migration status: 1 applied, 1 pending (2 total)"))
+        .stdout(predicates::str::is_match(r"\[✓\] \d{14}_first").expect("valid regex"))
+        .stdout(predicates::str::is_match(r"\[ \] \d{14}_second").expect("valid regex"));
+
+    // json format is valid and carries the same counts
+    let out = migrant()
+        .current_dir(dir.path())
+        .args(["status", "--format", "json"])
+        .assert()
+        .success();
+    let stdout = String::from_utf8(out.get_output().stdout.clone()).expect("utf8 stdout");
+    let value: serde_json::Value = serde_json::from_str(&stdout).expect("valid json");
+    assert_eq!(value["total"], 2);
+    assert_eq!(value["applied"], 1);
+    assert_eq!(value["pending"], 1);
+    assert_eq!(value["migrations"].as_array().expect("array").len(), 2);
+    assert_eq!(value["migrations"][0]["applied"], true);
+    assert_eq!(value["migrations"][1]["applied"], false);
+}
+
 // TUI-1: with stdout piped (not a terminal) the tui refuses to start,
 // before touching the database
 #[test]

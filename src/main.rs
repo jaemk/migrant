@@ -7,6 +7,7 @@ use migrant_lib::config::{MySqlSettingsBuilder, PostgresSettingsBuilder, SqliteS
 use migrant_lib::{Config, DbKind, Direction, ForceMode, Migrator};
 
 mod cli;
+mod status;
 mod tui;
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
@@ -92,6 +93,17 @@ fn run(dir: &Path, matches: &clap::ArgMatches) -> Result<()> {
             let config = config.reload()?;
 
             migrant_lib::list(&config)?;
+        }
+        Some(("status", matches)) => {
+            // load applied migrations from the database
+            let config = config.reload()?;
+
+            let statuses = migrant_lib::migration_statuses(&config)?;
+            let report = status::StatusReport::from_statuses(&statuses);
+            match matches.get_one::<String>("format").map(String::as_str) {
+                Some("json") => println!("{}", report.render_json()?),
+                _ => println!("{}", report.render_text()),
+            }
         }
         Some(("new", matches)) => {
             // load applied migrations from the database

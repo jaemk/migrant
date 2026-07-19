@@ -38,6 +38,7 @@ crossterm = "0.29"
 dotenvy = "0.15"
 ratatui = "0.30"
 self_update = "0.44"
+serde_json = "1"
 assert_cmd = "2"
 predicates = "3"
 
@@ -65,6 +66,8 @@ migrant_lib = { workspace = true }
 ratatui = { workspace = true }
 rusqlite = { workspace = true, optional = true, features = ["bundled"] }
 self_update = { workspace = true, optional = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
 
 [dev-dependencies]
 assert_cmd = { workspace = true }

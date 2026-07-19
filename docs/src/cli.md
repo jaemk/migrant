@@ -36,6 +36,12 @@ run from anywhere inside the project; migrant searches upward for the config.
 `migrant list`
 : List available migrations and mark those applied.
 
+`migrant status [--format <text|json>]`
+: Report every managed migration with its applied/pending state and summary
+  counts. `--format text` (the default) prints a summary line plus a `[✓]`/`[ ]`
+  row per migration; `--format json` prints the same data as JSON
+  (`{ total, applied, pending, migrations: [{ tag, applied }] }`) for scripting.
+
 `migrant apply [--down] [--all] [--force[=<mode>]] [--fake] [--no-sync]`
 : Apply the next migration. `--down` reverts instead of applying. `--all` runs
   every remaining migration in the chosen direction. `--force` continues past a
