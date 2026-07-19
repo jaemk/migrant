@@ -30,7 +30,7 @@
   include `rusqlite` and enable the `bundled` feature in your project.
 
 
-### Usage
+## Usage
 
 - Migrations can be defined as files, string literals, or functions.
 - File migrations can be either read from files at runtime or embedded in your executable at compile time
@@ -76,7 +76,7 @@ config.use_migrations(&[
 ```
 
 
-### In-memory sqlite databases
+## In-memory sqlite databases
 
 With the `sqlite` feature, the special database path `:memory:` selects an
 in-memory sqlite database. The underlying connection is established once and
@@ -93,7 +93,7 @@ config.setup()?;
 ```
 
 
-### CLI Compatibility
+## CLI Compatibility
 
 Migration management identical to the [`migrant`](https://github.com/jaemk/migrant) CLI tool can also be embedded.
 This method only supports file-based migrations (so `FileMigration`s or `EmbeddedMigration`s using `include_str!`)
@@ -110,7 +110,7 @@ example for a working sample where the `migrant` CLI tool can be used during dev
 and migration file contents are embedded in the application.
 
 
-### Development
+## Development
 
 See [CONTRIBUTING](https://github.com/jaemk/migrant/blob/main/migrant_lib/CONTRIBUTING.md)
 

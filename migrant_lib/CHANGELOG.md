@@ -1,5 +1,22 @@
 # Changelog
 
+## [1.0.0-rc.2]
+Breaking pre-1.0 release, continuing the API cleanup from rc.1.
+
+### Changed
+- Settings builders (`SqliteSettingsBuilder`/`PostgresSettingsBuilder`/`MySqlSettingsBuilder`) and
+  `SettingsFileInitializer` now use owned `self` builder chains: their setters take and return
+  `Self` instead of `&mut Self`, unifying them with the migration builders. `build(&self)` is
+  unchanged. `SettingsFileInitializer::with_sqlite_options`/`with_postgres_options`/
+  `with_mysql_options` now take the builder by value instead of by reference
+- `Migrator` setters (`direction`/`force`/`fake`/`all`/`show_output`/`synchronized`) now take and
+  return owned `self`. `Migrator::with_config` and `Migrator::apply` are unchanged
+- `MigrationStatus` fields `tag`/`applied` are now private; read them via the `tag()` and
+  `applied()` accessor methods
+- `DbKind` and `ForceMode` are now `#[non_exhaustive]` (like `Error`), so a downstream `match`
+  must include a wildcard arm. This allows future backends and force modes to be added without a
+  breaking change
+
 ## [1.0.0-rc.1]
 Breaking pre-1.0 release. See the "Changed"/"Removed" sections for migration notes.
 

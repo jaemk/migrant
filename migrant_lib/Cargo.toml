@@ -1,6 +1,6 @@
 [package]
 name = "migrant_lib"
-version = "1.0.0-rc.1"
+version = "1.0.0-rc.2"
 # explicit (not workspace-inherited) so `cargo readme` can parse the manifest
 edition = "2021"
 rust-version = "1.88"

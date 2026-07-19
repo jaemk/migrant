@@ -48,4 +48,7 @@ Migrator::with_config(&config)
     .apply()?;
 ```
 
+The `migrant` CLI exposes the same toggle as `--no-sync` on `apply` and `redo`,
+for callers that serialize migrations externally; see [The CLI](cli.md).
+
 See [Using migrant_lib](library.md) for the rest of the `Migrator` API.

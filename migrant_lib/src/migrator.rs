@@ -34,6 +34,7 @@ impl fmt::Display for Direction {
 
 /// How a run handles a migration that fails to apply.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[non_exhaustive]
 pub enum ForceMode {
     /// A failed migration aborts the run with an error (default).
     #[default]
@@ -167,7 +168,7 @@ impl Migrator {
     /// Set `direction`. Default is `Up`.
     /// `Up`   => run `up.sql`.
     /// `Down` => run `down.sql`.
-    pub fn direction(&mut self, dir: Direction) -> &mut Self {
+    pub fn direction(mut self, dir: Direction) -> Self {
         self.direction = dir;
         self
     }
@@ -180,26 +181,26 @@ impl Migrator {
     /// run. `ForceMode::SkipFailures` continues without recording it: the
     /// migration is skipped for the remainder of this run and retried on the
     /// next run, so it must be safe to re-attempt after a partial application.
-    pub fn force(&mut self, force: ForceMode) -> &mut Self {
+    pub fn force(mut self, force: ForceMode) -> Self {
         self.force = force;
         self
     }
 
     /// Set `fake` to fake application of migrations.
     /// Applied migrations table will be updated as if migrations were actually run.
-    pub fn fake(&mut self, fake: bool) -> &mut Self {
+    pub fn fake(mut self, fake: bool) -> Self {
         self.fake = fake;
         self
     }
 
     /// Set `all` to run all remaining available migrations in the given `direction`
-    pub fn all(&mut self, all: bool) -> &mut Self {
+    pub fn all(mut self, all: bool) -> Self {
         self.all = all;
         self
     }
 
     /// Toggle migration application output. Default is `true`
-    pub fn show_output(&mut self, show_output: bool) -> &mut Self {
+    pub fn show_output(mut self, show_output: bool) -> Self {
         self.show_output = show_output;
         self
     }
@@ -216,7 +217,7 @@ impl Migrator {
     /// against, so this setting has no effect there.
     ///
     /// Disable it only when an outer mechanism already serializes migrations.
-    pub fn synchronized(&mut self, synchronized: bool) -> &mut Self {
+    pub fn synchronized(mut self, synchronized: bool) -> Self {
         self.synchronized = synchronized;
         self
     }
@@ -525,6 +526,31 @@ mod tests {
 
     fn skips(strs: &[&str]) -> HashSet<String> {
         strs.iter().map(|s| (*s).to_owned()).collect()
+    }
+
+    #[test]
+    fn owned_setters_chain_and_apply_each_value() {
+        // The setters take owned `self` and return owned `Self`, so a full
+        // configuration chains from `with_config` through to a value without an
+        // intermediate `mut` binding, and every setter must carry its value.
+        let settings = crate::config::Settings::configure_sqlite()
+            .memory()
+            .build()
+            .unwrap();
+        let config = Config::with_settings(settings);
+        let migrator = Migrator::with_config(&config)
+            .direction(Direction::Down)
+            .force(ForceMode::AcceptFailures)
+            .fake(true)
+            .all(true)
+            .show_output(false)
+            .synchronized(false);
+        assert_eq!(migrator.direction, Direction::Down);
+        assert_eq!(migrator.force, ForceMode::AcceptFailures);
+        assert!(migrator.fake);
+        assert!(migrator.all);
+        assert!(!migrator.show_output);
+        assert!(!migrator.synchronized);
     }
 
     #[test]

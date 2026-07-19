@@ -41,8 +41,8 @@ fn applied_tags(config: &Config) -> Vec<String> {
     migrant_lib::migration_statuses(config)
         .unwrap()
         .into_iter()
-        .filter(|m| m.applied)
-        .map(|m| m.tag)
+        .filter(|m| m.applied())
+        .map(|m| m.tag().to_string())
         .collect()
 }
 

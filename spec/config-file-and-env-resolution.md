@@ -28,5 +28,11 @@ responsibility.
 
 A relative `database_path` resolves relative to the config file's directory.
 
+## CONFIG-5
+
+`database_type` parses into `DbKind`, which is `#[non_exhaustive]`, so new
+database backends can be added without a breaking change; downstream `match`
+expressions on `DbKind` must include a wildcard arm.
+
 Coverage: unit tests in `migrant_lib/src/config/settings.rs`; `tests/migrant.rs`
 (init --default-from-env).

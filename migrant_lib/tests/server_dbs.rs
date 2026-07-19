@@ -61,7 +61,7 @@ fn apply_and_unapply(settings: &Settings) {
     let config = config.reload().unwrap();
     let statuses = migrant_lib::migration_statuses(&config).unwrap();
     assert_eq!(2, statuses.len());
-    assert!(statuses.iter().all(|m| m.applied));
+    assert!(statuses.iter().all(|m| m.applied()));
 
     Migrator::with_config(&config)
         .direction(Direction::Down)
@@ -72,7 +72,7 @@ fn apply_and_unapply(settings: &Settings) {
 
     let config = config.reload().unwrap();
     let statuses = migrant_lib::migration_statuses(&config).unwrap();
-    assert!(statuses.iter().all(|m| !m.applied));
+    assert!(statuses.iter().all(|m| !m.applied()));
 }
 
 /// Drop the migration table so the next run starts from a clean database.
@@ -211,7 +211,7 @@ fn assert_failed_migration_rolls_back(conn_str: &str, settings: &Settings) {
     let config = config.reload().unwrap();
     let statuses = migrant_lib::migration_statuses(&config).unwrap();
     assert!(
-        statuses.iter().all(|m| !m.applied),
+        statuses.iter().all(|m| !m.applied()),
         "the tag must not be recorded when the migration fails"
     );
 
@@ -267,7 +267,7 @@ fn assert_force_continues_holding_lock(conn_str: &str, settings: &Settings) {
     let config = config.reload().unwrap();
     let statuses = migrant_lib::migration_statuses(&config).unwrap();
     assert!(
-        statuses.iter().all(|m| m.applied),
+        statuses.iter().all(|m| m.applied()),
         "force records every migration as applied, including the failed one"
     );
 

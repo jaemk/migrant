@@ -283,3 +283,60 @@ fn force_modes_through_the_cli() {
         .success()
         .stdout(predicates::str::is_match(r"\[✓\] \d{14}_a-bad").expect("valid regex"));
 }
+
+// CLIMIG: `apply --all --no-sync` is accepted and applies migrations
+// normally. On sqlite the advisory lock is a no-op, so this proves the flag
+// is wired end-to-end (accepted + migrations applied).
+#[test]
+fn apply_no_sync_applies_migrations() {
+    let dir = sqlite_project();
+    migrant()
+        .current_dir(dir.path())
+        .arg("setup")
+        .assert()
+        .success();
+    new_migration(
+        dir.path(),
+        "first",
+        "create table no_sync_a (x integer);",
+        "drop table no_sync_a;",
+    );
+    new_migration(
+        dir.path(),
+        "second",
+        "create table no_sync_b (x integer);",
+        "drop table no_sync_b;",
+    );
+
+    migrant()
+        .current_dir(dir.path())
+        .args(["apply", "--all", "--no-sync"])
+        .assert()
+        .success()
+        .stdout(contains("Applying[Up]:"));
+
+    migrant()
+        .current_dir(dir.path())
+        .arg("list")
+        .assert()
+        .success()
+        .stdout(predicates::str::is_match(r"\[✓\] \d{14}_first").expect("valid regex"))
+        .stdout(predicates::str::is_match(r"\[✓\] \d{14}_second").expect("valid regex"));
+
+    // `redo --no-sync` applies the flag to both the down and up runs.
+    migrant()
+        .current_dir(dir.path())
+        .args(["redo", "--all", "--no-sync"])
+        .assert()
+        .success()
+        .stdout(contains("Applying[Down]:"))
+        .stdout(contains("Applying[Up]:"));
+
+    migrant()
+        .current_dir(dir.path())
+        .arg("list")
+        .assert()
+        .success()
+        .stdout(predicates::str::is_match(r"\[✓\] \d{14}_first").expect("valid regex"))
+        .stdout(predicates::str::is_match(r"\[✓\] \d{14}_second").expect("valid regex"));
+}

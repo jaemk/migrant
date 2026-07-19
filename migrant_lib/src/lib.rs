@@ -174,6 +174,7 @@ pub(crate) const SQLITE_MEMORY_PATH: &str = ":memory:";
 
 /// Database type being used
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
+#[non_exhaustive]
 pub enum DbKind {
     /// Sqlite database
     Sqlite,

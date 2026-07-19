@@ -123,9 +123,21 @@ pub(crate) fn search_for_migrations(mig_root: &Path) -> Result<Vec<FileMigration
 #[derive(Debug, Clone)]
 pub struct MigrationStatus {
     /// The full migration tag
-    pub tag: String,
+    tag: String,
     /// Whether the migration is currently applied
-    pub applied: bool,
+    applied: bool,
+}
+
+impl MigrationStatus {
+    /// The full migration tag
+    pub fn tag(&self) -> &str {
+        &self.tag
+    }
+
+    /// Whether the migration is currently applied
+    pub fn applied(&self) -> bool {
+        self.applied
+    }
 }
 
 /// Return the status of all migrations being managed: either those explicitly
@@ -450,6 +462,25 @@ mod tests {
         fs::write(root.join(CONFIG_FILE), "database_type = \"sqlite\"").unwrap();
         let found = search_for_settings_file(&nested).unwrap();
         assert_eq!(found, root.join(CONFIG_FILE));
+    }
+
+    #[test]
+    fn migration_status_accessors_read_private_fields() {
+        // `tag`/`applied` are private; the public accessors are the only outside
+        // read path and must reflect the constructed values.
+        let status = MigrationStatus {
+            tag: "20200101000000_first".to_string(),
+            applied: true,
+        };
+        assert_eq!(status.tag(), "20200101000000_first");
+        assert!(status.applied());
+
+        let unapplied = MigrationStatus {
+            tag: "20200102000000_second".to_string(),
+            applied: false,
+        };
+        assert_eq!(unapplied.tag(), "20200102000000_second");
+        assert!(!unapplied.applied());
     }
 
     #[test]

@@ -37,21 +37,18 @@ fn run(dir: &Path, matches: &clap::ArgMatches) -> Result<()> {
             .get_one::<String>("location")
             .map(PathBuf::from)
             .unwrap_or_else(|| dir.to_owned());
-        let mut initializer = Config::init_in(&dir);
-        initializer.interactive(!init_matches.get_flag("no-confirm"));
-        initializer.with_env_defaults(from_env);
+        let mut initializer = Config::init_in(&dir)
+            .interactive(!init_matches.get_flag("no-confirm"))
+            .with_env_defaults(from_env);
         if let Some(db_kind) = init_matches.get_one::<String>("type") {
-            match db_kind.parse::<DbKind>()? {
-                DbKind::Sqlite => {
-                    initializer.with_sqlite_options(&SqliteSettingsBuilder::empty());
-                }
+            initializer = match db_kind.parse::<DbKind>()? {
+                DbKind::Sqlite => initializer.with_sqlite_options(SqliteSettingsBuilder::empty()),
                 DbKind::Postgres => {
-                    initializer.with_postgres_options(&PostgresSettingsBuilder::empty());
+                    initializer.with_postgres_options(PostgresSettingsBuilder::empty())
                 }
-                DbKind::MySql => {
-                    initializer.with_mysql_options(&MySqlSettingsBuilder::empty());
-                }
-            }
+                DbKind::MySql => initializer.with_mysql_options(MySqlSettingsBuilder::empty()),
+                _ => initializer, // DbKind is #[non_exhaustive]
+            };
         }
         initializer.initialize()?;
         return Ok(());
@@ -88,6 +85,7 @@ fn run(dir: &Path, matches: &clap::ArgMatches) -> Result<()> {
             DbKind::Postgres | DbKind::MySql => {
                 println!("{}", config.connect_string()?);
             }
+            _ => println!("{}", config.connect_string()?), // DbKind is #[non_exhaustive]
         },
         Some(("list", _)) => {
             // load applied migrations from the database
@@ -110,6 +108,7 @@ fn run(dir: &Path, matches: &clap::ArgMatches) -> Result<()> {
             let force = force_mode(matches)?;
             let fake = matches.get_flag("fake");
             let all = matches.get_flag("all");
+            let no_sync = matches.get_flag("no-sync");
             let direction = if matches.get_flag("down") {
                 Direction::Down
             } else {
@@ -121,6 +120,7 @@ fn run(dir: &Path, matches: &clap::ArgMatches) -> Result<()> {
                 .force(force)
                 .fake(fake)
                 .all(all)
+                .synchronized(!no_sync)
                 .apply()?;
 
             let config = config.reload()?;
@@ -132,11 +132,13 @@ fn run(dir: &Path, matches: &clap::ArgMatches) -> Result<()> {
 
             let force = force_mode(matches)?;
             let all = matches.get_flag("all");
+            let no_sync = matches.get_flag("no-sync");
 
             Migrator::with_config(&config)
                 .direction(Direction::Down)
                 .force(force)
                 .all(all)
+                .synchronized(!no_sync)
                 .apply()?;
             let config = config.reload()?;
             migrant_lib::list(&config)?;
@@ -145,6 +147,7 @@ fn run(dir: &Path, matches: &clap::ArgMatches) -> Result<()> {
                 .direction(Direction::Up)
                 .force(force)
                 .all(all)
+                .synchronized(!no_sync)
                 .apply()?;
             let config = config.reload()?;
             migrant_lib::list(&config)?;

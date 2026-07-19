@@ -16,5 +16,16 @@ with nothing pending returns an empty `Report` (see [migrator-api.md](migrator-a
 `#[non_exhaustive]` enum: `is_config`, `is_migration`, `is_migration_not_found`,
 `is_shell_command`, `is_tag_error`, `is_invalid_db_kind`, `is_feature_required`.
 
+## ERRORH-3
+
+`DbKind` and `ForceMode` are also `#[non_exhaustive]`, so new database backends
+or force modes can be added without a breaking change; downstream `match`
+expressions on either enum must include a wildcard arm.
+
+## ERRORH-4
+
+`MigrationStatus`'s `tag` and `applied` fields are private, accessed via
+`tag(&self) -> &str` and `applied(&self) -> bool`.
+
 Coverage: unit tests in `migrant_lib/src/errors.rs`, `tags.rs`; exercised throughout the
 integration tests.
