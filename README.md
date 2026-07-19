@@ -75,6 +75,8 @@ When run interactively (without `--no-confirm`), `setup` will be run automatical
 
 `migrant list` - Display all available .sql files and mark those applied.
 
+`migrant status [--format <text|json>]` - Report every managed migration's applied/pending state with summary counts, as pretty text (default) or JSON.
+
 `migrant apply [--down, --all, --force, --fake, --no-sync]` - Apply the next available migration[s].
 
 `migrant redo [--all, --force, --no-sync]` - Re-apply the latest migration (down then up).

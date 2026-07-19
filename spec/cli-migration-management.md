@@ -30,6 +30,13 @@ it on the next run.
 `migrant redo` unapplies then reapplies the latest migration (`--down` then up); `--all`
 redoes all applied migrations. Down-migrations run in reverse application order.
 
+## CLIMIG-6
+
+`migrant status` reports every managed migration with its applied/pending state plus summary
+counts (total, applied, pending). `--format text` (the default) prints a summary line followed
+by a `[✓]`/`[ ]` row per migration; `--format json` prints the same data as pretty-printed JSON
+(`{ total, applied, pending, migrations: [{ tag, applied }] }`) for scripting.
+
 Coverage: `tests/migrant.rs` (kitchen_sink, new_rejects_invalid_tag,
-apply_fake_records_without_running, force_modes_through_the_cli), backend integration tests,
-unit tests in `migrant_lib/src/ops.rs`.
+apply_fake_records_without_running, force_modes_through_the_cli, status_reports_text_and_json),
+backend integration tests, unit tests in `migrant_lib/src/ops.rs` and `src/status.rs`.

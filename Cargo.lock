@@ -1587,6 +1587,8 @@ dependencies = [
  "ratatui",
  "rusqlite",
  "self_update",
+ "serde",
+ "serde_json",
  "tempfile",
 ]
 

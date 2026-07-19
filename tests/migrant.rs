@@ -91,6 +91,67 @@ fn kitchen_sink() {
     let _ = migrant().args(["apply", "-ad"]).assert();
 }
 
+// CLIMIG-6: `status` reports every managed migration in text and json.
+#[test]
+fn status_reports_text_and_json() {
+    let dir = sqlite_project();
+    migrant()
+        .current_dir(dir.path())
+        .arg("setup")
+        .assert()
+        .success();
+    new_migration(
+        dir.path(),
+        "first",
+        "create table status_a (x integer);",
+        "drop table status_a;",
+    );
+    new_migration(
+        dir.path(),
+        "second",
+        "create table status_b (x integer);",
+        "drop table status_b;",
+    );
+
+    // apply one migration so we have one applied, one pending. The two `new`
+    // migrations can share a timestamp (created in the same second), so their
+    // order is not guaranteed; assert on the mixed state and counts, not on
+    // which specific tag ends up applied.
+    migrant()
+        .current_dir(dir.path())
+        .arg("apply")
+        .assert()
+        .success();
+
+    // default (text) format: summary line plus one applied and one pending row
+    migrant()
+        .current_dir(dir.path())
+        .arg("status")
+        .assert()
+        .success()
+        .stdout(contains("Migration status: 1 applied, 1 pending (2 total)"))
+        .stdout(predicates::str::is_match(r"\[✓\] \d{14}_").expect("valid regex"))
+        .stdout(predicates::str::is_match(r"\[ \] \d{14}_").expect("valid regex"));
+
+    // json format is valid and carries the same counts
+    let out = migrant()
+        .current_dir(dir.path())
+        .args(["status", "--format", "json"])
+        .assert()
+        .success();
+    let stdout = String::from_utf8(out.get_output().stdout.clone()).expect("utf8 stdout");
+    let value: serde_json::Value = serde_json::from_str(&stdout).expect("valid json");
+    assert_eq!(value["total"], 2);
+    assert_eq!(value["applied"], 1);
+    assert_eq!(value["pending"], 1);
+    let migrations = value["migrations"].as_array().expect("array");
+    assert_eq!(migrations.len(), 2);
+    assert_eq!(
+        migrations.iter().filter(|m| m["applied"] == true).count(),
+        1
+    );
+}
+
 // TUI-1: with stdout piped (not a terminal) the tui refuses to start,
 // before touching the database
 #[test]

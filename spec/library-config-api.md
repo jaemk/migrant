@@ -30,5 +30,16 @@ library-managed migrations interoperate with CLI-created ones, and returns `&mut
 so it can be chained onto construction before `use_migrations`/`reload`;
 `is_cli_compatible()` reports the current mode.
 
-Coverage: `migrant_lib/tests/sqlite.rs`, `server_dbs.rs`, `reload_memory.rs`; unit tests in
-`migrant_lib/src/tags.rs`.
+## LIBRAR-6
+
+`Config::init_in(dir)` returns a `SettingsFileInitializer` that writes a new `Migrant.toml`
+template. Its setters take and return an owned `Self` so calls chain by value: `interactive(bool)`
+(default `true`; when on, `initialize()` opens the file in `$EDITOR` and runs `setup`),
+`with_env_defaults(bool)` (seed every unset value as `env:VAR`), and `with_sqlite_options` /
+`with_postgres_options` / `with_mysql_options`, each taking its settings builder by value.
+`initialize()` renders and writes the template. Without a database type set it either prompts
+(interactive) or errors (non-interactive).
+
+Coverage: `tests/migrant.rs` (init_non_interactive_creates_config,
+init_rejects_invalid_database_type, init --default-from-env); doc examples in
+`migrant_lib/src/config/init.rs`.
