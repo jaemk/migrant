@@ -1575,7 +1575,7 @@ dependencies = [
 
 [[package]]
 name = "migrant"
-version = "1.0.0-rc.1"
+version = "1.0.0-rc.2"
 dependencies = [
  "assert_cmd",
  "clap",
@@ -1592,7 +1592,7 @@ dependencies = [
 
 [[package]]
 name = "migrant_lib"
-version = "1.0.0-rc.1"
+version = "1.0.0-rc.2"
 dependencies = [
  "chrono",
  "log",

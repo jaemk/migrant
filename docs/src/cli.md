@@ -36,17 +36,21 @@ run from anywhere inside the project; migrant searches upward for the config.
 `migrant list`
 : List available migrations and mark those applied.
 
-`migrant apply [--down] [--all] [--force[=<mode>]] [--fake]`
+`migrant apply [--down] [--all] [--force[=<mode>]] [--fake] [--no-sync]`
 : Apply the next migration. `--down` reverts instead of applying. `--all` runs
   every remaining migration in the chosen direction. `--force` continues past a
   failed migration: bare `--force` (or `--force=accept-failures`) records the
   failed migration as applied anyway, so it is not retried on later runs;
   `--force=skip-failures` leaves it unrecorded and retries it on the next run.
   `--fake` records the migration as (un)applied without running its SQL.
+  `--no-sync` disables the cross-process advisory lock that is otherwise on by
+  default for PostgreSQL/MySQL; use it when migrations are already serialized
+  by an external mechanism.
 
-`migrant redo [--all] [--force[=<mode>]]`
+`migrant redo [--all] [--force[=<mode>]] [--no-sync]`
 : Shortcut for the latest `down` then `up`. Useful while iterating on a migration
-  you are still writing.
+  you are still writing. `--no-sync` disables the advisory lock for both the
+  down and up runs.
 
 ## Inspect and connect
 

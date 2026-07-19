@@ -1,5 +1,16 @@
 # Changelog
 
+## [1.0.0-rc.2]
+### Added
+- `apply` and `redo` accept `--no-sync` to disable the cross-process advisory lock, for when
+  migration runs are serialized by an external mechanism. On `redo` it applies to both the down
+  and up runs
+
+### Changed
+- Update `migrant_lib` to 1.0.0-rc.2: owned-`self` builder chains for the settings builders and
+  `Migrator`, `#[non_exhaustive]` `DbKind`/`ForceMode`, and `MigrationStatus` field accessors.
+  See the migrant_lib changelog. These are source-compatible for existing chained call sites
+
 ## [1.0.0-rc.1]
 ### Added
 - `--force` takes an optional mode: bare `--force` (or `--force=accept-failures`) records a

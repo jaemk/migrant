@@ -75,9 +75,9 @@ When run interactively (without `--no-confirm`), `setup` will be run automatical
 
 `migrant list` - Display all available .sql files and mark those applied.
 
-`migrant apply [--down, --all, --force, --fake]` - Apply the next available migration[s].
+`migrant apply [--down, --all, --force, --fake, --no-sync]` - Apply the next available migration[s].
 
-`migrant redo [--all, --force]` - Re-apply the latest migration (down then up).
+`migrant redo [--all, --force, --no-sync]` - Re-apply the latest migration (down then up).
 
 `migrant tui` - Open an interactive terminal UI for viewing and applying migrations.
 

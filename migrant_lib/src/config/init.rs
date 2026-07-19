@@ -173,13 +173,13 @@ impl SettingsFileInitializer {
     }
 
     /// Set interactive prompts, default is `true`
-    pub fn interactive(&mut self, b: bool) -> &mut Self {
+    pub fn interactive(mut self, b: bool) -> Self {
         self.interactive = b;
         self
     }
 
     /// Default all file values `env:<ENV_VAR>` if unspecified
-    pub fn with_env_defaults(&mut self, b: bool) -> &mut Self {
+    pub fn with_env_defaults(mut self, b: bool) -> Self {
         self.with_env_defaults = b;
         self
     }
@@ -202,8 +202,8 @@ impl SettingsFileInitializer {
     /// # Ok(())
     /// # }
     /// ```
-    pub fn with_sqlite_options(&mut self, options: &SqliteSettingsBuilder) -> &mut Self {
-        self.database_options = Some(DatabaseConfigOptions::Sqlite(options.clone()));
+    pub fn with_sqlite_options(mut self, options: SqliteSettingsBuilder) -> Self {
+        self.database_options = Some(DatabaseConfigOptions::Sqlite(options));
         self
     }
 
@@ -227,8 +227,8 @@ impl SettingsFileInitializer {
     /// # Ok(())
     /// # }
     /// ```
-    pub fn with_postgres_options(&mut self, options: &PostgresSettingsBuilder) -> &mut Self {
-        self.database_options = Some(DatabaseConfigOptions::Postgres(options.clone()));
+    pub fn with_postgres_options(mut self, options: PostgresSettingsBuilder) -> Self {
+        self.database_options = Some(DatabaseConfigOptions::Postgres(options));
         self
     }
 
@@ -252,8 +252,8 @@ impl SettingsFileInitializer {
     /// # Ok(())
     /// # }
     /// ```
-    pub fn with_mysql_options(&mut self, options: &MySqlSettingsBuilder) -> &mut Self {
-        self.database_options = Some(DatabaseConfigOptions::MySql(options.clone()));
+    pub fn with_mysql_options(mut self, options: MySqlSettingsBuilder) -> Self {
+        self.database_options = Some(DatabaseConfigOptions::MySql(options));
         self
     }
 
@@ -297,18 +297,15 @@ impl SettingsFileInitializer {
             .map_err(|_| err!(Config, "unsupported database type: {}", db_kind))?;
         Ok(match db_kind {
             DbKind::Sqlite => {
-                let mut options = SqliteSettingsBuilder::empty();
-                options.migration_location("migrations")?;
+                let options = SqliteSettingsBuilder::empty().migration_location("migrations")?;
                 DatabaseConfigOptions::Sqlite(options)
             }
             DbKind::Postgres => {
-                let mut options = PostgresSettingsBuilder::empty();
-                options.migration_location("migrations")?;
+                let options = PostgresSettingsBuilder::empty().migration_location("migrations")?;
                 DatabaseConfigOptions::Postgres(options)
             }
             DbKind::MySql => {
-                let mut options = MySqlSettingsBuilder::empty();
-                options.migration_location("migrations")?;
+                let options = MySqlSettingsBuilder::empty().migration_location("migrations")?;
                 DatabaseConfigOptions::MySql(options)
             }
         })

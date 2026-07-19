@@ -25,5 +25,21 @@ name/user/password/host/port and `database_params` options.
 Generated connection strings percent-encode credentials and parameters so special
 characters in passwords and params are safe.
 
+## SETTIN-5
+
+The fluent setters on `SqliteSettingsBuilder`, `PostgresSettingsBuilder`, and
+`MySqlSettingsBuilder` (e.g. `database_path(self) -> Result<Self>`, `memory(self) -> Self`,
+`database_name(self) -> Self`) take and return an owned `Self`, not `&mut self`, so calls
+chain by value:
+
+```rust
+Settings::configure_sqlite()
+    .database_path("/abs/path/to/my.db")?
+    .migration_location("migrations")?
+    .build()?;
+```
+
+`build(&self)` still takes `&self` and does not consume the builder.
+
 Coverage: `migrant_lib/tests/server_dbs.rs`, `sqlite.rs`; unit tests in
 `migrant_lib/src/config/builders.rs`. `ssl_cert_file` has no dedicated test.

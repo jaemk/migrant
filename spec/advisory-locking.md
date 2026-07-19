@@ -45,6 +45,14 @@ new, unlocked session. The applied-state re-read at the start of a run does not
 re-read the settings file or swap the connection (see MIGRATOR-1), so the run
 cannot silently migrate over a different connection than the one it locked.
 
+## LOCK-7
+
+The `migrant` CLI exposes a `--no-sync` flag on the `apply` and `redo`
+subcommands that disables the cross-process advisory lock by calling
+`Migrator::synchronized(false)`, for use when migrations are already
+serialized by an external mechanism. On `redo` it applies to both the `down`
+and `up` runs.
+
 Coverage: `migrant_lib/src/drivers/pg.rs`, `mysql.rs` (`advisory_lock`, gated on
 the test connection strings and run via `test.sh`); both drivers' `advisory_lock`
 tests cover exclusivity and lock survival across an in-transaction error;

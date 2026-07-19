@@ -158,7 +158,7 @@ impl App {
         ])
         .areas(frame.area());
 
-        let applied = self.statuses.iter().filter(|m| m.applied).count();
+        let applied = self.statuses.iter().filter(|m| m.applied()).count();
         let header = Paragraph::new(Line::from(vec![
             Span::styled("migrant", Style::new().add_modifier(Modifier::BOLD)),
             Span::raw(format!(
@@ -175,14 +175,14 @@ impl App {
             .statuses
             .iter()
             .map(|mig| {
-                let (mark, style) = if mig.applied {
+                let (mark, style) = if mig.applied() {
                     ("✓", Style::new().fg(Color::Green))
                 } else {
                     (" ", Style::new().fg(Color::DarkGray))
                 };
                 ListItem::new(Line::from(vec![
                     Span::styled(format!("[{}] ", mark), style),
-                    Span::raw(mig.tag.clone()),
+                    Span::raw(mig.tag().to_string()),
                 ]))
             })
             .collect::<Vec<_>>();
@@ -236,7 +236,7 @@ mod tests {
     }
 
     fn applied_count(app: &App) -> usize {
-        app.statuses.iter().filter(|m| m.applied).count()
+        app.statuses.iter().filter(|m| m.applied()).count()
     }
 
     fn buffer_text(app: &mut App) -> String {

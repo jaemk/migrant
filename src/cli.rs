@@ -19,6 +19,17 @@ fn force_arg() -> Arg {
         )
 }
 
+/// `--no-sync`: disable the cross-process advisory lock (postgres/mysql).
+fn no_sync_arg() -> Arg {
+    Arg::new("no-sync")
+        .long("no-sync")
+        .action(ArgAction::SetTrue)
+        .help(
+            "Disable the cross-process advisory lock (postgres/mysql). Use only when \
+             migration runs are serialized by an external mechanism",
+        )
+}
+
 pub fn build_cli() -> Command {
     Command::new("migrant")
         .version(env!("CARGO_PKG_VERSION"))
@@ -119,7 +130,8 @@ pub fn build_cli() -> Command {
                         .long("fake")
                         .action(ArgAction::SetTrue)
                         .help("Updates the migration table without running the migration"),
-                ),
+                )
+                .arg(no_sync_arg()),
         )
         .subcommand(
             Command::new("redo")
@@ -131,7 +143,8 @@ pub fn build_cli() -> Command {
                         .action(ArgAction::SetTrue)
                         .help("Re-applies (down, then up) all applied migrations instead of only the latest"),
                 )
-                .arg(force_arg()),
+                .arg(force_arg())
+                .arg(no_sync_arg()),
         )
         .subcommand(
             Command::new("new")

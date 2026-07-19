@@ -50,5 +50,20 @@ database advisory lock, and each migration is applied in a transaction with its 
 row. See [advisory-locking.md](advisory-locking.md) and
 [transactional-migrations.md](transactional-migrations.md).
 
+## MIGRATOR-6
+
+The `Migrator` setters `direction`, `force`, `fake`, `all`, `show_output`, and
+`synchronized` take and return an owned `self`, not `&mut self`, so calls chain by
+value:
+
+```rust
+Migrator::with_config(&config)
+    .direction(Direction::Up)
+    .all(true)
+    .apply()?;
+```
+
+`with_config(&Config)` and `apply(&self)` are unchanged.
+
 Coverage: `migrant_lib/tests/sqlite.rs`, `server_dbs.rs`, `reload_memory.rs`,
 `tests/migrant.rs`; unit tests in `migrant_lib/src/migrator.rs`.
