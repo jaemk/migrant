@@ -147,10 +147,7 @@ fn status_reports_text_and_json() {
     let migrations = value["migrations"].as_array().expect("array");
     assert_eq!(migrations.len(), 2);
     assert_eq!(
-        migrations
-            .iter()
-            .filter(|m| m["applied"] == true)
-            .count(),
+        migrations.iter().filter(|m| m["applied"] == true).count(),
         1
     );
 }
