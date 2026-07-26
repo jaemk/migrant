@@ -47,12 +47,5 @@ mysql = ["dep:mysql"]
 all = ["sqlite", "postgres", "mysql"]
 vendored-openssl = ["native-tls?/vendored"]
 
-# Deprecated aliases for the pre-1.0 `d-*` feature names. Prefer the bare
-# names above; these will be removed in a future release.
-d-sqlite = ["sqlite"]
-d-postgres = ["postgres"]
-d-mysql = ["mysql"]
-d-all = ["all"]
-
 [package.metadata.docs.rs]
 features = ["all"]

@@ -13,6 +13,10 @@
   `Migrator`, `#[non_exhaustive]` `DbKind`/`ForceMode`, and `MigrationStatus` field accessors.
   See the migrant_lib changelog. These are source-compatible for existing chained call sites
 
+### Removed
+- `migrant_lib`'s deprecated `d-sqlite`/`d-postgres`/`d-mysql`/`d-all` feature aliases. Use
+  `sqlite`/`postgres`/`mysql`/`all`
+
 ## [1.0.0-rc.1]
 ### Added
 - `--force` takes an optional mode: bare `--force` (or `--force=accept-failures`) records a

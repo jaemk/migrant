@@ -11,8 +11,7 @@ you only build the drivers you need.
 
 The library also has `all` to enable all three. No backend is enabled by
 default; invoking an operation whose feature is disabled returns
-`Error::FeatureRequired` rather than panicking. The pre-1.0 `d-sqlite` /
-`d-postgres` / `d-mysql` / `d-all` names remain as deprecated aliases.
+`Error::FeatureRequired` rather than panicking.
 
 ## SQLite
 
