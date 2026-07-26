@@ -17,6 +17,10 @@ Breaking pre-1.0 release, continuing the API cleanup from rc.1.
   must include a wildcard arm. This allows future backends and force modes to be added without a
   breaking change
 
+### Removed
+- The deprecated `d-sqlite`/`d-postgres`/`d-mysql`/`d-all` feature aliases. Use
+  `sqlite`/`postgres`/`mysql`/`all`
+
 ## [1.0.0-rc.1]
 Breaking pre-1.0 release. See the "Changed"/"Removed" sections for migration notes.
 

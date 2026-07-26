@@ -31,7 +31,7 @@ disposable docker containers (see below).
 cargo test
 
 # sqlite only (bundled, no services needed)
-cargo test --features d-sqlite
+cargo test --features sqlite
 
 # everything, using throwaway docker databases for postgres/mysql
 ./test.sh
