@@ -153,9 +153,19 @@ jobs:
           pattern: dist-*
           path: dist
           merge-multiple: true
+      - name: Compute release kind
+        id: kind
+        run: |
+          version="${GITHUB_REF_NAME#cli-v}"
+          # Prereleases (e.g. rc/beta) carry a `-` in the semver.
+          case "$version" in
+            *-*) echo "prerelease=true" >> "$GITHUB_OUTPUT" ;;
+            *) echo "prerelease=false" >> "$GITHUB_OUTPUT" ;;
+          esac
       - name: Create release and upload binaries
         uses: softprops/action-gh-release@v2
         with:
+          prerelease: ${{ steps.kind.outputs.prerelease }}
           files: |
             dist/migrant-*.tar.gz
             dist/migrant-*.zip
