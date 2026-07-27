@@ -26,7 +26,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install mdBook
         run: |
           mkdir -p "$HOME/.local/bin"
@@ -42,8 +42,8 @@ jobs:
           cp -r docs/landing/. _site/
           mkdir -p _site/guide
           cp -r docs/book/. _site/guide/
-      - uses: actions/configure-pages@v5
-      - uses: actions/upload-pages-artifact@v3
+      - uses: actions/configure-pages@v6
+      - uses: actions/upload-pages-artifact@v5
         with:
           path: _site
 
@@ -58,10 +58,10 @@ jobs:
       # first status poll. Retry once after a short settle so a transient backend
       # blip does not fail the run; a persistent failure still fails the retry.
       - id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5
         continue-on-error: true
       - if: steps.deployment.outcome == 'failure'
         run: sleep 30
       - id: deployment_retry
         if: steps.deployment.outcome == 'failure'
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5
