@@ -6,7 +6,7 @@ backend feature (`sqlite`, `postgres`, `mysql`, or `all`):
 
 ```toml
 [dependencies]
-migrant_lib = { version = "1.0.0-rc.1", features = ["postgres"] }
+migrant_lib = { version = "1.0.0-rc.2", features = ["postgres"] }
 ```
 
 ## The pieces

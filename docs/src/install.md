@@ -48,7 +48,7 @@ Add `migrant_lib` to your project and enable a backend feature. See
 
 ```toml
 [dependencies]
-migrant_lib = { version = "1.0.0-rc.1", features = ["postgres"] }
+migrant_lib = { version = "1.0.0-rc.2", features = ["postgres"] }
 ```
 
 Next: the [Quickstart](quickstart.md).
