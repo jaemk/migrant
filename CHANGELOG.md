@@ -1,5 +1,53 @@
 # Changelog
 
+## [Unreleased]
+### Added
+- `apply` accepts `--step N` to apply exactly N migrations, in either direction
+- `apply` and `redo` accept `--allow-unknown-tags` to permit a run when the database has an
+  applied tag not present in the defined migration set, and `--allow-out-of-order` to permit
+  applying migrations out of their defined order. Both are off by default: an unknown applied
+  tag or an out-of-order pending migration now aborts the run with an error
+
+### Changed
+- `apply` applies all pending migrations by default, instead of just the next one. Use
+  `--step 1`, or `--down` (which remains single-step by default), to move one migration at a
+  time
+- The `__migrant_migrations` bookkeeping table is now multi-column (`id`, `tag`, `checksum`,
+  `applied_at`) instead of a single `tag` column. Each applied migration now records a sha256
+  checksum of its up-SQL (null for programmatic migrations) and an applied-at timestamp, and
+  applied order is tracked by `id` rather than inferred from file/tag order. `redo` and
+  `apply --down` now target the most-recently-applied migration by this recorded order.
+
+  This is a one-time breaking change to the on-disk schema. If you don't need to preserve
+  applied history, the simplest upgrade is to drop the existing `__migrant_migrations` table
+  and let `migrant setup` recreate it. To upgrade an existing table in place instead, add the
+  missing columns and backfill them (existing rows can be left with `checksum` null):
+
+  ```sql
+  -- postgres
+  alter table __migrant_migrations add column id bigserial;
+  alter table __migrant_migrations add column checksum text;
+  alter table __migrant_migrations add column applied_at timestamptz not null default now();
+
+  -- sqlite
+  alter table __migrant_migrations add column id integer;
+  alter table __migrant_migrations add column checksum text;
+  alter table __migrant_migrations add column applied_at text not null default (datetime('now'));
+
+  -- mysql
+  alter table __migrant_migrations add column id bigint unsigned auto_increment unique;
+  alter table __migrant_migrations add column checksum text;
+  alter table __migrant_migrations add column applied_at timestamp not null default current_timestamp;
+  ```
+
+  Since applied order was not previously tracked, `id` will not necessarily reflect the
+  original apply order after an in-place upgrade; reconstruct it manually (e.g. from your own
+  deployment history) if order matters, or prefer the fresh-table path above.
+
+### Removed
+- `apply --all`. Applying all pending migrations is now the default; use `--step N` if you
+  need to control how many migrations move
+
 ## [1.0.0-rc.2]
 ### Added
 - `migrant status` reports every managed migration's applied/pending state with summary counts,

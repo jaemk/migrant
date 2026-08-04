@@ -19,7 +19,10 @@ apply returns an empty `Report`, not an error.
 ## MIGRATOR-2
 
 `direction(Direction::Up|Down)` sets the migration direction; `all(bool)` applies every
-remaining migration in that direction instead of just the next one.
+remaining migration in that direction instead of just the next one. Applied order is
+tracked in the bookkeeping table (by an `id` recorded per migration) and is authoritative
+for a `Direction::Down` run: it targets the most-recently-applied migration by this
+recorded order, not by scanning the defined migration list.
 
 ## MIGRATOR-3
 
@@ -64,6 +67,18 @@ Migrator::with_config(&config)
 ```
 
 `with_config(&Config)` and `apply(&self)` are unchanged.
+
+## MIGRATOR-7
+
+By default, a run errors before applying anything if either check fails:
+
+- Unknown tags: the database records an applied tag that is not present in the defined
+  migration set.
+- Out of order: a pending migration would apply out of the order defined by the migration
+  set, given what is already recorded as applied.
+
+`Migrator::allow_unknown_tags(bool)` (default `false`) and `Migrator::allow_out_of_order(bool)`
+(default `false`) each opt out of the corresponding check.
 
 Coverage: `migrant_lib/tests/sqlite.rs`, `server_dbs.rs`, `reload_memory.rs`,
 `tests/migrant.rs`; unit tests in `migrant_lib/src/migrator.rs`.

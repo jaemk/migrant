@@ -31,4 +31,15 @@ out (the directive takes precedence); `FnMigration` never runs in a
 migrator-managed transaction. See
 [transactional-migrations.md](transactional-migrations.md).
 
+## MIGTYPE-6
+
+`Migratable::checksum()` returns a sha256 checksum of a migration's up-SQL, recorded in the
+bookkeeping table when the migration is applied. `FileMigration` and `EmbeddedMigration`
+compute it from their up-SQL; `FnMigration` (a programmatic migration with no SQL) returns
+`None`, recorded as a null checksum.
+
+## MIGTYPE-7
+
+`Migratable::description(Direction)` takes `Direction` by value instead of by reference.
+
 Coverage: `migrant_lib/tests/sqlite.rs`, `server_dbs.rs`, `reload_memory.rs`.
