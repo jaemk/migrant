@@ -14,15 +14,22 @@ use crate::DbKind;
 
 #[allow(dead_code)] // per-backend statements are unused when their feature is disabled
 pub(crate) mod sql {
-    pub static CREATE_TABLE: &str = "create table __migrant_migrations(tag text unique);";
-    pub static MYSQL_CREATE_TABLE: &str =
-        "create table __migrant_migrations(tag varchar(512) unique);";
+    // The bookkeeping table carries, besides the migration `tag`: a surrogate
+    // `id` whose ascending order is the authoritative recorded application
+    // order, an optional `checksum` (lowercase hex sha256 of the raw up-direction
+    // SQL, NULL for programmatic migrations that have no SQL to hash), and an
+    // `applied_at` timestamp populated by the column default.
+    pub static PG_CREATE_TABLE: &str = "create table __migrant_migrations(id serial primary key, tag text unique not null, checksum text, applied_at timestamptz not null default now());";
+    pub static SQLITE_CREATE_TABLE: &str = "create table __migrant_migrations(id integer primary key autoincrement, tag text unique not null, checksum text, applied_at timestamp not null default current_timestamp);";
+    pub static MYSQL_CREATE_TABLE: &str = "create table __migrant_migrations(id integer primary key auto_increment, tag varchar(512) unique not null, checksum text null, applied_at timestamp not null default current_timestamp);";
 
-    pub static GET_MIGRATIONS: &str = "select tag from __migrant_migrations;";
+    // Recorded application order is authoritative, so order by the surrogate id.
+    pub static GET_MIGRATIONS: &str = "select tag from __migrant_migrations order by id;";
     pub static INSERT_MIGRATION_PG_SQLITE: &str =
-        "insert into __migrant_migrations (tag) values ($1)";
+        "insert into __migrant_migrations (tag, checksum) values ($1, $2)";
     pub static REMOVE_MIGRATION_PG_SQLITE: &str = "delete from __migrant_migrations where tag = $1";
-    pub static INSERT_MIGRATION_MYSQL: &str = "insert into __migrant_migrations (tag) values (?)";
+    pub static INSERT_MIGRATION_MYSQL: &str =
+        "insert into __migrant_migrations (tag, checksum) values (?, ?)";
     pub static REMOVE_MIGRATION_MYSQL: &str = "delete from __migrant_migrations where tag = ?";
 
     pub static SQLITE_MIGRATION_TABLE_EXISTS: &str = "select exists(select 1 from sqlite_master where type = 'table' and name = '__migrant_migrations');";
@@ -139,9 +146,10 @@ impl DbConnection {
         dispatch!(self, c => c.applied_tags())
     }
 
-    /// Record a migration tag as applied
-    pub(crate) fn insert_tag(&mut self, tag: &str) -> Result<()> {
-        dispatch!(self, c => c.insert_tag(tag))
+    /// Record a migration tag as applied, along with its optional checksum
+    /// (`applied_at` is populated by the column default)
+    pub(crate) fn insert_tag(&mut self, tag: &str, checksum: Option<&str>) -> Result<()> {
+        dispatch!(self, c => c.insert_tag(tag, checksum))
     }
 
     /// Remove a migration tag from the applied set
@@ -197,6 +205,41 @@ mod tests {
             sql::MYSQL_MIGRATION_TABLE_EXISTS.contains("table_schema = database()"),
             "MYSQL_MIGRATION_TABLE_EXISTS must filter on table_schema = database(): {}",
             sql::MYSQL_MIGRATION_TABLE_EXISTS
+        );
+    }
+
+    /// Every backend's create-table statement must carry the `tag`, `checksum`,
+    /// and `applied_at` columns, and applied tags must be selected in recorded
+    /// order (`order by id`) so the recorded application order is authoritative.
+    #[test]
+    fn create_table_statements_carry_checksum_and_applied_at() {
+        for (name, ddl) in [
+            ("pg", sql::PG_CREATE_TABLE),
+            ("sqlite", sql::SQLITE_CREATE_TABLE),
+            ("mysql", sql::MYSQL_CREATE_TABLE),
+        ] {
+            assert!(
+                ddl.contains("tag"),
+                "{name} ddl must have a tag column: {ddl}"
+            );
+            assert!(
+                ddl.contains("checksum"),
+                "{name} ddl must have a checksum column: {ddl}"
+            );
+            assert!(
+                ddl.contains("applied_at"),
+                "{name} ddl must have an applied_at column: {ddl}"
+            );
+        }
+        assert!(
+            sql::GET_MIGRATIONS.contains("order by id"),
+            "GET_MIGRATIONS must order by id: {}",
+            sql::GET_MIGRATIONS
+        );
+        assert!(
+            sql::INSERT_MIGRATION_PG_SQLITE.contains("checksum")
+                && sql::INSERT_MIGRATION_MYSQL.contains("checksum"),
+            "inserts must carry the checksum column"
         );
     }
 }

@@ -114,8 +114,13 @@ pub(crate) fn search_for_migrations(mig_root: &Path) -> Result<Vec<FileMigration
         });
     }
 
-    // sort by timestamps chronologically
-    migrations.sort_by_key(|m| m.stamp);
+    // Order chronologically, breaking same-second ties on the (unique) tag so
+    // the result is a total, deterministic order independent of the HashMap
+    // iteration order above. Without the tiebreak, migrations sharing a stamp
+    // second would keep the random HashMap order, and the migrator's strict
+    // ordering check (which treats discovery order as authoritative) would
+    // spuriously flag them as out-of-order across repeated searches in a run.
+    migrations.sort_by(|a, b| a.stamp.cmp(&b.stamp).then_with(|| a.tag.cmp(&b.tag)));
     Ok(migrations)
 }
 
@@ -204,14 +209,40 @@ pub fn list(config: &Config) -> Result<()> {
     Ok(())
 }
 
-/// Create a new migration with the given tag
+/// The migration directory and files created by [`create_migration`].
+#[derive(Debug, Clone)]
+pub struct NewMigration {
+    dir: PathBuf,
+    up: PathBuf,
+    down: PathBuf,
+}
+
+impl NewMigration {
+    /// The created migration directory (`<migration_location>/<stamp>_<tag>`)
+    pub fn dir(&self) -> &Path {
+        &self.dir
+    }
+
+    /// The created `up.sql` file path
+    pub fn up_path(&self) -> &Path {
+        &self.up
+    }
+
+    /// The created `down.sql` file path
+    pub fn down_path(&self) -> &Path {
+        &self.down
+    }
+}
+
+/// Create a new migration with the given tag, returning the paths that were
+/// created.
 ///
 /// Generated tags will follow the format `{DT-STAMP}_{TAG}`
 ///
 /// Intended only for use when running in "migrant CLI compatibility mode"
 /// where migrations (`FileMigration`s) are all files with names following
 /// the expected timestamp formatted name.
-pub fn new(config: &Config, tag: &str) -> Result<()> {
+pub fn create_migration(config: &Config, tag: &str) -> Result<NewMigration> {
     if !tags::is_valid_simple_tag(tag) {
         bail!(
             Migration,
@@ -225,10 +256,15 @@ pub fn new(config: &Config, tag: &str) -> Result<()> {
     let mig_dir = config.migration_location()?.join(folder);
     fs::create_dir_all(&mig_dir)?;
 
-    for name in ["up.sql", "down.sql"] {
-        fs::File::create(mig_dir.join(name))?;
-    }
-    Ok(())
+    let up = mig_dir.join("up.sql");
+    let down = mig_dir.join("down.sql");
+    fs::File::create(&up)?;
+    fs::File::create(&down)?;
+    Ok(NewMigration {
+        dir: mig_dir,
+        up,
+        down,
+    })
 }
 
 /// Open a repl connection to the given `Config` settings
@@ -404,10 +440,10 @@ fn select_from_matches<'a>(tag: &str, matches: &'a [FileMigration]) -> Result<&'
 /// In the case of ambiguous names, the user will be prompted for a selection.
 ///
 /// Intended only for use with `FileMigration`s that were created by
-/// `migrant_lib::new` or `migrant` CLI (migration files with names that
-/// follow the expected timestamp format), NOT those managed directly in source
-/// with `Config::use_migrations`.
-pub fn edit(config: &Config, tag: &str, up_down: &Direction) -> Result<()> {
+/// `migrant_lib::create_migration` or `migrant` CLI (migration files with names
+/// that follow the expected timestamp format), NOT those managed directly in
+/// source with `Config::use_migrations`.
+pub fn edit(config: &Config, tag: &str, up_down: Direction) -> Result<()> {
     let mig_dir = config.migration_location()?;
 
     let available = search_for_migrations(&mig_dir)?;
@@ -484,6 +520,50 @@ mod tests {
     }
 
     #[test]
+    fn create_migration_returns_created_paths() {
+        // Use an absolute migration_location so no settings file is needed.
+        let dir = tempfile::tempdir().unwrap();
+        let settings = crate::config::Settings::configure_sqlite()
+            .database_path("/abs/some.db")
+            .migration_location(dir.path())
+            .build()
+            .unwrap();
+        let config = Config::with_settings(settings);
+
+        let created = create_migration(&config, "add-widgets").unwrap();
+
+        // The returned paths are the ones that now exist on disk.
+        assert!(created.dir().is_dir(), "the migration dir must be created");
+        assert!(created.up_path().is_file(), "up.sql must be created");
+        assert!(created.down_path().is_file(), "down.sql must be created");
+        assert_eq!(created.up_path().file_name().unwrap(), "up.sql");
+        assert_eq!(created.down_path().file_name().unwrap(), "down.sql");
+        assert_eq!(created.up_path().parent().unwrap(), created.dir());
+        assert_eq!(created.down_path().parent().unwrap(), created.dir());
+        // The generated folder is `<14-digit-stamp>_<tag>`.
+        let folder = created.dir().file_name().unwrap().to_str().unwrap();
+        assert!(
+            folder.ends_with("_add-widgets"),
+            "folder must be stamped and tagged: {folder}"
+        );
+        let (stamp, _) = folder.split_once('_').unwrap();
+        assert_eq!(14, stamp.len(), "stamp must be 14 digits: {stamp}");
+        assert!(stamp.chars().all(|c| c.is_ascii_digit()));
+    }
+
+    #[test]
+    fn create_migration_rejects_invalid_tag() {
+        let dir = tempfile::tempdir().unwrap();
+        let settings = crate::config::Settings::configure_sqlite()
+            .database_path("/abs/some.db")
+            .migration_location(dir.path())
+            .build()
+            .unwrap();
+        let config = Config::with_settings(settings);
+        assert!(create_migration(&config, "Bad Tag!").is_err());
+    }
+
+    #[test]
     fn migration_search_finds_and_sorts() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
@@ -500,6 +580,51 @@ mod tests {
         assert_eq!(2, migs.len());
         assert_eq!("20190101000000_first", migs[0].tag());
         assert_eq!("20200101000000_second", migs[1].tag());
+    }
+
+    #[test]
+    fn migration_search_orders_same_second_migrations_deterministically() {
+        // Several migrations sharing the same timestamp second. Their discovery
+        // order must be a total, deterministic order (stamp then tag), not the
+        // random HashMap iteration order -- otherwise repeated searches within a
+        // run disagree and the migrator's strict ordering check spuriously fails.
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        // Same second `20200101000000`, tags intentionally not in sorted order
+        // on disk-creation order.
+        let tags_in = [
+            "20200101000000_delta",
+            "20200101000000_alpha",
+            "20200101000000_charlie",
+            "20200101000000_bravo",
+        ];
+        for folder in tags_in {
+            let d = root.join(folder);
+            fs::create_dir_all(&d).unwrap();
+            fs::write(d.join("up.sql"), "select 1;").unwrap();
+            fs::write(d.join("down.sql"), "select 1;").unwrap();
+        }
+
+        let expected = vec![
+            "20200101000000_alpha".to_string(),
+            "20200101000000_bravo".to_string(),
+            "20200101000000_charlie".to_string(),
+            "20200101000000_delta".to_string(),
+        ];
+
+        // Repeated independent searches (each builds a fresh HashMap with a new
+        // random seed) must all agree on the tag-sorted total order.
+        for _ in 0..16 {
+            let order = search_for_migrations(root)
+                .unwrap()
+                .into_iter()
+                .map(|m| m.tag())
+                .collect::<Vec<_>>();
+            assert_eq!(
+                expected, order,
+                "same-second migrations must resolve to a deterministic tag-sorted order"
+            );
+        }
     }
 
     #[test]
@@ -623,7 +748,6 @@ mod tests {
     fn sqlite_shell_opens_database_path() {
         let settings = crate::config::Settings::configure_sqlite()
             .database_path("/tmp/some.db")
-            .unwrap()
             .build()
             .unwrap();
         let config = Config::with_settings(settings);

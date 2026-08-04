@@ -51,6 +51,7 @@ percent-encoding = "2"
 postgres = "0.19"
 postgres-native-tls = "0.5"
 serde = { version = "1", features = ["derive"] }
+sha2 = "0.10"
 tempfile = "3"
 thiserror = "2"
 toml = "0.9"

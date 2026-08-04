@@ -24,6 +24,13 @@ Connections are established lazily on first use and kept alive per `Config`.
 Invoking an operation whose backend feature is disabled returns
 `Error::FeatureRequired` rather than panicking.
 
+## BACKEND-6
+
+The `__migrant_migrations` bookkeeping table has four columns on all three backends: `id`
+(an auto-incrementing key recording applied order), `tag` (the migration tag), `checksum`
+(a sha256 checksum of the migration's up-SQL, null for programmatic migrations), and
+`applied_at` (a timestamp of when the migration was applied).
+
 Coverage: `migrant_lib/tests/sqlite.rs`; `server_dbs.rs` (postgres/mysql end-to-end,
 gated on POSTGRES_TEST_CONN_STR/MYSQL_TEST_CONN_STR, run via `test.sh` against docker
 databases).

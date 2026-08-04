@@ -40,6 +40,26 @@ template. Its setters take and return an owned `Self` so calls chain by value: `
 `initialize()` renders and writes the template. Without a database type set it either prompts
 (interactive) or errors (non-interactive).
 
+## LIBRAR-7
+
+`migrant_lib::create_migration(...)` (renamed from `migrant_lib::new`) generates a new up/down
+migration file pair and returns a `NewMigration`, with `dir()`, `up_path()`, and `down_path()`
+accessors, instead of `()`.
+
+## LIBRAR-8
+
+`migrant_lib::cli::list` (moved from the crate root, where it was `migrant_lib::list`) displays
+all managed migrations with their applied status.
+
+## LIBRAR-9
+
+`Migratable::description(Direction)` and `cli::edit(..., Direction)` take `Direction` by value
+instead of by reference.
+
+## LIBRAR-10
+
+`MigratableClone` is a sealed trait: it can no longer be implemented outside this crate.
+
 Coverage: `tests/migrant.rs` (init_non_interactive_creates_config,
 init_rejects_invalid_database_type, init --default-from-env); doc examples in
 `migrant_lib/src/config/init.rs`.

@@ -92,7 +92,7 @@ fn run(dir: &Path, matches: &clap::ArgMatches) -> Result<()> {
             // load applied migrations from the database
             let config = config.reload()?;
 
-            migrant_lib::list(&config)?;
+            migrant_lib::cli::list(&config)?;
         }
         Some(("status", matches)) => {
             // load applied migrations from the database
@@ -110,8 +110,10 @@ fn run(dir: &Path, matches: &clap::ArgMatches) -> Result<()> {
             let config = config.reload()?;
 
             let tag = matches.get_one::<String>("tag").expect("required arg");
-            migrant_lib::new(&config, tag)?;
-            migrant_lib::list(&config)?;
+            let new_migration = migrant_lib::create_migration(&config, tag)?;
+            println!("Created: {}", new_migration.up_path().display());
+            println!("Created: {}", new_migration.down_path().display());
+            migrant_lib::cli::list(&config)?;
         }
         Some(("apply", matches)) => {
             // load applied migrations from the database
@@ -119,24 +121,52 @@ fn run(dir: &Path, matches: &clap::ArgMatches) -> Result<()> {
 
             let force = force_mode(matches)?;
             let fake = matches.get_flag("fake");
-            let all = matches.get_flag("all");
             let no_sync = matches.get_flag("no-sync");
+            let allow_unknown_tags = matches.get_flag("allow-unknown-tags");
+            let allow_out_of_order = matches.get_flag("allow-out-of-order");
             let direction = if matches.get_flag("down") {
                 Direction::Down
             } else {
                 Direction::Up
             };
 
-            Migrator::with_config(&config)
-                .direction(direction)
-                .force(force)
-                .fake(fake)
-                .all(all)
-                .synchronized(!no_sync)
-                .apply()?;
+            match matches.get_one::<u64>("step") {
+                Some(&step) => {
+                    // Loop single-step runs, stopping early once a run
+                    // reports nothing left to do.
+                    for _ in 0..step {
+                        let report = Migrator::with_config(&config)
+                            .direction(direction)
+                            .force(force)
+                            .fake(fake)
+                            .all(false)
+                            .synchronized(!no_sync)
+                            .allow_unknown_tags(allow_unknown_tags)
+                            .allow_out_of_order(allow_out_of_order)
+                            .apply()?;
+                        if report.is_empty() {
+                            break;
+                        }
+                    }
+                }
+                None => {
+                    // Up defaults to applying every pending migration; down
+                    // defaults to reverting only the latest applied one.
+                    let all = direction == Direction::Up;
+                    Migrator::with_config(&config)
+                        .direction(direction)
+                        .force(force)
+                        .fake(fake)
+                        .all(all)
+                        .synchronized(!no_sync)
+                        .allow_unknown_tags(allow_unknown_tags)
+                        .allow_out_of_order(allow_out_of_order)
+                        .apply()?;
+                }
+            }
 
             let config = config.reload()?;
-            migrant_lib::list(&config)?;
+            migrant_lib::cli::list(&config)?;
         }
         Some(("redo", matches)) => {
             // load applied migrations from the database
@@ -145,24 +175,30 @@ fn run(dir: &Path, matches: &clap::ArgMatches) -> Result<()> {
             let force = force_mode(matches)?;
             let all = matches.get_flag("all");
             let no_sync = matches.get_flag("no-sync");
+            let allow_unknown_tags = matches.get_flag("allow-unknown-tags");
+            let allow_out_of_order = matches.get_flag("allow-out-of-order");
 
             Migrator::with_config(&config)
                 .direction(Direction::Down)
                 .force(force)
                 .all(all)
                 .synchronized(!no_sync)
+                .allow_unknown_tags(allow_unknown_tags)
+                .allow_out_of_order(allow_out_of_order)
                 .apply()?;
             let config = config.reload()?;
-            migrant_lib::list(&config)?;
+            migrant_lib::cli::list(&config)?;
 
             Migrator::with_config(&config)
                 .direction(Direction::Up)
                 .force(force)
                 .all(all)
                 .synchronized(!no_sync)
+                .allow_unknown_tags(allow_unknown_tags)
+                .allow_out_of_order(allow_out_of_order)
                 .apply()?;
             let config = config.reload()?;
-            migrant_lib::list(&config)?;
+            migrant_lib::cli::list(&config)?;
         }
         Some(("shell", _)) => {
             migrant_lib::cli::shell(&config)?;
@@ -174,7 +210,7 @@ fn run(dir: &Path, matches: &clap::ArgMatches) -> Result<()> {
             } else {
                 Direction::Up
             };
-            migrant_lib::cli::edit(&config, tag, &up_down)?;
+            migrant_lib::cli::edit(&config, tag, up_down)?;
         }
         Some(("which-config", _)) => {
             let path = config_path

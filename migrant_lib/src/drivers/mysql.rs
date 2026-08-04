@@ -51,8 +51,9 @@ impl MySqlConn {
         Ok(self.conn.query(sql::GET_MIGRATIONS)?)
     }
 
-    pub(crate) fn insert_tag(&mut self, tag: &str) -> Result<()> {
-        self.conn.exec_drop(sql::INSERT_MIGRATION_MYSQL, (tag,))?;
+    pub(crate) fn insert_tag(&mut self, tag: &str, checksum: Option<&str>) -> Result<()> {
+        self.conn
+            .exec_drop(sql::INSERT_MIGRATION_MYSQL, (tag, checksum))?;
         Ok(())
     }
 
@@ -142,10 +143,30 @@ mod tests {
         assert!(!conn.setup_migration_table().unwrap(), "setup idempotent");
         assert!(conn.migration_table_exists().unwrap(), "table exists");
 
-        conn.insert_tag("initial").unwrap();
-        conn.insert_tag("alter1").unwrap();
-        conn.insert_tag("alter2").unwrap();
-        assert_eq!(3, conn.applied_tags().unwrap().len());
+        conn.insert_tag("initial", Some("abc123")).unwrap();
+        conn.insert_tag("alter1", None).unwrap();
+        conn.insert_tag("alter2", Some("def456")).unwrap();
+        // Recorded order is authoritative: tags come back in insertion (id) order.
+        assert_eq!(
+            vec!["initial", "alter1", "alter2"],
+            conn.applied_tags().unwrap()
+        );
+
+        // The checksum column carries the inserted value (NULL where None).
+        let checksums: Vec<Option<String>> = conn
+            .conn
+            .query("select checksum from __migrant_migrations order by id")
+            .unwrap();
+        assert_eq!(
+            vec![Some("abc123".to_string()), None, Some("def456".to_string())],
+            checksums
+        );
+        // `applied_at` is populated by the column default.
+        let stamped: Option<i64> = conn
+            .conn
+            .query_first("select count(*) from __migrant_migrations where applied_at is not null")
+            .unwrap();
+        assert_eq!(Some(3), stamped);
 
         conn.remove_tag("alter2").unwrap();
         assert_eq!(2, conn.applied_tags().unwrap().len());

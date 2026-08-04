@@ -6,7 +6,8 @@ Typed builders for sqlite, postgres, and mysql settings.
 
 `Settings::configure_sqlite()` returns a `SqliteSettingsBuilder` with `database_path`
 (absolute, or relative to the config file), `memory()` for an in-memory database, and
-`migration_location`.
+`migration_location`. `database_path` and `migration_location` are infallible setters;
+invalid values (e.g. an empty path) surface as an error from `build()`, not from the setter.
 
 ## SETTIN-2
 
@@ -28,18 +29,25 @@ characters in passwords and params are safe.
 ## SETTIN-5
 
 The fluent setters on `SqliteSettingsBuilder`, `PostgresSettingsBuilder`, and
-`MySqlSettingsBuilder` (e.g. `database_path(self) -> Result<Self>`, `memory(self) -> Self`,
+`MySqlSettingsBuilder` (e.g. `database_path(self) -> Self`, `memory(self) -> Self`,
 `database_name(self) -> Self`) take and return an owned `Self`, not `&mut self`, so calls
 chain by value:
 
 ```rust
 Settings::configure_sqlite()
-    .database_path("/abs/path/to/my.db")?
-    .migration_location("migrations")?
+    .database_path("/abs/path/to/my.db")
+    .migration_location("migrations")
     .build()?;
 ```
 
 `build(&self)` still takes `&self` and does not consume the builder.
+
+## SETTIN-6
+
+`database_path` and `migration_location` are infallible: they take and return `Self` directly
+(not `Result<Self>`), so they can sit anywhere in a builder chain without an intervening `?`.
+Validation of their values (e.g. an empty path) is deferred to `build()`, which still returns
+`Result<Settings>`.
 
 Coverage: `migrant_lib/tests/server_dbs.rs`, `sqlite.rs`; unit tests in
 `migrant_lib/src/config/builders.rs`. `ssl_cert_file` has no dedicated test.
