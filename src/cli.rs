@@ -30,6 +30,28 @@ fn no_sync_arg() -> Arg {
         )
 }
 
+/// `--allow-unknown-tags`: tolerate applied tags absent from the available set.
+fn allow_unknown_tags_arg() -> Arg {
+    Arg::new("allow-unknown-tags")
+        .long("allow-unknown-tags")
+        .action(ArgAction::SetTrue)
+        .help(
+            "Tolerate applied migration tags that are not among the available migrations, \
+             instead of aborting",
+        )
+}
+
+/// `--allow-out-of-order`: tolerate applied migrations out of definition order.
+fn allow_out_of_order_arg() -> Arg {
+    Arg::new("allow-out-of-order")
+        .long("allow-out-of-order")
+        .action(ArgAction::SetTrue)
+        .help(
+            "Tolerate an applied migration that is out of order relative to definition \
+             order, instead of aborting",
+        )
+}
+
 pub fn build_cli() -> Command {
     Command::new("migrant")
         .version(env!("CARGO_PKG_VERSION"))
@@ -122,7 +144,12 @@ pub fn build_cli() -> Command {
         )
         .subcommand(
             Command::new("apply")
-                .about("Moves up or down (applies up/down.sql) one migration. Default direction is up unless specified with `-d/--down`.")
+                .about(
+                    "Applies pending migrations. Default direction is up, applying all pending \
+                     migrations in one run; use `-d/--down` to revert the latest applied \
+                     migration instead, or `--step N` to limit either direction to N \
+                     migrations.",
+                )
                 .arg(
                     Arg::new("down")
                         .long("down")
@@ -131,11 +158,14 @@ pub fn build_cli() -> Command {
                         .help("Applies `down.sql` migrations"),
                 )
                 .arg(
-                    Arg::new("all")
-                        .long("all")
-                        .short('a')
-                        .action(ArgAction::SetTrue)
-                        .help("Applies all remaining migrations in the chosen direction (un-applies all with --down)"),
+                    Arg::new("step")
+                        .long("step")
+                        .value_parser(clap::value_parser!(u64).range(1..))
+                        .value_name("N")
+                        .help(
+                            "Apply at most N migrations in the chosen direction, stopping early \
+                             if none remain",
+                        ),
                 )
                 .arg(force_arg())
                 .arg(
@@ -144,7 +174,9 @@ pub fn build_cli() -> Command {
                         .action(ArgAction::SetTrue)
                         .help("Updates the migration table without running the migration"),
                 )
-                .arg(no_sync_arg()),
+                .arg(no_sync_arg())
+                .arg(allow_unknown_tags_arg())
+                .arg(allow_out_of_order_arg()),
         )
         .subcommand(
             Command::new("redo")
@@ -157,7 +189,9 @@ pub fn build_cli() -> Command {
                         .help("Re-applies (down, then up) all applied migrations instead of only the latest"),
                 )
                 .arg(force_arg())
-                .arg(no_sync_arg()),
+                .arg(no_sync_arg())
+                .arg(allow_unknown_tags_arg())
+                .arg(allow_out_of_order_arg()),
         )
         .subcommand(
             Command::new("new")
