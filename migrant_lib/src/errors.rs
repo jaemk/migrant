@@ -21,6 +21,11 @@ pub enum Error {
     #[error("MigrationNotFound: {0}")]
     MigrationNotFound(String),
 
+    /// An applied migration was recorded out of order relative to the
+    /// definition order of the available migrations
+    #[error("MigrationOrdering: {0}")]
+    MigrationOrdering(String),
+
     /// Failure while running an external command (editor, database shell)
     #[error("ShellCommandError: {0}")]
     ShellCommand(String),
@@ -89,6 +94,11 @@ impl Error {
         matches!(self, Error::MigrationNotFound(_))
     }
 
+    /// `true` for [`Error::MigrationOrdering`]
+    pub fn is_migration_ordering(&self) -> bool {
+        matches!(self, Error::MigrationOrdering(_))
+    }
+
     /// `true` for [`Error::ShellCommand`]
     pub fn is_shell_command(&self) -> bool {
         matches!(self, Error::ShellCommand(_))
@@ -118,6 +128,7 @@ mod tests {
     fn predicates_match_their_variant() {
         assert!(Error::TagError("dup".to_string()).is_tag_error());
         assert!(Error::MigrationNotFound("x".to_string()).is_migration_not_found());
+        assert!(Error::MigrationOrdering("y".to_string()).is_migration_ordering());
         assert!(Error::FeatureRequired("sqlite").is_feature_required());
     }
 
