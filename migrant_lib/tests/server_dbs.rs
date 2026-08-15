@@ -118,6 +118,9 @@ fn postgres_end_to_end() {
     drop_pg_migration_table(&conn_str);
     apply_and_unapply(&settings);
     drop_pg_migration_table(&conn_str);
+    // schema (checksum/applied_at) + recorded-order phase, same database
+    assert_pg_schema_records_checksum_and_order(&conn_str, &settings);
+    drop_pg_migration_table(&conn_str);
     // atomic-rollback phase runs against the same database (see the helper doc)
     assert_failed_migration_rolls_back(&conn_str, &settings);
     drop_pg_migration_table(&conn_str);
@@ -172,6 +175,101 @@ fn assert_unsynchronized_run_skips_lock(conn_str: &str, settings: &Settings) {
 
     client
         .execute("select pg_advisory_unlock_all()", &[])
+        .unwrap();
+}
+
+/// After applying two embedded migrations, the `__migrant_migrations` table on
+/// postgres carries the new bookkeeping columns: `applied_at` is populated by
+/// the column default, `checksum` holds the sha256 of each migration's up SQL,
+/// and `order by id` reflects the recorded application order. Shares the
+/// postgres database with `postgres_end_to_end`, so it runs as one of its phases.
+#[cfg(feature = "postgres")]
+fn assert_pg_schema_records_checksum_and_order(conn_str: &str, settings: &Settings) {
+    use sha2::{Digest, Sha256};
+
+    fn sha256_hex(bytes: &[u8]) -> String {
+        let mut h = Sha256::new();
+        h.update(bytes);
+        h.finalize().iter().map(|b| format!("{:02x}", b)).collect()
+    }
+
+    let up_a = "create table users (name varchar(64));";
+    let up_b = "insert into users (name) values ('james');";
+
+    let mut config = Config::with_settings(settings.clone());
+    config
+        .use_migrations(&[
+            EmbeddedMigration::with_tag("create-users")
+                .up(up_a)
+                .down("drop table users;")
+                .boxed(),
+            EmbeddedMigration::with_tag("seed-users")
+                .up(up_b)
+                .down("delete from users where name = 'james';")
+                .boxed(),
+        ])
+        .unwrap();
+    config.setup().unwrap();
+    let config = config.reload().unwrap();
+    Migrator::with_config(&config)
+        .all(true)
+        .show_output(false)
+        .apply()
+        .unwrap();
+
+    let mut client = postgres::Client::connect(conn_str, postgres::NoTls).unwrap();
+
+    // The new columns exist.
+    for col in ["id", "tag", "checksum", "applied_at"] {
+        let exists: bool = client
+            .query_one(
+                "select exists(select 1 from information_schema.columns \
+                 where table_name = '__migrant_migrations' and column_name = $1)",
+                &[&col],
+            )
+            .unwrap()
+            .get(0);
+        assert!(
+            exists,
+            "column `{}` must exist on __migrant_migrations",
+            col
+        );
+    }
+
+    // Recorded order (order by id) matches application order, and checksums are
+    // the sha256 of each up SQL.
+    let rows = client
+        .query(
+            "select tag, checksum, applied_at is not null \
+             from __migrant_migrations order by id",
+            &[],
+        )
+        .unwrap();
+    let recorded: Vec<(String, Option<String>, bool)> = rows
+        .iter()
+        .map(|r| (r.get(0), r.get(1), r.get(2)))
+        .collect();
+    assert_eq!(
+        vec![
+            (
+                "create-users".to_string(),
+                Some(sha256_hex(up_a.as_bytes())),
+                true
+            ),
+            (
+                "seed-users".to_string(),
+                Some(sha256_hex(up_b.as_bytes())),
+                true
+            ),
+        ],
+        recorded,
+    );
+
+    Migrator::with_config(&config)
+        .direction(Direction::Down)
+        .all(true)
+        .show_output(false)
+        .apply()
         .unwrap();
 }
 
@@ -297,4 +395,95 @@ fn mysql_end_to_end() {
     drop_mysql_migration_table(&conn_str);
     apply_and_unapply(&settings);
     drop_mysql_migration_table(&conn_str);
+    // schema (checksum/applied_at) + recorded-order phase, same database
+    assert_mysql_schema_records_checksum_and_order(&conn_str, &settings);
+    drop_mysql_migration_table(&conn_str);
+}
+
+/// After applying two embedded migrations, the `__migrant_migrations` table on
+/// mysql carries the new bookkeeping columns: `applied_at` is populated by the
+/// column default, `checksum` holds the sha256 of each migration's up SQL, and
+/// `order by id` reflects the recorded application order. Shares the mysql
+/// database with `mysql_end_to_end`, so it runs as one of its phases.
+#[cfg(feature = "mysql")]
+fn assert_mysql_schema_records_checksum_and_order(conn_str: &str, settings: &Settings) {
+    use mysql::prelude::Queryable;
+    use sha2::{Digest, Sha256};
+
+    fn sha256_hex(bytes: &[u8]) -> String {
+        let mut h = Sha256::new();
+        h.update(bytes);
+        h.finalize().iter().map(|b| format!("{:02x}", b)).collect()
+    }
+
+    let up_a = "create table users (name varchar(64));";
+    let up_b = "insert into users (name) values ('james');";
+
+    let mut config = Config::with_settings(settings.clone());
+    config
+        .use_migrations(&[
+            EmbeddedMigration::with_tag("create-users")
+                .up(up_a)
+                .down("drop table users;")
+                .boxed(),
+            EmbeddedMigration::with_tag("seed-users")
+                .up(up_b)
+                .down("delete from users where name = 'james';")
+                .boxed(),
+        ])
+        .unwrap();
+    config.setup().unwrap();
+    let config = config.reload().unwrap();
+    Migrator::with_config(&config)
+        .all(true)
+        .show_output(false)
+        .apply()
+        .unwrap();
+
+    let opts = mysql::Opts::from_url(conn_str).unwrap();
+    let mut conn = mysql::Conn::new(opts).unwrap();
+
+    // The new columns exist.
+    for col in ["id", "tag", "checksum", "applied_at"] {
+        let exists: Option<i64> = conn
+            .exec_first(
+                "select count(*) from information_schema.columns \
+                 where table_name = '__migrant_migrations' \
+                 and table_schema = database() and column_name = ?",
+                (col,),
+            )
+            .unwrap();
+        assert_eq!(Some(1), exists, "column `{}` must exist", col);
+    }
+
+    // Recorded order (order by id) matches application order, and checksums are
+    // the sha256 of each up SQL.
+    let recorded: Vec<(String, Option<String>, i64)> = conn
+        .query(
+            "select tag, checksum, (applied_at is not null) \
+             from __migrant_migrations order by id",
+        )
+        .unwrap();
+    assert_eq!(
+        vec![
+            (
+                "create-users".to_string(),
+                Some(sha256_hex(up_a.as_bytes())),
+                1
+            ),
+            (
+                "seed-users".to_string(),
+                Some(sha256_hex(up_b.as_bytes())),
+                1
+            ),
+        ],
+        recorded,
+    );
+
+    Migrator::with_config(&config)
+        .direction(Direction::Down)
+        .all(true)
+        .show_output(false)
+        .apply()
+        .unwrap();
 }

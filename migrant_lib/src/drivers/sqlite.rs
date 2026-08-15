@@ -59,7 +59,7 @@ impl SqliteConn {
         if self.migration_table_exists()? {
             return Ok(false);
         }
-        self.lock().execute(sql::CREATE_TABLE, [])?;
+        self.lock().execute(sql::SQLITE_CREATE_TABLE, [])?;
         Ok(true)
     }
 
@@ -72,9 +72,11 @@ impl SqliteConn {
         Ok(tags)
     }
 
-    pub(crate) fn insert_tag(&self, tag: &str) -> Result<()> {
-        self.lock()
-            .execute(sql::INSERT_MIGRATION_PG_SQLITE, [tag])?;
+    pub(crate) fn insert_tag(&self, tag: &str, checksum: Option<&str>) -> Result<()> {
+        self.lock().execute(
+            sql::INSERT_MIGRATION_PG_SQLITE,
+            rusqlite::params![tag, checksum],
+        )?;
         Ok(())
     }
 
@@ -144,10 +146,42 @@ mod tests {
         assert!(!conn.setup_migration_table().unwrap(), "setup idempotent");
         assert!(conn.migration_table_exists().unwrap(), "table exists");
 
-        conn.insert_tag("initial").unwrap();
-        conn.insert_tag("alter1").unwrap();
-        conn.insert_tag("alter2").unwrap();
-        assert_eq!(3, conn.applied_tags().unwrap().len());
+        conn.insert_tag("initial", Some("abc123")).unwrap();
+        conn.insert_tag("alter1", None).unwrap();
+        conn.insert_tag("alter2", Some("def456")).unwrap();
+        // Recorded order is authoritative: tags come back in insertion (id) order.
+        assert_eq!(
+            vec!["initial", "alter1", "alter2"],
+            conn.applied_tags().unwrap()
+        );
+
+        // The checksum column carries the inserted value (NULL where None).
+        let checksums: Vec<Option<String>> = {
+            let guard = conn.lock();
+            let mut stmt = guard
+                .prepare("select checksum from __migrant_migrations order by id")
+                .unwrap();
+            let rows = stmt
+                .query_map([], |row| row.get::<_, Option<String>>(0))
+                .unwrap()
+                .collect::<std::result::Result<Vec<_>, _>>()
+                .unwrap();
+            rows
+        };
+        assert_eq!(
+            vec![Some("abc123".to_string()), None, Some("def456".to_string())],
+            checksums
+        );
+        // `applied_at` is populated by the column default.
+        let stamped: i64 = conn
+            .lock()
+            .query_row(
+                "select count(*) from __migrant_migrations where applied_at is not null",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(3, stamped);
 
         conn.remove_tag("alter2").unwrap();
         assert_eq!(2, conn.applied_tags().unwrap().len());

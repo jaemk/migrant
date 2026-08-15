@@ -20,7 +20,7 @@ use std::env;
 fn run() -> Result<(), Box<dyn std::error::Error>> {
     let path = env::current_dir()?;
     let path = path.join("db/embedded_example.db");
-    let settings = Settings::configure_sqlite().database_path(&path)?.build()?;
+    let settings = Settings::configure_sqlite().database_path(&path).build()?;
 
     let mut config = Config::with_settings(settings);
 
@@ -65,7 +65,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         .apply()?;
 
     let config = config.reload()?;
-    migrant_lib::list(&config)?;
+    migrant_lib::cli::list(&config)?;
 
     println!("\nUnapplying migrations...");
     Migrator::with_config(&config)
@@ -74,7 +74,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         .apply()?;
 
     let config = config.reload()?;
-    migrant_lib::list(&config)?;
+    migrant_lib::cli::list(&config)?;
     Ok(())
 }
 

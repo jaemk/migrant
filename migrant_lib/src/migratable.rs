@@ -6,8 +6,18 @@ use std::fmt;
 use crate::migrator::Direction;
 use crate::Config;
 
-/// Helper trait so boxed `Migratable` trait objects can be cloned
-pub trait MigratableClone {
+mod private {
+    /// Sealing marker: only types in this crate that satisfy the blanket impl
+    /// below can implement [`MigratableClone`](super::MigratableClone).
+    pub trait Sealed {}
+}
+impl<T: 'static + Migratable + Clone> private::Sealed for T {}
+
+/// Helper trait so boxed `Migratable` trait objects can be cloned.
+///
+/// This trait is sealed: it is implemented automatically for every
+/// `'static + Migratable + Clone` type and cannot be implemented directly.
+pub trait MigratableClone: private::Sealed {
     /// Clone into a new boxed trait object
     fn clone_migratable_box(&self) -> Box<dyn Migratable>;
 }
@@ -35,8 +45,18 @@ pub trait Migratable: MigratableClone {
     /// A unique identifying tag
     fn tag(&self) -> String;
 
+    /// The lowercase hex sha256 of this migration's raw up-direction SQL bytes,
+    /// recorded in the `checksum` column of `__migrant_migrations` when the
+    /// migration is applied.
+    ///
+    /// Defaults to `None`. Programmatic migrations (`FnMigration` and custom
+    /// implementations) have no SQL to hash, so they store NULL by design.
+    fn checksum(&self) -> Option<String> {
+        None
+    }
+
     /// Optional migration description. Defaults to `Migratable::tag`
-    fn description(&self, _: &Direction) -> String {
+    fn description(&self, _: Direction) -> String {
         self.tag()
     }
 

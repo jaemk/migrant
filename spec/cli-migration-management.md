@@ -18,12 +18,14 @@ file instead.
 
 ## CLIMIG-4
 
-`migrant apply` applies the next unapplied migration. Flags: `--all` applies all remaining,
-`--down` reverses direction (unapplies), `--fake` marks migrations applied/unapplied without
-executing their SQL. `--force[=<mode>]` continues past failed migrations: bare `--force` (or
-`--force=accept-failures`) records a failed migration as applied so it is not retried;
-`--force=skip-failures` leaves it unrecorded, skips it for the rest of the run, and retries
-it on the next run.
+`migrant apply` applies all pending migrations by default. Flags: `--step N` applies exactly
+N migrations instead of all of them; `--down` reverses direction (unapplies) and defaults to
+a single step unless `--step N` is also given; `--fake` marks migrations applied/unapplied
+without executing their SQL. `--force[=<mode>]` continues past failed migrations: bare
+`--force` (or `--force=accept-failures`) records a failed migration as applied so it is not
+retried; `--force=skip-failures` leaves it unrecorded, skips it for the rest of the run, and
+retries it on the next run. `apply` no longer has an `--all` flag: applying all pending
+migrations is the default behavior.
 
 ## CLIMIG-5
 
@@ -36,6 +38,13 @@ redoes all applied migrations. Down-migrations run in reverse application order.
 counts (total, applied, pending). `--format text` (the default) prints a summary line followed
 by a `[✓]`/`[ ]` row per migration; `--format json` prints the same data as pretty-printed JSON
 (`{ total, applied, pending, migrations: [{ tag, applied }] }`) for scripting.
+
+## CLIMIG-7
+
+`apply` and `redo` accept `--allow-unknown-tags` and `--allow-out-of-order`, both off by
+default. `--allow-unknown-tags` permits a run when the database has an applied tag not
+present in the defined migration set, instead of erroring. `--allow-out-of-order` permits a
+run to apply migrations out of their defined order, instead of erroring.
 
 Coverage: `tests/migrant.rs` (kitchen_sink, new_rejects_invalid_tag,
 apply_fake_records_without_running, force_modes_through_the_cli, status_reports_text_and_json),

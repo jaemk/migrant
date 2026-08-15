@@ -19,8 +19,8 @@ fn path_to_string(p: &Path) -> Result<String> {
 /// Sqlite settings builder
 #[derive(Debug, Clone, Default)]
 pub struct SqliteSettingsBuilder {
-    pub(crate) database_path: Option<String>,
-    pub(crate) migration_location: Option<String>,
+    pub(crate) database_path: Option<PathBuf>,
+    pub(crate) migration_location: Option<PathBuf>,
 }
 
 impl SqliteSettingsBuilder {
@@ -38,9 +38,12 @@ impl SqliteSettingsBuilder {
     /// `Config::init_in(...).with_sqlite_options(...)`, a relative path is also accepted --
     /// it is written into the generated settings file and resolved relative to that
     /// settings file's directory when the config is later loaded.
-    pub fn database_path<T: AsRef<Path>>(mut self, p: T) -> Result<Self> {
-        self.database_path = Some(path_to_string(p.as_ref())?);
-        Ok(self)
+    ///
+    /// The path is validated (must be valid UTF-8, and absolute when used with
+    /// `build()`) when `build()` is called.
+    pub fn database_path<T: AsRef<Path>>(mut self, p: T) -> Self {
+        self.database_path = Some(p.as_ref().to_path_buf());
+        self
     }
 
     /// Use an in-memory database.
@@ -49,7 +52,7 @@ impl SqliteSettingsBuilder {
     /// (shared by all clones of the built `Config`) so migrations and
     /// application queries all see the same database.
     pub fn memory(mut self) -> Self {
-        self.database_path = Some(SQLITE_MEMORY_PATH.to_string());
+        self.database_path = Some(PathBuf::from(SQLITE_MEMORY_PATH));
         self
     }
 
@@ -58,17 +61,18 @@ impl SqliteSettingsBuilder {
     /// This can be an absolute or relative path. An absolute path should be preferred.
     /// If a relative path is provided, the path will be assumed relative to either the
     /// settings file's directory if a settings file exists, or the current directory.
-    pub fn migration_location<T: AsRef<Path>>(mut self, p: T) -> Result<Self> {
-        self.migration_location = Some(path_to_string(p.as_ref())?);
-        Ok(self)
+    pub fn migration_location<T: AsRef<Path>>(mut self, p: T) -> Self {
+        self.migration_location = Some(p.as_ref().to_path_buf());
+        self
     }
 
     /// Build a `Settings` object
     pub fn build(&self) -> Result<Settings> {
         let database_path = self
             .database_path
-            .clone()
+            .as_deref()
             .ok_or_else(|| err!(Config, "Missing `database_path` parameter"))?;
+        let database_path = path_to_string(database_path)?;
         if database_path != SQLITE_MEMORY_PATH && !Path::new(&database_path).is_absolute() {
             bail!(
                 Config,
@@ -76,9 +80,14 @@ impl SqliteSettingsBuilder {
                 database_path
             )
         }
+        let migration_location = self
+            .migration_location
+            .as_deref()
+            .map(path_to_string)
+            .transpose()?;
         Ok(Settings::new(DbSettings::Sqlite(SqliteSettings {
             database_path,
-            migration_location: self.migration_location.clone(),
+            migration_location,
         })))
     }
 }
@@ -93,7 +102,7 @@ pub(crate) struct ServerSettingsBuilder {
     pub(crate) database_port: Option<String>,
     pub(crate) database_params: Option<BTreeMap<String, String>>,
     pub(crate) ssl_cert_file: Option<PathBuf>,
-    pub(crate) migration_location: Option<String>,
+    pub(crate) migration_location: Option<PathBuf>,
 }
 
 impl ServerSettingsBuilder {
@@ -115,7 +124,11 @@ impl ServerSettingsBuilder {
             database_port: self.database_port.clone(),
             database_params: self.database_params.clone(),
             ssl_cert_file: self.ssl_cert_file.clone(),
-            migration_location: self.migration_location.clone(),
+            migration_location: self
+                .migration_location
+                .as_deref()
+                .map(path_to_string)
+                .transpose()?,
         })
     }
 
@@ -172,9 +185,11 @@ macro_rules! server_builder_methods {
         /// This can be an absolute or relative path. An absolute path should be preferred.
         /// If a relative path is provided, the path will be assumed relative to either the
         /// settings file's directory if a settings file exists, or the current directory.
-        pub fn migration_location<T: AsRef<Path>>(mut self, p: T) -> Result<Self> {
-            self.inner.migration_location = Some(path_to_string(p.as_ref())?);
-            Ok(self)
+        ///
+        /// A non-UTF-8 path surfaces as an error when `build()` is called.
+        pub fn migration_location<T: AsRef<Path>>(mut self, p: T) -> Self {
+            self.inner.migration_location = Some(p.as_ref().to_path_buf());
+            self
         }
     };
 }
@@ -229,16 +244,15 @@ impl MySqlSettingsBuilder {
 mod tests {
     use super::*;
 
-    // The owned (`self -> Self` / `self -> Result<Self>`) setters must chain
-    // without an intermediate `mut` binding and carry every value through.
+    // The owned (`self -> Self`) setters must chain without an intermediate
+    // `mut` binding and carry every value through. The path setters are now
+    // infallible; validation is deferred to `build()`.
 
     #[test]
     fn sqlite_owned_setters_chain_and_build() {
         let settings = SqliteSettingsBuilder::empty()
             .database_path("/abs/path/to/my.db")
-            .unwrap()
             .migration_location("/abs/migrations")
-            .unwrap()
             .build()
             .unwrap();
         match settings.inner {
@@ -254,7 +268,10 @@ mod tests {
     fn sqlite_memory_owned_setter_chains() {
         // `memory()` consumes and returns owned self, chainable into `build()`.
         let builder = SqliteSettingsBuilder::empty().memory();
-        assert_eq!(builder.database_path.as_deref(), Some(SQLITE_MEMORY_PATH));
+        assert_eq!(
+            builder.database_path.as_deref(),
+            Some(Path::new(SQLITE_MEMORY_PATH))
+        );
         let settings = builder.build().unwrap();
         match settings.inner {
             DbSettings::Sqlite(s) => assert_eq!(s.database_path, SQLITE_MEMORY_PATH),
@@ -273,7 +290,6 @@ mod tests {
             .database_params(&[("sslmode", "require")])
             .ssl_cert_file("/certs/db.pem")
             .migration_location("/abs/migrations")
-            .unwrap()
             .build()
             .unwrap();
         match settings.inner {
@@ -292,6 +308,62 @@ mod tests {
             }
             other => panic!("expected postgres settings, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn sqlite_relative_database_path_is_rejected_at_build_time() {
+        // The setter itself is infallible; the absolute-path requirement is
+        // enforced when `build()` runs.
+        let builder = SqliteSettingsBuilder::empty().database_path("relative/path/my.db");
+        let err = builder.build().unwrap_err();
+        assert!(err.is_config(), "expected a Config error, got {:?}", err);
+        assert!(
+            err.to_string().contains("must be absolute"),
+            "error should explain the absolute-path requirement: {}",
+            err
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn sqlite_non_utf8_database_path_is_rejected_at_build_time() {
+        // A non-UTF-8 path is accepted by the infallible setter but rejected by
+        // `build()` (paths are stored as strings in the settings file).
+        let bad = non_utf8_path();
+        let builder = SqliteSettingsBuilder::empty().database_path(&bad);
+        let err = builder.build().unwrap_err();
+        assert!(
+            matches!(err, Error::PathError(_)),
+            "expected a PathError for a non-utf8 path, got {:?}",
+            err
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn server_non_utf8_migration_location_is_rejected_at_build_time() {
+        let bad = non_utf8_path();
+        let err = PostgresSettingsBuilder::empty()
+            .database_name("mydb")
+            .database_user("me")
+            .database_password("secret")
+            .migration_location(&bad)
+            .build()
+            .unwrap_err();
+        assert!(
+            matches!(err, Error::PathError(_)),
+            "expected a PathError for a non-utf8 migration location, got {:?}",
+            err
+        );
+    }
+
+    /// A path whose bytes are not valid UTF-8, for validating `build()`-time
+    /// UTF-8 checks.
+    #[cfg(unix)]
+    fn non_utf8_path() -> PathBuf {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+        PathBuf::from(OsStr::from_bytes(&[0x2f, 0x66, 0x6f, 0x80, 0x6f]))
     }
 
     #[test]

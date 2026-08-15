@@ -149,6 +149,8 @@ pub struct Migrator {
     all: bool,
     show_output: bool,
     synchronized: bool,
+    allow_unknown_tags: bool,
+    allow_out_of_order: bool,
 }
 
 impl Migrator {
@@ -162,6 +164,8 @@ impl Migrator {
             all: false,
             show_output: true,
             synchronized: true,
+            allow_unknown_tags: false,
+            allow_out_of_order: false,
         }
     }
 
@@ -219,6 +223,33 @@ impl Migrator {
     /// Disable it only when an outer mechanism already serializes migrations.
     pub fn synchronized(mut self, synchronized: bool) -> Self {
         self.synchronized = synchronized;
+        self
+    }
+
+    /// Allow applied migration tags that are not among the available
+    /// migrations. Default is `false`.
+    ///
+    /// By default an `Up` run aborts with [`Error::MigrationNotFound`] if the
+    /// database records a tag that is not in the managed/available set -- for
+    /// example a migration that was applied and later removed from the codebase,
+    /// which usually signals the wrong migration set or database. Set this to
+    /// `true` to tolerate such unknown tags and apply the remaining available
+    /// migrations anyway.
+    pub fn allow_unknown_tags(mut self, allow: bool) -> Self {
+        self.allow_unknown_tags = allow;
+        self
+    }
+
+    /// Allow applied migrations that are out of order relative to definition
+    /// order. Default is `false`.
+    ///
+    /// By default an `Up` run aborts with [`Error::MigrationOrdering`] if a later
+    /// migration (in definition order) was applied while an earlier one was not
+    /// -- the situation that arises when a migration is merged behind others that
+    /// already ran. Set this to `true` to apply the intervening un-applied
+    /// migrations anyway.
+    pub fn allow_out_of_order(mut self, allow: bool) -> Self {
+        self.allow_out_of_order = allow;
         self
     }
 
@@ -321,43 +352,109 @@ impl Migrator {
     }
 
     /// Return the next available up or down migration, excluding any tags
-    /// skipped earlier in this run (`ForceMode::SkipFailures`)
+    /// skipped earlier in this run (`ForceMode::SkipFailures`).
+    ///
+    /// For an `Up` run this first enforces the strictness checks (unknown applied
+    /// tags, out-of-order application) unless they have been opted out of.
     fn next_available<'a>(
         direction: Direction,
         available: &'a [Box<dyn Migratable>],
         applied: &[String],
         skipped: &HashSet<String>,
+        allow_unknown_tags: bool,
+        allow_out_of_order: bool,
     ) -> Result<Option<&'a dyn Migratable>> {
         Ok(match direction {
-            Direction::Up => available
-                .iter()
-                .find(|m| !applied.contains(&m.tag()) && !skipped.contains(&m.tag()))
-                .map(AsRef::as_ref),
+            Direction::Up => {
+                Self::check_applied_consistency(
+                    available,
+                    applied,
+                    skipped,
+                    allow_unknown_tags,
+                    allow_out_of_order,
+                )?;
+                available
+                    .iter()
+                    .find(|m| !applied.contains(&m.tag()) && !skipped.contains(&m.tag()))
+                    .map(AsRef::as_ref)
+            }
             Direction::Down => {
-                if applied.is_empty() {
-                    None
-                } else {
-                    // Select the Down target by definition order: the last
-                    // migration in `available` order whose tag is applied. The
-                    // `applied` slice may be unordered (it comes from an
-                    // unordered `select tag from __migrant_migrations` unless
-                    // running in cli-compatible mode), so we must not rely on
-                    // `applied.last()`.
-                    if !available.iter().any(|m| applied.contains(&m.tag())) {
-                        bail!(
+                // Recorded application order is authoritative, so the most
+                // recently applied migration is `applied.last()`. Walk backwards,
+                // skipping tags that failed earlier this run, and return the
+                // corresponding available migration. A target tag absent from the
+                // available set is a hard error, matching the previous behavior.
+                for tag in applied.iter().rev() {
+                    if skipped.contains(tag) {
+                        continue;
+                    }
+                    match available.iter().find(|m| &m.tag() == tag) {
+                        Some(m) => return Ok(Some(m.as_ref())),
+                        None => bail!(
                             MigrationNotFound,
                             "Applied migration not found in available migrations: {}",
-                            applied[0]
-                        )
+                            tag
+                        ),
                     }
-                    available
-                        .iter()
-                        .rev()
-                        .find(|m| applied.contains(&m.tag()) && !skipped.contains(&m.tag()))
-                        .map(AsRef::as_ref)
                 }
+                None
             }
         })
+    }
+
+    /// Enforce the `Up`-run strictness checks against the applied set. Tags in
+    /// `skipped` (failed earlier this run under `ForceMode::SkipFailures`) count
+    /// as neither applied nor blocking, so a `skip-failures` run is not
+    /// self-defeating.
+    fn check_applied_consistency(
+        available: &[Box<dyn Migratable>],
+        applied: &[String],
+        skipped: &HashSet<String>,
+        allow_unknown_tags: bool,
+        allow_out_of_order: bool,
+    ) -> Result<()> {
+        if !allow_unknown_tags {
+            for tag in applied {
+                if skipped.contains(tag) {
+                    continue;
+                }
+                if !available.iter().any(|m| &m.tag() == tag) {
+                    bail!(
+                        MigrationNotFound,
+                        "Applied migration `{}` is not among the available migrations. \
+                         Pass `allow_unknown_tags(true)` to ignore unknown applied tags.",
+                        tag
+                    )
+                }
+            }
+        }
+        if !allow_out_of_order {
+            // Walk definition order tracking the first un-applied (and un-skipped)
+            // migration. An applied migration appearing after it was applied out
+            // of order.
+            let mut first_unapplied: Option<String> = None;
+            for m in available {
+                let tag = m.tag();
+                if skipped.contains(&tag) {
+                    continue;
+                }
+                if applied.contains(&tag) {
+                    if let Some(ref earlier) = first_unapplied {
+                        bail!(
+                            MigrationOrdering,
+                            "Migration `{}` was applied out of order: it comes after `{}` \
+                             in definition order, which has not been applied. Pass \
+                             `allow_out_of_order(true)` to apply the intervening migrations.",
+                            tag,
+                            earlier
+                        )
+                    }
+                } else if first_unapplied.is_none() {
+                    first_unapplied = Some(tag);
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Try applying the next available migration in the specified `Direction`
@@ -368,23 +465,29 @@ impl Migrator {
         lock_generation: Option<u64>,
     ) -> Result<Step> {
         let migrations = Self::available_migrations(config)?;
-        let next =
-            match Self::next_available(self.direction, &migrations, &config.applied, skipped)? {
-                Some(next) => next,
-                None => return Ok(Step::Complete),
-            };
+        let next = match Self::next_available(
+            self.direction,
+            &migrations,
+            &config.applied,
+            skipped,
+            self.allow_unknown_tags,
+            self.allow_out_of_order,
+        )? {
+            Some(next) => next,
+            None => return Ok(Step::Complete),
+        };
 
         self.print(&format!(
             "Applying[{}]: {}",
             self.direction,
-            next.description(&self.direction)
+            next.description(self.direction)
         ));
 
         let tag = next.tag();
 
         if self.fake {
             self.println("  ✓ (fake)");
-            self.record_tag(config, &tag)?;
+            self.record_tag(config, next)?;
             return Ok(Step::Applied(tag));
         }
 
@@ -396,7 +499,7 @@ impl Migrator {
             config.begin_transaction()?;
         }
 
-        match self.apply_and_record(config, next, &tag) {
+        match self.apply_and_record(config, next) {
             Ok(()) => {
                 if transactional {
                     config.commit_transaction()?;
@@ -426,7 +529,7 @@ impl Migrator {
                         self.check_lock_still_held(config, lock_generation)?;
                         // The transaction (if any) was rolled back, so this
                         // bookkeeping row stands alone.
-                        self.record_tag(config, &tag)?;
+                        self.record_tag(config, next)?;
                         Ok(Step::Applied(tag))
                     }
                     ForceMode::SkipFailures => {
@@ -451,22 +554,23 @@ impl Migrator {
         &self,
         config: &Config,
         next: &dyn Migratable,
-        tag: &str,
     ) -> std::result::Result<(), String> {
         match self.direction {
             Direction::Up => next.apply_up(config),
             Direction::Down => next.apply_down(config),
         }
         .map_err(|e| e.to_string())?;
-        self.record_tag(config, tag).map_err(|e| e.to_string())
+        self.record_tag(config, next).map_err(|e| e.to_string())
     }
 
     /// Record the migration as applied (`Up`) or un-applied (`Down`) in the
-    /// `__migrant_migrations` table.
-    fn record_tag(&self, config: &Config, tag: &str) -> Result<()> {
+    /// `__migrant_migrations` table. An `Up` record carries the migration's
+    /// checksum (`None` for programmatic migrations, stored as NULL).
+    fn record_tag(&self, config: &Config, next: &dyn Migratable) -> Result<()> {
+        let tag = next.tag();
         match self.direction {
-            Direction::Up => config.insert_migration_tag(tag),
-            Direction::Down => config.delete_migration_tag(tag),
+            Direction::Up => config.insert_migration_tag(&tag, next.checksum().as_deref()),
+            Direction::Down => config.delete_migration_tag(&tag),
         }
     }
 
@@ -528,6 +632,16 @@ mod tests {
         strs.iter().map(|s| (*s).to_owned()).collect()
     }
 
+    /// Strict selection with both opt-outs off -- the default the migrator uses.
+    fn next_strict<'a>(
+        direction: Direction,
+        available: &'a [Box<dyn Migratable>],
+        applied: &[String],
+        skipped: &HashSet<String>,
+    ) -> Result<Option<&'a dyn Migratable>> {
+        Migrator::next_available(direction, available, applied, skipped, false, false)
+    }
+
     #[test]
     fn owned_setters_chain_and_apply_each_value() {
         // The setters take owned `self` and return owned `Self`, so a full
@@ -544,20 +658,36 @@ mod tests {
             .fake(true)
             .all(true)
             .show_output(false)
-            .synchronized(false);
+            .synchronized(false)
+            .allow_unknown_tags(true)
+            .allow_out_of_order(true);
         assert_eq!(migrator.direction, Direction::Down);
         assert_eq!(migrator.force, ForceMode::AcceptFailures);
         assert!(migrator.fake);
         assert!(migrator.all);
         assert!(!migrator.show_output);
         assert!(!migrator.synchronized);
+        assert!(migrator.allow_unknown_tags);
+        assert!(migrator.allow_out_of_order);
+    }
+
+    #[test]
+    fn strictness_defaults_are_false() {
+        let settings = crate::config::Settings::configure_sqlite()
+            .memory()
+            .build()
+            .unwrap();
+        let config = Config::with_settings(settings);
+        let migrator = Migrator::with_config(&config);
+        assert!(!migrator.allow_unknown_tags);
+        assert!(!migrator.allow_out_of_order);
     }
 
     #[test]
     fn up_picks_first_unapplied_in_definition_order() {
         let avail = available(&["a", "b", "c"]);
         let applied = tags(&["a"]);
-        let next = Migrator::next_available(Direction::Up, &avail, &applied, &no_skips())
+        let next = next_strict(Direction::Up, &avail, &applied, &no_skips())
             .unwrap()
             .expect("expected an un-applied migration");
         assert_eq!(next.tag(), "b");
@@ -567,7 +697,7 @@ mod tests {
     fn up_returns_none_when_all_applied() {
         let avail = available(&["a", "b"]);
         let applied = tags(&["a", "b"]);
-        let next = Migrator::next_available(Direction::Up, &avail, &applied, &no_skips()).unwrap();
+        let next = next_strict(Direction::Up, &avail, &applied, &no_skips()).unwrap();
         assert!(next.is_none());
     }
 
@@ -576,7 +706,7 @@ mod tests {
         let avail = available(&["a", "b", "c"]);
         let applied = tags(&["a"]);
         // `b` failed under skip-failures earlier in the run: `c` is next.
-        let next = Migrator::next_available(Direction::Up, &avail, &applied, &skips(&["b"]))
+        let next = next_strict(Direction::Up, &avail, &applied, &skips(&["b"]))
             .unwrap()
             .expect("expected an un-applied migration");
         assert_eq!(next.tag(), "c");
@@ -586,22 +716,22 @@ mod tests {
     fn up_with_all_remaining_skipped_returns_none() {
         let avail = available(&["a", "b"]);
         let applied = tags(&["a"]);
-        let next =
-            Migrator::next_available(Direction::Up, &avail, &applied, &skips(&["b"])).unwrap();
+        let next = next_strict(Direction::Up, &avail, &applied, &skips(&["b"])).unwrap();
         assert!(next.is_none());
     }
 
     #[test]
-    fn down_picks_last_applied_in_definition_order_even_when_applied_shuffled() {
+    fn down_picks_last_applied_in_recorded_order() {
         let avail = available(&["a", "b", "c", "d"]);
-        // `applied` is intentionally shuffled and does not include the final
-        // migration `d`. The Down target must be `c` (the last applied tag in
-        // definition order), not `applied.last()` which would be `a`.
-        let applied = tags(&["b", "c", "a"]);
-        let next = Migrator::next_available(Direction::Down, &avail, &applied, &no_skips())
+        // Recorded application order is authoritative: `b` is the most recently
+        // applied migration (last in the recorded list) even though it comes
+        // before `c` in definition order. Down must target `applied.last()` = `b`,
+        // not the definition-order-last applied tag `c`.
+        let applied = tags(&["a", "c", "b"]);
+        let next = next_strict(Direction::Down, &avail, &applied, &no_skips())
             .unwrap()
             .expect("expected a down migration");
-        assert_eq!(next.tag(), "c");
+        assert_eq!(next.tag(), "b");
     }
 
     #[test]
@@ -609,7 +739,7 @@ mod tests {
         let avail = available(&["a", "b", "c"]);
         let applied = tags(&["a", "b", "c"]);
         // `c`'s down failed under skip-failures: `b` is next.
-        let next = Migrator::next_available(Direction::Down, &avail, &applied, &skips(&["c"]))
+        let next = next_strict(Direction::Down, &avail, &applied, &skips(&["c"]))
             .unwrap()
             .expect("expected a down migration");
         assert_eq!(next.tag(), "b");
@@ -619,8 +749,7 @@ mod tests {
     fn down_with_all_applied_skipped_returns_none() {
         let avail = available(&["a", "b"]);
         let applied = tags(&["a", "b"]);
-        let next = Migrator::next_available(Direction::Down, &avail, &applied, &skips(&["a", "b"]))
-            .unwrap();
+        let next = next_strict(Direction::Down, &avail, &applied, &skips(&["a", "b"])).unwrap();
         assert!(next.is_none());
     }
 
@@ -628,8 +757,7 @@ mod tests {
     fn down_with_empty_applied_returns_none() {
         let avail = available(&["a", "b"]);
         let applied: Vec<String> = Vec::new();
-        let next =
-            Migrator::next_available(Direction::Down, &avail, &applied, &no_skips()).unwrap();
+        let next = next_strict(Direction::Down, &avail, &applied, &no_skips()).unwrap();
         assert!(next.is_none());
     }
 
@@ -637,10 +765,178 @@ mod tests {
     fn down_with_applied_tags_absent_from_available_errors() {
         let avail = available(&["a", "b"]);
         let applied = tags(&["x", "y"]);
-        match Migrator::next_available(Direction::Down, &avail, &applied, &no_skips()) {
+        match next_strict(Direction::Down, &avail, &applied, &no_skips()) {
             Err(Error::MigrationNotFound(_)) => {}
             Err(other) => panic!("expected MigrationNotFound, got: {:?}", other),
             Ok(_) => panic!("expected MigrationNotFound error, got Ok"),
+        }
+    }
+
+    #[test]
+    fn up_unknown_applied_tag_errors_by_default() {
+        let avail = available(&["a", "b"]);
+        // `x` is applied but not among the available migrations.
+        let applied = tags(&["a", "x"]);
+        match next_strict(Direction::Up, &avail, &applied, &no_skips()).map(|o| o.map(|m| m.tag()))
+        {
+            Err(Error::MigrationNotFound(_)) => {}
+            other => panic!("expected MigrationNotFound, got: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn up_unknown_applied_tag_allowed_when_opted_out() {
+        let avail = available(&["a", "b"]);
+        let applied = tags(&["a", "x"]);
+        // With `allow_unknown_tags`, the unknown `x` is ignored and the next
+        // available migration `b` is selected.
+        let next =
+            Migrator::next_available(Direction::Up, &avail, &applied, &no_skips(), true, false)
+                .unwrap()
+                .expect("expected an un-applied migration");
+        assert_eq!(next.tag(), "b");
+    }
+
+    #[test]
+    fn up_out_of_order_applied_tag_errors_by_default() {
+        let avail = available(&["a", "b", "c"]);
+        // `c` is applied while the earlier `b` is not: out of order.
+        let applied = tags(&["a", "c"]);
+        match next_strict(Direction::Up, &avail, &applied, &no_skips()).map(|o| o.map(|m| m.tag()))
+        {
+            Err(Error::MigrationOrdering(msg)) => {
+                assert!(
+                    msg.contains("c"),
+                    "message should name the out-of-order tag: {msg}"
+                );
+                assert!(
+                    msg.contains("b"),
+                    "message should name the earlier unapplied tag: {msg}"
+                );
+            }
+            other => panic!("expected MigrationOrdering, got: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn up_out_of_order_allowed_when_opted_out() {
+        let avail = available(&["a", "b", "c"]);
+        let applied = tags(&["a", "c"]);
+        // With `allow_out_of_order`, the intervening `b` is selected next.
+        let next =
+            Migrator::next_available(Direction::Up, &avail, &applied, &no_skips(), false, true)
+                .unwrap()
+                .expect("expected an un-applied migration");
+        assert_eq!(next.tag(), "b");
+    }
+
+    #[test]
+    fn up_skipped_tags_do_not_trigger_ordering_or_unknown_errors() {
+        // A `skip-failures` run must not be self-defeating: a tag in the skipped
+        // set counts as neither applied (so no ordering violation) nor blocking.
+        let avail = available(&["a", "b", "c"]);
+        let applied = tags(&["a"]);
+        // `b` failed and was skipped this run; selecting past it to `c` must not
+        // raise an out-of-order error even though `b` (unapplied) precedes `c`.
+        let next = next_strict(Direction::Up, &avail, &applied, &skips(&["b"]))
+            .unwrap()
+            .expect("expected an un-applied migration");
+        assert_eq!(next.tag(), "c");
+    }
+
+    #[test]
+    fn up_unknown_takes_precedence_over_out_of_order() {
+        // The applied set contains *both* an unknown tag (`x`, not among the
+        // available migrations) and an out-of-order condition (`c` applied while
+        // the earlier `a`/`b` are not). With both checks enabled (the default),
+        // the unknown-tag check runs first, so `MigrationNotFound` -- not
+        // `MigrationOrdering` -- is the error that surfaces.
+        let avail = available(&["a", "b", "c"]);
+        let applied = tags(&["x", "c"]);
+        match next_strict(Direction::Up, &avail, &applied, &no_skips()) {
+            Err(Error::MigrationNotFound(_)) => {}
+            other => panic!(
+                "unknown-tag check must take precedence over ordering, got: {:?}",
+                other.map(|o| o.map(|m| m.tag()))
+            ),
+        }
+    }
+
+    #[test]
+    fn up_allow_unknown_still_enforces_ordering_independently() {
+        // Opting out of the unknown-tag check must not also disable the ordering
+        // check: with the same set, once `x` is tolerated the still-active
+        // ordering check catches `c` applied ahead of the earlier migrations.
+        let avail = available(&["a", "b", "c"]);
+        let applied = tags(&["x", "c"]);
+        match Migrator::next_available(Direction::Up, &avail, &applied, &no_skips(), true, false) {
+            Err(Error::MigrationOrdering(_)) => {}
+            other => panic!(
+                "ordering check must remain active when only unknown tags are allowed, got: {:?}",
+                other.map(|o| o.map(|m| m.tag()))
+            ),
+        }
+    }
+
+    #[test]
+    fn up_allow_out_of_order_still_enforces_unknown_independently() {
+        // The mirror case: opting out of the ordering check must not disable the
+        // unknown-tag check. `x` is unknown and must still raise
+        // `MigrationNotFound` even with `allow_out_of_order`.
+        let avail = available(&["a", "b"]);
+        let applied = tags(&["a", "x"]);
+        match Migrator::next_available(Direction::Up, &avail, &applied, &no_skips(), false, true) {
+            Err(Error::MigrationNotFound(_)) => {}
+            other => panic!(
+                "unknown-tag check must remain active when only ordering is allowed, got: {:?}",
+                other.map(|o| o.map(|m| m.tag()))
+            ),
+        }
+    }
+
+    #[test]
+    fn up_skipped_unknown_tag_does_not_raise_not_found() {
+        // A tag in the `skipped` set is excluded from the unknown-tag check too
+        // (not only the ordering check): a skipped tag that happens not to be
+        // among the available migrations must not raise `MigrationNotFound`.
+        let avail = available(&["a", "b"]);
+        let applied = tags(&["a", "ghost"]);
+        let next = next_strict(Direction::Up, &avail, &applied, &skips(&["ghost"]))
+            .unwrap()
+            .expect("expected an un-applied migration");
+        assert_eq!(next.tag(), "b");
+    }
+
+    #[test]
+    fn down_does_not_run_the_up_consistency_checks() {
+        // The strictness checks are `Up`-only. A `Down` run against an
+        // out-of-order applied set must not raise `MigrationOrdering`; it simply
+        // targets the most-recently-applied migration by recorded order.
+        let avail = available(&["a", "b", "c"]);
+        // `c` was applied while `b` was not: an out-of-order set for an Up run.
+        let applied = tags(&["a", "c"]);
+        let next = next_strict(Direction::Down, &avail, &applied, &no_skips())
+            .unwrap()
+            .expect("expected a down migration");
+        assert_eq!(next.tag(), "c");
+    }
+
+    #[test]
+    fn down_last_applied_skipped_earlier_unknown_errors() {
+        // Down walks recorded order backwards skipping the run-skipped tags. When
+        // the most-recently-applied tag is skipped and the next-back tag is not
+        // among the available migrations, that unknown tag is the selection
+        // target and Down errors with `MigrationNotFound` (Down does not consult
+        // the Up-only unknown-tag opt-out).
+        let avail = available(&["a", "b"]);
+        // Recorded order: `x` (unknown) then `b`; `b` was skipped this run.
+        let applied = tags(&["x", "b"]);
+        match next_strict(Direction::Down, &avail, &applied, &skips(&["b"])) {
+            Err(Error::MigrationNotFound(_)) => {}
+            other => panic!(
+                "expected MigrationNotFound for the unknown down target, got: {:?}",
+                other.map(|o| o.map(|m| m.tag()))
+            ),
         }
     }
 }

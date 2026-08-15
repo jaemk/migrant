@@ -5,6 +5,7 @@ use std::borrow::Cow;
 use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Utc};
+use sha2::{Digest, Sha256};
 
 use crate::config::Config;
 use crate::connection::ConnConfig;
@@ -23,6 +24,20 @@ use crate::DT_FORMAT;
 /// alter type mood add value 'excited';
 /// ```
 pub(crate) const NO_TRANSACTION_DIRECTIVE: &str = "migrant:no-transaction";
+
+/// Compute the lowercase hex sha256 of the given raw bytes. Used to fingerprint
+/// a migration's up-direction SQL for the `checksum` bookkeeping column.
+pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    let digest = hasher.finalize();
+    let mut out = String::with_capacity(digest.len() * 2);
+    for byte in digest {
+        use std::fmt::Write;
+        let _ = write!(out, "{:02x}", byte);
+    }
+    out
+}
 
 /// Return `true` if `sql` carries the [`NO_TRANSACTION_DIRECTIVE`] on a comment
 /// line. It is matched case-insensitively as the first token of a `--` line
@@ -156,7 +171,15 @@ impl Migratable for FileMigration {
         }
     }
 
-    fn description(&self, direction: &Direction) -> String {
+    fn checksum(&self) -> Option<String> {
+        // Hash the raw bytes of the up file. A missing or unreadable file yields
+        // `None`; the apply path surfaces any real read error.
+        let up = self.up.as_ref()?;
+        let bytes = std::fs::read(up).ok()?;
+        Some(sha256_hex(&bytes))
+    }
+
+    fn description(&self, direction: Direction) -> String {
         let file = match direction {
             Direction::Up => &self.up,
             Direction::Down => &self.down,
@@ -293,7 +316,12 @@ impl Migratable for EmbeddedMigration {
         self.tag.to_owned()
     }
 
-    fn description(&self, _: &Direction) -> String {
+    fn checksum(&self) -> Option<String> {
+        // Hash the raw bytes of the up-direction SQL string, if any.
+        self.up.as_ref().map(|up| sha256_hex(up.as_bytes()))
+    }
+
+    fn description(&self, _: Direction) -> String {
         self.tag()
     }
 
@@ -413,7 +441,7 @@ where
         self.tag.to_owned()
     }
 
-    fn description(&self, _: &Direction) -> String {
+    fn description(&self, _: Direction) -> String {
         self.tag()
     }
 
@@ -461,6 +489,88 @@ mod tests {
             "select 'migrant:no-transaction';"
         ));
         assert!(!sql_opts_out_of_transaction(""));
+    }
+
+    #[test]
+    fn embedded_checksum_is_sha256_hex_of_up_sql() {
+        let m = EmbeddedMigration::with_tag("m")
+            .up("create table t (x integer);")
+            .down("drop table t;");
+        // Known sha256 of the exact up-direction bytes (lowercase hex).
+        assert_eq!(
+            Some(sha256_hex(b"create table t (x integer);")),
+            m.checksum()
+        );
+        // The value is a 64-char lowercase hex string.
+        let sum = m.checksum().unwrap();
+        assert_eq!(64, sum.len());
+        assert!(sum
+            .chars()
+            .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()));
+    }
+
+    #[test]
+    fn embedded_checksum_none_without_up() {
+        let m = EmbeddedMigration::with_tag("m").down("drop table t;");
+        assert_eq!(None, m.checksum());
+    }
+
+    #[test]
+    fn checksum_is_deterministic_and_distinguishes_up_sql() {
+        // Same up-SQL -> identical checksum, regardless of tag or down-SQL: the
+        // checksum fingerprints only the up direction and is stable.
+        let a = EmbeddedMigration::with_tag("one")
+            .up("create table t (x integer);")
+            .down("drop table t;");
+        let b = EmbeddedMigration::with_tag("two")
+            .up("create table t (x integer);")
+            .down("select 1;");
+        assert_eq!(a.checksum(), b.checksum());
+
+        // Different up-SQL -> different checksum.
+        let c = EmbeddedMigration::with_tag("three").up("create table u (x integer);");
+        assert_ne!(a.checksum(), c.checksum());
+
+        // A whitespace-only difference is still a different fingerprint (the raw
+        // bytes are hashed, no normalization).
+        let d = EmbeddedMigration::with_tag("four").up("create table t (x integer); ");
+        assert_ne!(a.checksum(), d.checksum());
+
+        // A `FileMigration` hashing the identical bytes yields the identical
+        // checksum as the embedded one (both hash raw up bytes the same way).
+        let dir = tempfile::tempdir().unwrap();
+        let up = dir.path().join("up.sql");
+        std::fs::write(&up, b"create table t (x integer);").unwrap();
+        let filed = FileMigration::with_tag("filed").up(&up);
+        assert_eq!(a.checksum(), filed.checksum());
+    }
+
+    #[test]
+    fn fn_migration_checksum_is_none() {
+        let m = FnMigration::with_tag("f").up(noop).down(noop);
+        assert_eq!(None, m.checksum());
+    }
+
+    #[test]
+    fn file_checksum_hashes_up_file_bytes_and_none_when_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let up = dir.path().join("up.sql");
+        let down = dir.path().join("down.sql");
+        std::fs::write(&up, b"select 1;").unwrap();
+        std::fs::write(&down, b"select 2;").unwrap();
+
+        let m = FileMigration::with_tag("filed").up(&up).down(&down);
+        assert_eq!(Some(sha256_hex(b"select 1;")), m.checksum());
+
+        // A missing up file yields `None` (the apply path surfaces read errors).
+        let missing = FileMigration::with_tag("gone")
+            .up(dir.path().join("nope.sql"))
+            .down(&down);
+        assert_eq!(None, missing.checksum());
+
+        // No up file at all is also `None`.
+        let no_up = FileMigration::with_tag("noup").down(&down);
+        assert_eq!(None, no_up.checksum());
     }
 
     #[test]

@@ -77,7 +77,7 @@ When run interactively (without `--no-confirm`), `setup` will be run automatical
 
 `migrant status [--format <text|json>]` - Report every managed migration's applied/pending state with summary counts, as pretty text (default) or JSON.
 
-`migrant apply [--down, --all, --force, --fake, --no-sync]` - Apply the next available migration[s].
+`migrant apply [--down, --step N, --force, --fake, --no-sync]` - Apply all pending migrations. `--down` reverses direction and applies a single step by default; `--step N` applies exactly N steps in either direction.
 
 `migrant redo [--all, --force, --no-sync]` - Re-apply the latest migration (down then up).
 

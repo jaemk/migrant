@@ -26,8 +26,8 @@ fn run() -> Result<(), migrant_lib::Error> {
             Config::init_in(&dir)
                 .with_sqlite_options(
                     SqliteSettingsBuilder::empty()
-                        .database_path("db/db.db")?
-                        .migration_location("migrations/managed")?,
+                        .database_path("db/db.db")
+                        .migration_location("migrations/managed"),
                 )
                 // .with_postgres_options(
                 //     PostgresSettingsBuilder::empty()
@@ -65,7 +65,7 @@ fn run() -> Result<(), migrant_lib::Error> {
         .all(true)
         .apply()?;
     let config = config.reload()?;
-    migrant_lib::list(&config)?;
+    migrant_lib::cli::list(&config)?;
 
     println!("Unapplying all migrations...");
     migrant_lib::Migrator::with_config(&config)
@@ -73,7 +73,7 @@ fn run() -> Result<(), migrant_lib::Error> {
         .all(true)
         .apply()?;
     let config = config.reload()?;
-    migrant_lib::list(&config)?;
+    migrant_lib::cli::list(&config)?;
     Ok(())
 }
 

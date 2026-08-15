@@ -90,12 +90,27 @@ pub struct SettingsFileInitializer {
 }
 
 /// Template value resolution: explicit value, `env:VAR` placeholder, or fallback
-fn value_or(explicit: Option<&String>, with_env: bool, env_var: &str, fallback: &str) -> String {
+fn value_or(explicit: Option<&str>, with_env: bool, env_var: &str, fallback: &str) -> String {
     match explicit {
-        Some(v) => v.clone(),
+        Some(v) => v.to_string(),
         None if with_env => format!("env:{}", env_var),
         None => fallback.to_string(),
     }
+}
+
+/// Resolve an optional path option to its UTF-8 string form for template
+/// substitution.
+///
+/// An explicitly-provided non-UTF-8 path is rejected with a `PathError`, mirroring
+/// the `SqliteSettingsBuilder::build()` / `ServerSettingsBuilder::build()`
+/// validation so `init` and `build()` agree. A genuinely-absent option yields
+/// `None`, so the normal env/fallback default still applies.
+fn path_opt_str(opt: Option<&Path>) -> Result<Option<&str>> {
+    opt.map(|p| {
+        p.to_str()
+            .ok_or_else(|| err!(PathError, "Unicode path error: {:?}", p))
+    })
+    .transpose()
 }
 
 /// Render the pg/mysql shared template values
@@ -104,20 +119,20 @@ fn render_server_template(
     opts: &ServerSettingsBuilder,
     with_env: bool,
     default_port: &str,
-) -> String {
+) -> Result<String> {
     let mut content = template
         .replace(
             "__DB_NAME__",
-            &value_or(opts.database_name.as_ref(), with_env, "DATABASE_NAME", ""),
+            &value_or(opts.database_name.as_deref(), with_env, "DATABASE_NAME", ""),
         )
         .replace(
             "__DB_USER__",
-            &value_or(opts.database_user.as_ref(), with_env, "DATABASE_USER", ""),
+            &value_or(opts.database_user.as_deref(), with_env, "DATABASE_USER", ""),
         )
         .replace(
             "__DB_PASS__",
             &value_or(
-                opts.database_password.as_ref(),
+                opts.database_password.as_deref(),
                 with_env,
                 "DATABASE_PASSWORD",
                 "",
@@ -126,7 +141,7 @@ fn render_server_template(
         .replace(
             "__DB_HOST__",
             &value_or(
-                opts.database_host.as_ref(),
+                opts.database_host.as_deref(),
                 with_env,
                 "DATABASE_HOST",
                 "localhost",
@@ -135,7 +150,7 @@ fn render_server_template(
         .replace(
             "__DB_PORT__",
             &value_or(
-                opts.database_port.as_ref(),
+                opts.database_port.as_deref(),
                 with_env,
                 "DATABASE_PORT",
                 default_port,
@@ -144,7 +159,7 @@ fn render_server_template(
         .replace(
             "__MIG_LOC__",
             &value_or(
-                opts.migration_location.as_ref(),
+                path_opt_str(opts.migration_location.as_deref())?,
                 with_env,
                 "MIGRATION_LOCATION",
                 "migrations",
@@ -159,7 +174,7 @@ fn render_server_template(
         None => content.push('\n'),
     }
     content.push('\n');
-    content
+    Ok(content)
 }
 
 impl SettingsFileInitializer {
@@ -197,7 +212,7 @@ impl SettingsFileInitializer {
     /// Config::init_in(env::current_dir()?)
     ///     .with_sqlite_options(
     ///         SqliteSettingsBuilder::empty()
-    ///             .database_path("/abs/path/to/my.db")?)
+    ///             .database_path("/abs/path/to/my.db"))
     ///     .initialize()?;
     /// # Ok(())
     /// # }
@@ -297,15 +312,15 @@ impl SettingsFileInitializer {
             .map_err(|_| err!(Config, "unsupported database type: {}", db_kind))?;
         Ok(match db_kind {
             DbKind::Sqlite => {
-                let options = SqliteSettingsBuilder::empty().migration_location("migrations")?;
+                let options = SqliteSettingsBuilder::empty().migration_location("migrations");
                 DatabaseConfigOptions::Sqlite(options)
             }
             DbKind::Postgres => {
-                let options = PostgresSettingsBuilder::empty().migration_location("migrations")?;
+                let options = PostgresSettingsBuilder::empty().migration_location("migrations");
                 DatabaseConfigOptions::Postgres(options)
             }
             DbKind::MySql => {
-                let options = MySqlSettingsBuilder::empty().migration_location("migrations")?;
+                let options = MySqlSettingsBuilder::empty().migration_location("migrations");
                 DatabaseConfigOptions::MySql(options)
             }
         })
@@ -357,13 +372,13 @@ impl SettingsFileInitializer {
                 &opts.inner,
                 self.with_env_defaults,
                 "5432",
-            ),
+            )?,
             DatabaseConfigOptions::MySql(ref opts) => render_server_template(
                 MYSQL_CONFIG_TEMPLATE,
                 &opts.inner,
                 self.with_env_defaults,
                 "3306",
-            ),
+            )?,
             DatabaseConfigOptions::Sqlite(ref opts) => {
                 let config_dir = config_path.parent().and_then(Path::to_str).ok_or_else(|| {
                     err!(
@@ -377,7 +392,7 @@ impl SettingsFileInitializer {
                     .replace(
                         "__DB_PATH__",
                         &value_or(
-                            opts.database_path.as_ref(),
+                            path_opt_str(opts.database_path.as_deref())?,
                             self.with_env_defaults,
                             "DATABASE_PATH",
                             "",
@@ -386,7 +401,7 @@ impl SettingsFileInitializer {
                     .replace(
                         "__MIG_LOC__",
                         &value_or(
-                            opts.migration_location.as_ref(),
+                            path_opt_str(opts.migration_location.as_deref())?,
                             self.with_env_defaults,
                             "MIGRATION_LOCATION",
                             "migrations",
@@ -421,5 +436,144 @@ impl SettingsFileInitializer {
             let _setup = config.setup()?;
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The template renderer's `value_or(... Path::to_str ...)` resolution.
+    #[test]
+    fn value_or_resolves_explicit_env_and_fallback() {
+        assert_eq!(value_or(Some("v"), false, "VAR", "fallback"), "v");
+        // env-defaults on and no explicit value -> `env:VAR` placeholder
+        assert_eq!(value_or(None, true, "VAR", "fallback"), "env:VAR");
+        // no explicit value, no env-defaults -> the fallback
+        assert_eq!(value_or(None, false, "VAR", "fallback"), "fallback");
+        // an explicit value wins even with env-defaults on
+        assert_eq!(value_or(Some("v"), true, "VAR", "fallback"), "v");
+    }
+
+    /// A non-UTF-8 path explicitly provided to sqlite `init` is rejected with a
+    /// `PathError`, mirroring `SqliteSettingsBuilder::build()`, rather than
+    /// silently falling back to a default. No settings file is written.
+    #[cfg(unix)]
+    #[test]
+    fn sqlite_init_rejects_non_utf8_paths() {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+
+        let bad = std::path::PathBuf::from(OsStr::from_bytes(&[0x2f, 0x66, 0x6f, 0x80, 0x6f]));
+        let dir = tempfile::tempdir().unwrap();
+
+        // A non-UTF-8 database_path is rejected.
+        let err = SettingsFileInitializer::new(dir.path())
+            .interactive(false)
+            .with_sqlite_options(SqliteSettingsBuilder::empty().database_path(&bad))
+            .initialize()
+            .unwrap_err();
+        assert!(
+            matches!(err, Error::PathError(_)),
+            "non-utf8 database_path must be rejected with a PathError, got {err:?}"
+        );
+
+        // A non-UTF-8 migration_location is rejected too (with a valid db path).
+        let err = SettingsFileInitializer::new(dir.path())
+            .interactive(false)
+            .with_sqlite_options(
+                SqliteSettingsBuilder::empty()
+                    .database_path("/abs/db.db")
+                    .migration_location(&bad),
+            )
+            .initialize()
+            .unwrap_err();
+        assert!(
+            matches!(err, Error::PathError(_)),
+            "non-utf8 migration_location must be rejected with a PathError, got {err:?}"
+        );
+
+        // The failed init did not leave a settings file behind.
+        assert!(
+            !dir.path().join(crate::CONFIG_FILE).exists(),
+            "no settings file should be written when a path is rejected"
+        );
+    }
+
+    /// The same rejection applies to the shared pg/mysql server template's
+    /// `migration_location`.
+    #[cfg(unix)]
+    #[test]
+    fn server_init_rejects_non_utf8_migration_location() {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+
+        let bad = std::path::PathBuf::from(OsStr::from_bytes(&[0x2f, 0x66, 0x6f, 0x80, 0x6f]));
+        let dir = tempfile::tempdir().unwrap();
+
+        let err = SettingsFileInitializer::new(dir.path())
+            .interactive(false)
+            .with_postgres_options(
+                PostgresSettingsBuilder::empty()
+                    .database_name("db")
+                    .database_user("me")
+                    .database_password("secret")
+                    .migration_location(&bad),
+            )
+            .initialize()
+            .unwrap_err();
+        assert!(
+            matches!(err, Error::PathError(_)),
+            "non-utf8 server migration_location must be rejected with a PathError, got {err:?}"
+        );
+        assert!(
+            !dir.path().join(crate::CONFIG_FILE).exists(),
+            "no settings file should be written when a path is rejected"
+        );
+    }
+
+    /// Ordinary UTF-8 paths -- and omitted path options -- still render and write
+    /// the settings file successfully, using explicit values where given and the
+    /// normal defaults where absent.
+    #[test]
+    fn init_writes_template_for_utf8_and_omitted_paths() {
+        // sqlite with explicit UTF-8 paths
+        let dir = tempfile::tempdir().unwrap();
+        SettingsFileInitializer::new(dir.path())
+            .interactive(false)
+            .with_sqlite_options(
+                SqliteSettingsBuilder::empty()
+                    .database_path("db/db.db")
+                    .migration_location("migrations/managed"),
+            )
+            .initialize()
+            .expect("utf8 sqlite init succeeds");
+        let written = std::fs::read_to_string(dir.path().join(crate::CONFIG_FILE)).unwrap();
+        assert!(
+            written.contains(r#"database_path = "db/db.db""#),
+            "{written}"
+        );
+        assert!(
+            written.contains(r#"migration_location = "migrations/managed""#),
+            "{written}"
+        );
+
+        // postgres with migration_location omitted -> normal default is used
+        let dir = tempfile::tempdir().unwrap();
+        SettingsFileInitializer::new(dir.path())
+            .interactive(false)
+            .with_postgres_options(
+                PostgresSettingsBuilder::empty()
+                    .database_name("db")
+                    .database_user("me")
+                    .database_password("secret"),
+            )
+            .initialize()
+            .expect("postgres init with omitted migration_location succeeds");
+        let written = std::fs::read_to_string(dir.path().join(crate::CONFIG_FILE)).unwrap();
+        assert!(
+            written.contains(r#"migration_location = "migrations""#),
+            "omitted migration_location uses its default: {written}"
+        );
     }
 }

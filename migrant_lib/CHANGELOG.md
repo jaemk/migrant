@@ -1,5 +1,33 @@
 # Changelog
 
+## [Unreleased]
+### Added
+- `Migratable::checksum()` returns a sha256 checksum of a migration's up-SQL (`None` for
+  `FnMigration`), recorded in the bookkeeping table when the migration is applied
+- `Migrator::allow_unknown_tags(bool)` (default `false`) lets a run proceed when the database
+  has an applied tag not present in the defined migration set, instead of erroring
+- `Migrator::allow_out_of_order(bool)` (default `false`) lets a run apply migrations out of
+  their defined order, instead of erroring
+
+### Changed
+- `migrant_lib::new` is renamed to `migrant_lib::create_migration` and now returns a
+  `NewMigration` (with `dir()`/`up_path()`/`down_path()` accessors) instead of `()`
+- `migrant_lib::list` moved to `migrant_lib::cli::list`
+- `SqliteSettingsBuilder`/`PostgresSettingsBuilder`/`MySqlSettingsBuilder` setters
+  `database_path`/`migration_location` are now infallible: they take and return `Self` instead
+  of `Result<Self>`. Validation is deferred to `build()`
+- `Migratable::description` and `cli::edit` now take `Direction` by value instead of by
+  reference
+- `MigratableClone` is now a sealed trait and can no longer be implemented outside this crate
+- The `__migrant_migrations` bookkeeping table is now multi-column (`id`, `tag`, `checksum`,
+  `applied_at`) instead of a single `tag` column. Applied order is tracked by `id` and is
+  authoritative; `Down` targets the most-recently-applied migration by this recorded order,
+  not by scanning the defined migration list. This is a breaking change to the on-disk schema;
+  see the `migrant` CLI changelog for an upgrade note
+- A run now errors by default if the database records an applied tag absent from the defined
+  migration set, or if it would apply migrations out of order. Opt out with
+  `Migrator::allow_unknown_tags(true)` / `Migrator::allow_out_of_order(true)`
+
 ## [1.0.0-rc.2]
 Breaking pre-1.0 release, continuing the API cleanup from rc.1.
 

@@ -94,7 +94,7 @@ impl PgConn {
         if self.migration_table_exists()? {
             return Ok(false);
         }
-        self.client.execute(sql::CREATE_TABLE, &[])?;
+        self.client.execute(sql::PG_CREATE_TABLE, &[])?;
         Ok(true)
     }
 
@@ -103,9 +103,9 @@ impl PgConn {
         Ok(rows.iter().map(|row| row.get(0)).collect())
     }
 
-    pub(crate) fn insert_tag(&mut self, tag: &str) -> Result<()> {
+    pub(crate) fn insert_tag(&mut self, tag: &str, checksum: Option<&str>) -> Result<()> {
         self.client
-            .execute(sql::INSERT_MIGRATION_PG_SQLITE, &[&tag])?;
+            .execute(sql::INSERT_MIGRATION_PG_SQLITE, &[&tag, &checksum])?;
         Ok(())
     }
 
@@ -229,10 +229,37 @@ mod tests {
         assert!(!conn.setup_migration_table().unwrap(), "setup idempotent");
         assert!(conn.migration_table_exists().unwrap(), "table exists");
 
-        conn.insert_tag("initial").unwrap();
-        conn.insert_tag("alter1").unwrap();
-        conn.insert_tag("alter2").unwrap();
-        assert_eq!(3, conn.applied_tags().unwrap().len());
+        conn.insert_tag("initial", Some("abc123")).unwrap();
+        conn.insert_tag("alter1", None).unwrap();
+        conn.insert_tag("alter2", Some("def456")).unwrap();
+        // Recorded order is authoritative: tags come back in insertion (id) order.
+        assert_eq!(
+            vec!["initial", "alter1", "alter2"],
+            conn.applied_tags().unwrap()
+        );
+
+        // The checksum column carries the value we inserted (and NULL where None).
+        let checksums: Vec<Option<String>> = conn
+            .client
+            .query("select checksum from __migrant_migrations order by id", &[])
+            .unwrap()
+            .iter()
+            .map(|row| row.get(0))
+            .collect();
+        assert_eq!(
+            vec![Some("abc123".to_string()), None, Some("def456".to_string())],
+            checksums
+        );
+        // `applied_at` is populated by the column default.
+        let stamped: i64 = conn
+            .client
+            .query_one(
+                "select count(*) from __migrant_migrations where applied_at is not null",
+                &[],
+            )
+            .unwrap()
+            .get(0);
+        assert_eq!(3, stamped);
 
         conn.remove_tag("alter2").unwrap();
         assert_eq!(2, conn.applied_tags().unwrap().len());
