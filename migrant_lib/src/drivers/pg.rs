@@ -5,7 +5,7 @@ use std::path::Path;
 
 use postgres::{Client, NoTls};
 
-use super::sql;
+use super::{sql, AppliedRecord};
 use crate::errors::*;
 use crate::macros::err;
 
@@ -98,14 +98,34 @@ impl PgConn {
         Ok(true)
     }
 
-    pub(crate) fn applied_tags(&mut self) -> Result<Vec<String>> {
+    pub(crate) fn applied_records(&mut self) -> Result<Vec<AppliedRecord>> {
         let rows = self.client.query(sql::GET_MIGRATIONS, &[])?;
-        Ok(rows.iter().map(|row| row.get(0)).collect())
+        Ok(rows
+            .iter()
+            .map(|row| AppliedRecord {
+                tag: row.get(0),
+                checksum: row.get(1),
+                repeatable: row.get(2),
+            })
+            .collect())
     }
 
-    pub(crate) fn insert_tag(&mut self, tag: &str, checksum: Option<&str>) -> Result<()> {
+    pub(crate) fn insert_tag(
+        &mut self,
+        tag: &str,
+        checksum: Option<&str>,
+        repeatable: bool,
+    ) -> Result<()> {
+        self.client.execute(
+            sql::INSERT_MIGRATION_PG_SQLITE,
+            &[&tag, &checksum, &repeatable],
+        )?;
+        Ok(())
+    }
+
+    pub(crate) fn update_tag(&mut self, tag: &str, checksum: Option<&str>) -> Result<()> {
         self.client
-            .execute(sql::INSERT_MIGRATION_PG_SQLITE, &[&tag, &checksum])?;
+            .execute(sql::UPDATE_MIGRATION_PG, &[&checksum, &tag])?;
         Ok(())
     }
 
@@ -162,6 +182,14 @@ impl PgConn {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn record(tag: &str, checksum: Option<&str>, repeatable: bool) -> AppliedRecord {
+        AppliedRecord {
+            tag: tag.to_string(),
+            checksum: checksum.map(str::to_string),
+            repeatable,
+        }
+    }
 
     #[test]
     fn sslmode_value_parsing() {
@@ -229,27 +257,20 @@ mod tests {
         assert!(!conn.setup_migration_table().unwrap(), "setup idempotent");
         assert!(conn.migration_table_exists().unwrap(), "table exists");
 
-        conn.insert_tag("initial", Some("abc123")).unwrap();
-        conn.insert_tag("alter1", None).unwrap();
-        conn.insert_tag("alter2", Some("def456")).unwrap();
-        // Recorded order is authoritative: tags come back in insertion (id) order.
+        conn.insert_tag("initial", Some("abc123"), false).unwrap();
+        conn.insert_tag("alter1", None, false).unwrap();
+        conn.insert_tag("alter2", Some("def456"), true).unwrap();
+        // Recorded order is authoritative: records come back in insertion (id)
+        // order, each carrying its tag, checksum (NULL where None), and kind.
         assert_eq!(
-            vec!["initial", "alter1", "alter2"],
-            conn.applied_tags().unwrap()
+            vec![
+                record("initial", Some("abc123"), false),
+                record("alter1", None, false),
+                record("alter2", Some("def456"), true),
+            ],
+            conn.applied_records().unwrap()
         );
 
-        // The checksum column carries the value we inserted (and NULL where None).
-        let checksums: Vec<Option<String>> = conn
-            .client
-            .query("select checksum from __migrant_migrations order by id", &[])
-            .unwrap()
-            .iter()
-            .map(|row| row.get(0))
-            .collect();
-        assert_eq!(
-            vec![Some("abc123".to_string()), None, Some("def456".to_string())],
-            checksums
-        );
         // `applied_at` is populated by the column default.
         let stamped: i64 = conn
             .client
@@ -261,12 +282,35 @@ mod tests {
             .get(0);
         assert_eq!(3, stamped);
 
+        // REPEAT-6: a repeatable row is updated in place, keeping its id.
+        let id_before: i32 = conn
+            .client
+            .query_one(
+                "select id from __migrant_migrations where tag = 'alter2'",
+                &[],
+            )
+            .unwrap()
+            .get(0);
+        conn.update_tag("alter2", Some("ghi789")).unwrap();
+        let records = conn.applied_records().unwrap();
+        assert_eq!(3, records.len(), "an update must not insert another row");
+        assert_eq!(record("alter2", Some("ghi789"), true), records[2]);
+        let id_after: i32 = conn
+            .client
+            .query_one(
+                "select id from __migrant_migrations where tag = 'alter2'",
+                &[],
+            )
+            .unwrap()
+            .get(0);
+        assert_eq!(id_before, id_after, "the row keeps its recorded order");
+
         conn.remove_tag("alter2").unwrap();
-        assert_eq!(2, conn.applied_tags().unwrap().len());
+        assert_eq!(2, conn.applied_records().unwrap().len());
 
         conn.remove_tag("alter1").unwrap();
         conn.remove_tag("initial").unwrap();
-        assert_eq!(0, conn.applied_tags().unwrap().len());
+        assert_eq!(0, conn.applied_records().unwrap().len());
 
         conn.execute_batch("drop table __migrant_migrations;")
             .unwrap();

@@ -25,9 +25,12 @@ run from anywhere inside the project; migrant searches upward for the config.
 
 ## Migrations
 
-`migrant new <tag>`
+`migrant new <tag> [--repeatable]`
 : Generate a timestamped `<stamp>_<tag>/` directory with empty `up.sql` and
-  `down.sql`. Tags may contain `[a-z0-9-]`.
+  `down.sql`. Tags may contain `[a-z0-9-]`. `--repeatable` instead writes only an
+  `up.sql`, seeded with the `-- migrant:repeatable` directive, for a migration
+  that re-runs whenever its SQL changes (see
+  [Writing migrations](migrations.md)).
 
 `migrant edit <tag> [--down]`
 : Open the `up.sql` (or `down.sql` with `--down`) for a migration matching
@@ -38,25 +41,38 @@ run from anywhere inside the project; migrant searches upward for the config.
 
 `migrant status [--format <text|json>]`
 : Report every managed migration with its applied/pending state and summary
-  counts. `--format text` (the default) prints a summary line plus a `[✓]`/`[ ]`
-  row per migration; `--format json` prints the same data as JSON
-  (`{ total, applied, pending, migrations: [{ tag, applied }] }`) for scripting.
+  counts. `--format text` (the default) prints a summary line plus a
+  `[✓]`/`[ ]`/`[~]` row per migration; `--format json` prints the same data as
+  JSON
+  (`{ total, applied, pending, stale, migrations: [{ tag, applied, repeatable, stale }] }`)
+  for scripting. A repeatable migration is annotated, and marked `[~]` when it is
+  due to re-run. The summary `stale` count covers applied migrations that will
+  re-run; migrations with no row yet are counted in `pending`.
 
-`migrant apply [--down] [--all] [--force[=<mode>]] [--fake] [--no-sync]`
-: Apply the next migration. `--down` reverts instead of applying. `--all` runs
-  every remaining migration in the chosen direction. `--force` continues past a
-  failed migration: bare `--force` (or `--force=accept-failures`) records the
-  failed migration as applied anyway, so it is not retried on later runs;
-  `--force=skip-failures` leaves it unrecorded and retries it on the next run.
-  `--fake` records the migration as (un)applied without running its SQL.
-  `--no-sync` disables the cross-process advisory lock that is otherwise on by
-  default for PostgreSQL/MySQL; use it when migrations are already serialized
-  by an external mechanism.
+`migrant apply [--down] [--step <N>] [--force[=<mode>]] [--fake] [--no-sync] [--rerun-repeatable] [--allow-unknown-tags] [--allow-out-of-order] [--allow-checksum-mismatch]`
+: Apply every pending migration. `--down` reverts instead of applying, and
+  defaults to a single migration. `--step N` limits either direction to N.
+  `--force` continues past a failed migration: bare `--force` (or
+  `--force=accept-failures`) records the failed migration as applied anyway, so
+  it is not retried on later runs; `--force=skip-failures` leaves it unrecorded
+  and retries it on the next run. `--fake` records the migration as (un)applied
+  without running its SQL. `--no-sync` disables the cross-process advisory lock
+  that is otherwise on by default for PostgreSQL/MySQL; use it when migrations
+  are already serialized by an external mechanism. `--rerun-repeatable` re-runs
+  every repeatable migration even if its SQL is unchanged. The three `--allow-*` flags
+  each bypass one otherwise-fatal consistency check: an applied tag missing from
+  the migration set, a migration applied out of order, and an already-applied
+  migration whose SQL has changed since it was recorded.
 
-`migrant redo [--all] [--force[=<mode>]] [--no-sync]`
+`migrant redo [--all] [--force[=<mode>]] [--no-sync] [--rerun-repeatable] [--allow-unknown-tags] [--allow-out-of-order] [--allow-checksum-mismatch]`
 : Shortcut for the latest `down` then `up`. Useful while iterating on a migration
-  you are still writing. `--no-sync` disables the advisory lock for both the
-  down and up runs.
+  you are still writing. `--all` redoes every applied migration. `--no-sync`
+  disables the advisory lock for both the down and up runs. Repeatable
+  migrations are forward-only, so the down phase skips them and targets the most
+  recent versioned migration instead; the up phase then re-runs a repeatable
+  migration only if its SQL changed, or unconditionally with
+  `--rerun-repeatable`. `redo` prints a note naming the repeatable migrations it
+  will not revert.
 
 ## Inspect and connect
 

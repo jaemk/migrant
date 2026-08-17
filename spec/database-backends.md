@@ -26,10 +26,17 @@ Invoking an operation whose backend feature is disabled returns
 
 ## BACKEND-6
 
-The `__migrant_migrations` bookkeeping table has four columns on all three backends: `id`
+The `__migrant_migrations` bookkeeping table has five columns on all three backends: `id`
 (an auto-incrementing key recording applied order), `tag` (the migration tag), `checksum`
-(a sha256 checksum of the migration's up-SQL, null for programmatic migrations), and
-`applied_at` (a timestamp of when the migration was applied).
+(a sha256 checksum of the migration's up-SQL, null for programmatic migrations),
+`applied_at` (a timestamp of when the migration was applied), and `is_repeatable` (whether
+the row records a repeatable migration, default false). The column is named `is_repeatable`
+rather than `repeatable` because the latter is a keyword on both postgres and mysql and
+would need per-backend quoting.
+
+A repeatable migration's row is updated in place on each re-run rather than re-inserted, so
+`checksum` and `applied_at` change while `id` (and therefore recorded application order)
+does not. See [repeatable-migrations.md](repeatable-migrations.md) REPEAT-6.
 
 Coverage: `migrant_lib/tests/sqlite.rs`; `server_dbs.rs` (postgres/mysql end-to-end,
 gated on POSTGRES_TEST_CONN_STR/MYSQL_TEST_CONN_STR, run via `test.sh` against docker

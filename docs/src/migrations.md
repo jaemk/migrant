@@ -1,7 +1,7 @@
 # Writing migrations
 
-A CLI migration is a directory holding an `up.sql` and a `down.sql`, named with a
-timestamp and a tag:
+A CLI migration is a directory holding an `up.sql` and, optionally, a
+`down.sql`, named with a timestamp and a tag:
 
 ```
 migrations/
@@ -21,6 +21,9 @@ way up, newest-first on the way down. Tags may contain `[a-z0-9-]`.
 
 `up.sql` moves the schema forward; `down.sql` reverses it. Keep them inverses so
 `apply --down` cleanly undoes `apply`.
+
+`down.sql` is optional. A migration with no down file is a no-op in the down
+direction: reverting it removes its tracking-table row without running any SQL.
 
 ```sql
 -- 20260714101500_add-users-email/up.sql
@@ -47,14 +50,57 @@ Current Migration Status:
  -> [ ] 20260714101500_add-users-email
 ```
 
-`apply` runs the next unapplied migration in timestamp order; `apply --all` runs
-the rest. `apply --down` reverts the most recently applied one.
+`apply` runs every pending migration in timestamp order; `apply --step N` limits
+a run to N. `apply --down` reverts the most recently applied one.
 
 ## Editing and iterating
 
 - `migrant edit <tag>` opens `up.sql` in `$EDITOR`; add `--down` for `down.sql`.
 - `migrant redo` re-runs the latest migration (down then up) so you can iterate
   on SQL you are still writing.
+
+Editing a migration that has already been applied is drift: the next run aborts
+with a checksum mismatch rather than silently building on changed SQL. Either
+revert the edit and write a new migration, or pass `--allow-checksum-mismatch`.
+Repeatable migrations invert this, see below.
+
+## Repeatable migrations
+
+A repeatable migration re-runs whenever its `up.sql` changes, instead of applying
+exactly once. Use them for idempotent data work (seeding, backfills, refreshing
+views) rather than schema versioning.
+
+`migrant new --repeatable <tag>` creates one: an `up.sql` carrying the directive,
+and no `down.sql`.
+
+```sql
+-- migrant:repeatable
+insert into roles (name) values ('admin') on conflict do nothing;
+```
+
+The rules:
+
+- They run after every pending versioned migration in a run, in timestamp order
+  among themselves, and at most once per run.
+- A checksum change is the signal to re-run, not drift, so editing the file is
+  how you make it run again. An unchanged file is skipped.
+- They keep one row in the tracking table, updated in place.
+- They are forward-only: they must not have a `down.sql`, and `apply --down`
+  never reverts them. `redo` reverts and re-applies the most recent *versioned*
+  migration, which may not be the one you just edited; its up phase then re-runs
+  a repeatable migration only if its SQL changed, like any other run. `redo`
+  prints a note when it skips one.
+- To run one whose SQL has not changed, pass `--rerun-repeatable` to `apply` or
+  `redo`. It re-runs every repeatable migration, still after the versioned ones
+  and still at most once per run.
+
+`migrant status` marks one that is due to re-run:
+
+```
+Migration status: 2 applied, 0 pending, 1 stale (2 total)
+  [✓] 20260713094500_create-roles
+  [~] 20260714101500_seed-roles  (repeatable, will re-run)
+```
 
 ## Non-transactional DDL
 

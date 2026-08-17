@@ -17,25 +17,62 @@ pub(crate) mod sql {
     // The bookkeeping table carries, besides the migration `tag`: a surrogate
     // `id` whose ascending order is the authoritative recorded application
     // order, an optional `checksum` (lowercase hex sha256 of the raw up-direction
-    // SQL, NULL for programmatic migrations that have no SQL to hash), and an
-    // `applied_at` timestamp populated by the column default.
-    pub static PG_CREATE_TABLE: &str = "create table __migrant_migrations(id serial primary key, tag text unique not null, checksum text, applied_at timestamptz not null default now());";
-    pub static SQLITE_CREATE_TABLE: &str = "create table __migrant_migrations(id integer primary key autoincrement, tag text unique not null, checksum text, applied_at timestamp not null default current_timestamp);";
-    pub static MYSQL_CREATE_TABLE: &str = "create table __migrant_migrations(id integer primary key auto_increment, tag varchar(512) unique not null, checksum text null, applied_at timestamp not null default current_timestamp);";
+    // SQL, NULL for programmatic migrations that have no SQL to hash), an
+    // `applied_at` timestamp populated by the column default, and `is_repeatable`
+    // marking rows that record a repeatable migration (re-run on every checksum
+    // change). The column is named `is_repeatable` rather than `repeatable`
+    // because the latter is a keyword on both postgres and mysql.
+    pub static PG_CREATE_TABLE: &str = "create table __migrant_migrations(id serial primary key, tag text unique not null, checksum text, applied_at timestamptz not null default now(), is_repeatable boolean not null default false);";
+    // Sqlite uses `0`/`1` rather than the `false`/`true` keywords, which its
+    // parser only gained in 3.23.0. `migrant_lib` links whatever libsqlite3 the
+    // consumer provides (its rusqlite dependency is not `bundled`), so the
+    // portable spelling is the safe one.
+    pub static SQLITE_CREATE_TABLE: &str = "create table __migrant_migrations(id integer primary key autoincrement, tag text unique not null, checksum text, applied_at timestamp not null default current_timestamp, is_repeatable boolean not null default 0);";
+    pub static MYSQL_CREATE_TABLE: &str = "create table __migrant_migrations(id integer primary key auto_increment, tag varchar(512) unique not null, checksum text null, applied_at timestamp not null default current_timestamp, is_repeatable boolean not null default false);";
 
     // Recorded application order is authoritative, so order by the surrogate id.
-    pub static GET_MIGRATIONS: &str = "select tag from __migrant_migrations order by id;";
+    // Each row carries the tag, its recorded checksum (NULL for programmatic
+    // migrations), and whether it records a repeatable migration. Checksum drift
+    // of an already-applied versioned migration is detected by comparing the
+    // recorded checksum against the migration's current one; for a repeatable
+    // row the same difference is instead the signal to re-run.
+    pub static GET_MIGRATIONS: &str =
+        "select tag, checksum, is_repeatable from __migrant_migrations order by id;";
     pub static INSERT_MIGRATION_PG_SQLITE: &str =
-        "insert into __migrant_migrations (tag, checksum) values ($1, $2)";
+        "insert into __migrant_migrations (tag, checksum, is_repeatable) values ($1, $2, $3)";
     pub static REMOVE_MIGRATION_PG_SQLITE: &str = "delete from __migrant_migrations where tag = $1";
     pub static INSERT_MIGRATION_MYSQL: &str =
-        "insert into __migrant_migrations (tag, checksum) values (?, ?)";
+        "insert into __migrant_migrations (tag, checksum, is_repeatable) values (?, ?, ?)";
     pub static REMOVE_MIGRATION_MYSQL: &str = "delete from __migrant_migrations where tag = ?";
+
+    // A repeatable migration keeps one row, updated in place on each re-run, so
+    // its `id` (and therefore recorded application order) is preserved.
+    // `applied_at` is refreshed explicitly because the column default only
+    // applies on insert. `is_repeatable` is set rather than left alone so a row
+    // first recorded for a versioned migration becomes correctly marked once
+    // that migration is declared repeatable; only a repeatable re-run takes
+    // this path.
+    pub static UPDATE_MIGRATION_PG: &str = "update __migrant_migrations set checksum = $1, applied_at = now(), is_repeatable = true where tag = $2";
+    pub static UPDATE_MIGRATION_SQLITE: &str = "update __migrant_migrations set checksum = $1, applied_at = current_timestamp, is_repeatable = 1 where tag = $2";
+    pub static UPDATE_MIGRATION_MYSQL: &str = "update __migrant_migrations set checksum = ?, applied_at = current_timestamp, is_repeatable = true where tag = ?";
 
     pub static SQLITE_MIGRATION_TABLE_EXISTS: &str = "select exists(select 1 from sqlite_master where type = 'table' and name = '__migrant_migrations');";
     pub static PG_MIGRATION_TABLE_EXISTS: &str =
         "select exists(select 1 from pg_tables where tablename = '__migrant_migrations');";
     pub static MYSQL_MIGRATION_TABLE_EXISTS: &str = "select exists(select 1 from information_schema.tables where table_name='__migrant_migrations' and table_schema = database()) as tag;";
+}
+
+/// One row of the `__migrant_migrations` bookkeeping table, in recorded
+/// application order.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct AppliedRecord {
+    /// The recorded migration tag
+    pub(crate) tag: String,
+    /// The checksum recorded when the migration was applied, `None` where the
+    /// column is NULL (programmatic migrations, or legacy rows)
+    pub(crate) checksum: Option<String>,
+    /// Whether the row records a repeatable migration
+    pub(crate) repeatable: bool,
 }
 
 #[cfg(feature = "mysql")]
@@ -141,15 +178,29 @@ impl DbConnection {
         dispatch!(self, c => c.setup_migration_table())
     }
 
-    /// Select all applied migration tags
-    pub(crate) fn applied_tags(&mut self) -> Result<Vec<String>> {
-        dispatch!(self, c => c.applied_tags())
+    /// Select all applied migrations as [`AppliedRecord`]s, in recorded
+    /// application order.
+    pub(crate) fn applied_records(&mut self) -> Result<Vec<AppliedRecord>> {
+        dispatch!(self, c => c.applied_records())
     }
 
-    /// Record a migration tag as applied, along with its optional checksum
-    /// (`applied_at` is populated by the column default)
-    pub(crate) fn insert_tag(&mut self, tag: &str, checksum: Option<&str>) -> Result<()> {
-        dispatch!(self, c => c.insert_tag(tag, checksum))
+    /// Record a migration tag as applied, along with its optional checksum and
+    /// whether it is repeatable (`applied_at` is populated by the column
+    /// default)
+    pub(crate) fn insert_tag(
+        &mut self,
+        tag: &str,
+        checksum: Option<&str>,
+        repeatable: bool,
+    ) -> Result<()> {
+        dispatch!(self, c => c.insert_tag(tag, checksum, repeatable))
+    }
+
+    /// Update an already-recorded tag's checksum and `applied_at` in place, and
+    /// mark it repeatable. Used when a repeatable migration re-runs, so the row
+    /// keeps its `id` and recorded application order is unchanged.
+    pub(crate) fn update_tag(&mut self, tag: &str, checksum: Option<&str>) -> Result<()> {
+        dispatch!(self, c => c.update_tag(tag, checksum))
     }
 
     /// Remove a migration tag from the applied set
@@ -209,37 +260,75 @@ mod tests {
     }
 
     /// Every backend's create-table statement must carry the `tag`, `checksum`,
-    /// and `applied_at` columns, and applied tags must be selected in recorded
-    /// order (`order by id`) so the recorded application order is authoritative.
+    /// `applied_at`, and `is_repeatable` columns, and applied tags must be
+    /// selected in recorded order (`order by id`) so the recorded application
+    /// order is authoritative.
     #[test]
-    fn create_table_statements_carry_checksum_and_applied_at() {
+    fn create_table_statements_carry_every_bookkeeping_column() {
         for (name, ddl) in [
             ("pg", sql::PG_CREATE_TABLE),
             ("sqlite", sql::SQLITE_CREATE_TABLE),
             ("mysql", sql::MYSQL_CREATE_TABLE),
         ] {
-            assert!(
-                ddl.contains("tag"),
-                "{name} ddl must have a tag column: {ddl}"
-            );
-            assert!(
-                ddl.contains("checksum"),
-                "{name} ddl must have a checksum column: {ddl}"
-            );
-            assert!(
-                ddl.contains("applied_at"),
-                "{name} ddl must have an applied_at column: {ddl}"
-            );
+            for column in ["tag", "checksum", "applied_at", "is_repeatable"] {
+                assert!(
+                    ddl.contains(column),
+                    "{name} ddl must have a {column} column: {ddl}"
+                );
+            }
         }
         assert!(
             sql::GET_MIGRATIONS.contains("order by id"),
             "GET_MIGRATIONS must order by id: {}",
             sql::GET_MIGRATIONS
         );
+        for column in ["tag", "checksum", "is_repeatable"] {
+            assert!(
+                sql::GET_MIGRATIONS.contains(column),
+                "GET_MIGRATIONS must select {column}: {}",
+                sql::GET_MIGRATIONS
+            );
+            assert!(
+                sql::INSERT_MIGRATION_PG_SQLITE.contains(column)
+                    && sql::INSERT_MIGRATION_MYSQL.contains(column),
+                "inserts must carry the {column} column"
+            );
+        }
+    }
+
+    /// REPEAT-6: every backend's in-place update must refresh `checksum` and
+    /// `applied_at`, mark the row repeatable, and be scoped to one tag. Without
+    /// the `where tag` clause it would rewrite the whole table.
+    #[test]
+    fn update_statements_refresh_the_row_in_place_for_one_tag() {
+        for (name, update) in [
+            ("pg", sql::UPDATE_MIGRATION_PG),
+            ("sqlite", sql::UPDATE_MIGRATION_SQLITE),
+            ("mysql", sql::UPDATE_MIGRATION_MYSQL),
+        ] {
+            assert!(
+                update.contains("checksum ="),
+                "{name} update must set checksum: {update}"
+            );
+            assert!(
+                update.contains("applied_at ="),
+                "{name} update must refresh applied_at: {update}"
+            );
+            assert!(
+                update.contains("is_repeatable ="),
+                "{name} update must mark the row repeatable: {update}"
+            );
+            assert!(
+                update.contains("where tag ="),
+                "{name} update must be scoped to a single tag: {update}"
+            );
+        }
+        // The sqlite parser only gained the `true`/`false` keywords in 3.23.0,
+        // and `migrant_lib` links the consumer's libsqlite3.
         assert!(
-            sql::INSERT_MIGRATION_PG_SQLITE.contains("checksum")
-                && sql::INSERT_MIGRATION_MYSQL.contains("checksum"),
-            "inserts must carry the checksum column"
+            !sql::SQLITE_CREATE_TABLE.contains("false")
+                && !sql::UPDATE_MIGRATION_SQLITE.contains("true"),
+            "sqlite statements must use 0/1 rather than the boolean keywords"
         );
     }
 }

@@ -42,4 +42,26 @@ compute it from their up-SQL; `FnMigration` (a programmatic migration with no SQ
 
 `Migratable::description(Direction)` takes `Direction` by value instead of by reference.
 
+## MIGTYPE-8
+
+`Migratable::is_repeatable()` (default `false`) reports whether a migration re-runs on every
+checksum change instead of applying once. `FileMigration` and `EmbeddedMigration` declare it
+with a `repeatable()` builder method or a `-- migrant:repeatable` directive in their up-SQL
+(either declares it; neither can un-declare the other), mirroring MIGTYPE-5's two forms. The
+trait predicate carries the `is_`
+prefix because the builder method occupies the plain name on the concrete types, the same
+split as `no_transaction()` and `use_transaction()`. See
+[repeatable-migrations.md](repeatable-migrations.md).
+
+`Migratable::defines_down()` (default `false`) reports whether a migration has a down
+direction to run, and exists so a repeatable migration that also defines a down can be
+rejected (REPEAT-7).
+
+## MIGTYPE-9
+
+The down direction is optional for file-discovered migrations: a migration directory needs
+only `up.sql`, and `down.sql` may be absent. Reverting a migration with no down direction
+removes its bookkeeping row without running SQL, the same silent no-op `FnMigration` already
+has for a missing function.
+
 Coverage: `migrant_lib/tests/sqlite.rs`, `server_dbs.rs`, `reload_memory.rs`.

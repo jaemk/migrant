@@ -27,6 +27,8 @@ can be built). Keep each row's status current with `spec.py set`.
 | Config File and Env Resolution | done | [config-file-and-env-resolution.md](config-file-and-env-resolution.md) |
 | Error Handling API | done | [error-handling-api.md](error-handling-api.md) |
 | Distribution | done | [distribution.md](distribution.md) |
+| Repeatable Migrations | done | [repeatable-migrations.md](repeatable-migrations.md) |
+| Checksum Drift Detection | done | [checksum-drift-detection.md](checksum-drift-detection.md) |
 
 ## Conventions
 

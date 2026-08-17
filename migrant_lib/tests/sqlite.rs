@@ -846,3 +846,795 @@ fn custom_migratable_applies_and_records_null_checksum() {
         "a custom migration inherits the default `checksum` of None (NULL)"
     );
 }
+
+#[test]
+fn checksum_drift_aborts_up_run_and_opt_out_applies() {
+    // Apply a migration, then swap in a same-tag migration whose up-SQL differs
+    // (as if the file had been edited after it ran). The recorded checksum no
+    // longer matches the current one, so the next up run aborts before applying.
+    let settings = Settings::configure_sqlite().memory().build().unwrap();
+    let mut config = Config::with_settings(settings);
+    config
+        .use_migrations(&[EmbeddedMigration::with_tag("t")
+            .up("create table t (x integer);")
+            .down("drop table t;")
+            .boxed()])
+        .unwrap();
+    config.setup().unwrap();
+    Migrator::with_config(&config)
+        .all(true)
+        .show_output(false)
+        .apply()
+        .unwrap();
+    let recorded = recorded_rows(&config)[0].1.clone();
+    assert!(
+        recorded.is_some(),
+        "the up-SQL migration records a checksum"
+    );
+
+    // Same tag, edited up-SQL: a different checksum, on the same connection.
+    config
+        .use_migrations(&[EmbeddedMigration::with_tag("t")
+            .up("create table t (x integer, y integer);")
+            .down("drop table t;")
+            .boxed()])
+        .unwrap();
+
+    let err = Migrator::with_config(&config)
+        .all(true)
+        .show_output(false)
+        .apply()
+        .unwrap_err();
+    assert!(
+        err.is_checksum_mismatch(),
+        "an edited already-applied migration must abort the run, got: {err:?}"
+    );
+    assert!(
+        format!("{err}").contains("t"),
+        "the error should name the drifted tag: {err}"
+    );
+
+    // The recorded checksum is unchanged: the aborted run recorded nothing.
+    assert_eq!(
+        recorded,
+        recorded_rows(&config)[0].1,
+        "an aborted drift run must not rewrite the recorded checksum"
+    );
+
+    // Opting out bypasses the check. The migration is already applied, so the
+    // run has nothing to do and simply reports empty instead of erroring.
+    let report = Migrator::with_config(&config)
+        .all(true)
+        .show_output(false)
+        .allow_checksum_mismatch(true)
+        .apply()
+        .unwrap();
+    assert!(
+        report.is_empty(),
+        "opting out applies despite drift; nothing was pending here"
+    );
+}
+
+#[test]
+fn matching_checksum_does_not_trip_drift_check() {
+    // Re-running with the identical migration set must not be flagged as drift.
+    let settings = Settings::configure_sqlite().memory().build().unwrap();
+    let mut config = Config::with_settings(settings);
+    config
+        .use_migrations(&[EmbeddedMigration::with_tag("t")
+            .up("create table t (x integer);")
+            .down("drop table t;")
+            .boxed()])
+        .unwrap();
+    config.setup().unwrap();
+    Migrator::with_config(&config)
+        .all(true)
+        .show_output(false)
+        .apply()
+        .unwrap();
+    // A second up run over the unchanged set validates checksums and finds no
+    // drift, returning an empty report rather than erroring.
+    let report = Migrator::with_config(&config)
+        .all(true)
+        .show_output(false)
+        .apply()
+        .unwrap();
+    assert!(report.is_empty(), "unchanged checksums must not error");
+}
+
+#[test]
+fn null_recorded_checksum_is_not_treated_as_drift() {
+    // A programmatic migration records a NULL checksum. Re-running after it is
+    // applied must not flag drift even though the migration reports no checksum
+    // to compare against.
+    let settings = Settings::configure_sqlite().memory().build().unwrap();
+    let config = migrations_config(&settings);
+    config.setup().unwrap();
+    Migrator::with_config(&config)
+        .all(true)
+        .show_output(false)
+        .apply()
+        .unwrap();
+    // `seed-users` is an `FnMigration` recorded with a NULL checksum.
+    let rows = recorded_rows(&config);
+    assert!(
+        rows.iter()
+            .any(|(tag, sum)| tag == "seed-users" && sum.is_none()),
+        "the programmatic migration records a NULL checksum: {rows:?}"
+    );
+    let report = Migrator::with_config(&config)
+        .all(true)
+        .show_output(false)
+        .apply()
+        .unwrap();
+    assert!(
+        report.is_empty(),
+        "a NULL recorded checksum is skipped, not treated as drift"
+    );
+}
+
+/// Read the full bookkeeping rows in recorded (`order by id`) order, including
+/// each row's id and repeatable flag.
+fn recorded_repeatable_rows(config: &Config) -> Vec<(i64, String, Option<String>, bool)> {
+    let handle = config.sqlite_connection().unwrap();
+    let conn = handle.lock().unwrap();
+    let mut stmt = conn
+        .prepare("select id, tag, checksum, is_repeatable from __migrant_migrations order by id")
+        .unwrap();
+    let rows = stmt
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
+        .unwrap();
+    rows.collect::<Result<Vec<_>, _>>().unwrap()
+}
+
+/// An in-memory config with one versioned migration creating a `roles` table
+/// and one repeatable migration seeding it with the given SQL.
+fn repeatable_config(settings: &Settings, seed_sql: &'static str) -> Config {
+    let mut config = Config::with_settings(settings.clone());
+    config
+        .use_migrations(&[
+            EmbeddedMigration::with_tag("create-roles")
+                .up("create table roles (name text);")
+                .down("drop table roles;")
+                .boxed(),
+            EmbeddedMigration::with_tag("seed-roles")
+                .repeatable()
+                .up(seed_sql)
+                .boxed(),
+        ])
+        .unwrap();
+    config
+}
+
+fn role_names(config: &Config) -> Vec<String> {
+    let handle = config.sqlite_connection().unwrap();
+    let conn = handle.lock().unwrap();
+    let mut stmt = conn
+        .prepare("select name from roles order by name")
+        .unwrap();
+    let rows = stmt.query_map([], |r| r.get(0)).unwrap();
+    rows.collect::<Result<Vec<String>, _>>().unwrap()
+}
+
+// REPEAT-1, REPEAT-5, REPEAT-6
+#[test]
+fn repeatable_migration_reruns_only_when_its_checksum_changes() {
+    let settings = Settings::configure_sqlite().memory().build().unwrap();
+    let config = repeatable_config(&settings, "insert into roles (name) values ('admin');");
+    config.setup().unwrap();
+
+    // First run: the versioned migration, then the repeatable one.
+    let report = Migrator::with_config(&config)
+        .all(true)
+        .show_output(false)
+        .apply()
+        .unwrap();
+    assert_eq!(report.tags(), ["create-roles", "seed-roles"]);
+    assert_eq!(report.repeatable_tags(), ["seed-roles"]);
+    assert_eq!(role_names(&config), ["admin"]);
+
+    // Second run over unchanged SQL: nothing re-runs.
+    let report = Migrator::with_config(&config)
+        .all(true)
+        .show_output(false)
+        .apply()
+        .unwrap();
+    assert!(
+        report.is_empty(),
+        "an unchanged repeatable migration must not re-run"
+    );
+    assert_eq!(role_names(&config), ["admin"]);
+
+    let before = recorded_repeatable_rows(&config);
+    assert_eq!(2, before.len());
+    assert!(before[1].3, "the repeatable row records its kind");
+    assert!(!before[0].3, "the versioned row does not");
+
+    // Changing the repeatable migration's SQL is the signal to re-run it. The
+    // config carries the same live in-memory connection, so the seeded rows
+    // survive into the new config.
+    let mut changed = config.clone();
+    changed
+        .use_migrations(&[
+            EmbeddedMigration::with_tag("create-roles")
+                .up("create table roles (name text);")
+                .down("drop table roles;")
+                .boxed(),
+            EmbeddedMigration::with_tag("seed-roles")
+                .repeatable()
+                .up("insert into roles (name) values ('editor');")
+                .boxed(),
+        ])
+        .unwrap();
+    let report = Migrator::with_config(&changed)
+        .all(true)
+        .show_output(false)
+        .apply()
+        .unwrap();
+    assert_eq!(report.tags(), ["seed-roles"]);
+    assert_eq!(report.repeatable_tags(), ["seed-roles"]);
+    assert_eq!(role_names(&changed), ["admin", "editor"]);
+
+    // REPEAT-6: still one row for the tag, updated in place with the new
+    // checksum and keeping its original id.
+    let after = recorded_repeatable_rows(&changed);
+    assert_eq!(2, after.len(), "a re-run must not insert a second row");
+    assert_eq!(before[1].0, after[1].0, "the row keeps its id");
+    assert_eq!("seed-roles", after[1].1);
+    assert_ne!(before[1].2, after[1].2, "the checksum is updated");
+    assert!(after[1].3, "the row is still marked repeatable");
+}
+
+// REPEAT-2
+#[test]
+fn a_changed_repeatable_migration_is_not_checksum_drift() {
+    // The same recorded-vs-current checksum mismatch that aborts a run for a
+    // versioned migration drives the re-run for a repeatable one, with the
+    // drift check left at its strict default.
+    let settings = Settings::configure_sqlite().memory().build().unwrap();
+    let config = repeatable_config(&settings, "insert into roles (name) values ('admin');");
+    config.setup().unwrap();
+    Migrator::with_config(&config)
+        .all(true)
+        .show_output(false)
+        .apply()
+        .unwrap();
+
+    let mut changed = config.clone();
+    changed
+        .use_migrations(&[
+            EmbeddedMigration::with_tag("create-roles")
+                .up("create table roles (name text);")
+                .down("drop table roles;")
+                .boxed(),
+            EmbeddedMigration::with_tag("seed-roles")
+                .repeatable()
+                .up("insert into roles (name) values ('editor');")
+                .boxed(),
+        ])
+        .unwrap();
+    let report = Migrator::with_config(&changed)
+        .all(true)
+        .show_output(false)
+        .apply()
+        .expect("a repeatable migration's changed checksum is not drift");
+    assert_eq!(report.repeatable_tags(), ["seed-roles"]);
+}
+
+// REPEAT-4
+#[test]
+fn down_runs_never_revert_repeatable_migrations() {
+    let settings = Settings::configure_sqlite().memory().build().unwrap();
+    let config = repeatable_config(&settings, "insert into roles (name) values ('admin');");
+    config.setup().unwrap();
+    Migrator::with_config(&config)
+        .all(true)
+        .show_output(false)
+        .apply()
+        .unwrap();
+    let config = config.reload().unwrap();
+    assert_eq!(applied_tags(&config), ["create-roles", "seed-roles"]);
+
+    // Reverting everything targets only the versioned migration; the
+    // repeatable row is left in place.
+    let report = Migrator::with_config(&config)
+        .direction(Direction::Down)
+        .all(true)
+        .show_output(false)
+        .apply()
+        .unwrap();
+    assert_eq!(report.tags(), ["create-roles"]);
+    assert!(report.repeatable_tags().is_empty());
+    let config = config.reload().unwrap();
+    assert_eq!(applied_tags(&config), ["seed-roles"]);
+    assert!(!table_exists(&config, "roles"), "the down migration ran");
+
+    // REPEAT-11: re-applying restores the versioned migration, and the
+    // unchanged repeatable one stays skipped.
+    let report = Migrator::with_config(&config)
+        .all(true)
+        .show_output(false)
+        .apply()
+        .unwrap();
+    assert_eq!(report.tags(), ["create-roles"]);
+    assert!(
+        report.repeatable_tags().is_empty(),
+        "an unchanged repeatable migration stays skipped after a down/up cycle"
+    );
+}
+
+// REPEAT-1
+#[test]
+fn an_all_run_terminates_with_repeatable_migrations_present() {
+    // A repeatable migration runs at most once per run, so an `all` run cannot
+    // loop on one. This test would hang rather than fail if that broke.
+    let settings = Settings::configure_sqlite().memory().build().unwrap();
+    let config = repeatable_config(&settings, "insert into roles (name) values ('admin');");
+    config.setup().unwrap();
+    let report = Migrator::with_config(&config)
+        .all(true)
+        .show_output(false)
+        .apply()
+        .unwrap();
+    assert_eq!(report.repeatable_tags(), ["seed-roles"]);
+    assert_eq!(role_names(&config), ["admin"], "the seed ran exactly once");
+}
+
+// REPEAT-8
+#[test]
+fn statuses_report_repeatable_and_stale_state() {
+    let settings = Settings::configure_sqlite().memory().build().unwrap();
+    let config = repeatable_config(&settings, "insert into roles (name) values ('admin');");
+    config.setup().unwrap();
+
+    // Before any run both migrations are stale (they will run next).
+    let config = config.reload().unwrap();
+    let statuses = migrant_lib::migration_statuses(&config).unwrap();
+    assert!(statuses.iter().all(|s| s.stale() && !s.applied()));
+    assert!(!statuses[0].repeatable());
+    assert!(statuses[1].repeatable());
+    assert_eq!(
+        migrant_lib::pending_migrations(&config).unwrap(),
+        ["create-roles", "seed-roles"]
+    );
+
+    Migrator::with_config(&config)
+        .all(true)
+        .show_output(false)
+        .apply()
+        .unwrap();
+    let config = config.reload().unwrap();
+    let statuses = migrant_lib::migration_statuses(&config).unwrap();
+    assert!(
+        statuses.iter().all(|s| s.applied() && !s.stale()),
+        "everything is applied and up to date after a run"
+    );
+    assert!(migrant_lib::pending_migrations(&config).unwrap().is_empty());
+
+    // Changing the repeatable migration's SQL makes it stale again while it
+    // stays applied.
+    let mut changed = config.clone();
+    changed
+        .use_migrations(&[
+            EmbeddedMigration::with_tag("create-roles")
+                .up("create table roles (name text);")
+                .down("drop table roles;")
+                .boxed(),
+            EmbeddedMigration::with_tag("seed-roles")
+                .repeatable()
+                .up("insert into roles (name) values ('editor');")
+                .boxed(),
+        ])
+        .unwrap();
+    let changed = changed.reload().unwrap();
+    let statuses = migrant_lib::migration_statuses(&changed).unwrap();
+    assert!(!statuses[0].stale(), "the versioned migration is unchanged");
+    assert!(
+        statuses[1].applied() && statuses[1].stale() && statuses[1].repeatable(),
+        "the repeatable migration is recorded but due to re-run: {statuses:?}"
+    );
+    assert_eq!(
+        migrant_lib::pending_migrations(&changed).unwrap(),
+        ["seed-roles"],
+        "a stale repeatable migration is pending"
+    );
+}
+
+// REPEAT-5
+#[test]
+fn repeatable_migrations_run_after_all_pending_versioned_ones() {
+    let settings = Settings::configure_sqlite().memory().build().unwrap();
+    let mut config = Config::with_settings(settings);
+    config
+        .use_migrations(&[
+            // Declared first, but must still run last.
+            EmbeddedMigration::with_tag("seed-roles")
+                .repeatable()
+                .up("insert into roles (name) values ('admin');")
+                .boxed(),
+            EmbeddedMigration::with_tag("create-roles")
+                .up("create table roles (name text);")
+                .down("drop table roles;")
+                .boxed(),
+            EmbeddedMigration::with_tag("add-index")
+                .up("create index roles_name on roles (name);")
+                .down("drop index roles_name;")
+                .boxed(),
+        ])
+        .unwrap();
+    config.setup().unwrap();
+
+    let report = Migrator::with_config(&config)
+        .all(true)
+        .show_output(false)
+        .apply()
+        .unwrap();
+    assert_eq!(
+        report.tags(),
+        ["create-roles", "add-index", "seed-roles"],
+        "the repeatable migration runs after the versioned sequence"
+    );
+}
+
+// REPEAT-9
+#[test]
+fn a_failed_repeatable_rerun_rolls_back_with_its_bookkeeping() {
+    let settings = Settings::configure_sqlite().memory().build().unwrap();
+    let config = repeatable_config(&settings, "insert into roles (name) values ('admin');");
+    config.setup().unwrap();
+    Migrator::with_config(&config)
+        .all(true)
+        .show_output(false)
+        .apply()
+        .unwrap();
+    let before = recorded_repeatable_rows(&config);
+
+    // Re-run with SQL that inserts a row and then fails. Both the insert and
+    // the in-place bookkeeping update must roll back together.
+    let mut broken = config.clone();
+    broken
+        .use_migrations(&[
+            EmbeddedMigration::with_tag("create-roles")
+                .up("create table roles (name text);")
+                .down("drop table roles;")
+                .boxed(),
+            EmbeddedMigration::with_tag("seed-roles")
+                .repeatable()
+                .up("insert into roles (name) values ('editor'); insert into nope values (1);")
+                .boxed(),
+        ])
+        .unwrap();
+    let res = Migrator::with_config(&broken)
+        .all(true)
+        .show_output(false)
+        .apply();
+    assert!(res.is_err(), "the failing re-run must abort the run");
+    assert_eq!(
+        role_names(&broken),
+        ["admin"],
+        "the partial insert rolled back"
+    );
+    assert_eq!(
+        before,
+        recorded_repeatable_rows(&broken),
+        "the recorded checksum is unchanged, so the migration is retried next run"
+    );
+}
+
+// REPEAT-9
+#[test]
+fn fake_records_a_repeatable_rerun_without_running_its_sql() {
+    let settings = Settings::configure_sqlite().memory().build().unwrap();
+    let config = repeatable_config(&settings, "insert into roles (name) values ('admin');");
+    config.setup().unwrap();
+    Migrator::with_config(&config)
+        .all(true)
+        .show_output(false)
+        .apply()
+        .unwrap();
+    assert_eq!(role_names(&config), ["admin"]);
+
+    // A faked re-run updates the recorded checksum without executing the SQL,
+    // so the migration is no longer stale but nothing was seeded.
+    let mut changed = config.clone();
+    changed
+        .use_migrations(&[
+            EmbeddedMigration::with_tag("create-roles")
+                .up("create table roles (name text);")
+                .down("drop table roles;")
+                .boxed(),
+            EmbeddedMigration::with_tag("seed-roles")
+                .repeatable()
+                .up("insert into roles (name) values ('editor');")
+                .boxed(),
+        ])
+        .unwrap();
+    let report = Migrator::with_config(&changed)
+        .all(true)
+        .fake(true)
+        .show_output(false)
+        .apply()
+        .unwrap();
+    assert_eq!(report.repeatable_tags(), ["seed-roles"]);
+    assert_eq!(
+        role_names(&changed),
+        ["admin"],
+        "a faked re-run must not run the SQL"
+    );
+
+    // The recorded checksum was updated, so it is no longer stale.
+    let changed = changed.reload().unwrap();
+    let statuses = migrant_lib::migration_statuses(&changed).unwrap();
+    assert!(!statuses[1].stale(), "a faked re-run records the checksum");
+}
+
+// REPEAT-9
+#[test]
+fn force_skip_failures_retries_a_repeatable_rerun_next_run() {
+    let settings = Settings::configure_sqlite().memory().build().unwrap();
+    let config = repeatable_config(&settings, "insert into roles (name) values ('admin');");
+    config.setup().unwrap();
+    Migrator::with_config(&config)
+        .all(true)
+        .show_output(false)
+        .apply()
+        .unwrap();
+
+    // A failing re-run under skip-failures leaves the recorded checksum alone,
+    // and the run still terminates rather than retrying the same migration.
+    let mut broken = config.clone();
+    broken
+        .use_migrations(&[
+            EmbeddedMigration::with_tag("create-roles")
+                .up("create table roles (name text);")
+                .down("drop table roles;")
+                .boxed(),
+            EmbeddedMigration::with_tag("seed-roles")
+                .repeatable()
+                .up("insert into nope values (1);")
+                .boxed(),
+        ])
+        .unwrap();
+    let report = Migrator::with_config(&broken)
+        .all(true)
+        .force(ForceMode::SkipFailures)
+        .show_output(false)
+        .apply()
+        .unwrap();
+    assert!(
+        report.is_empty(),
+        "a skipped re-run records nothing: {report:?}"
+    );
+
+    // Still stale, so the next run retries it.
+    let broken = broken.reload().unwrap();
+    let statuses = migrant_lib::migration_statuses(&broken).unwrap();
+    assert!(
+        statuses[1].stale(),
+        "an unrecorded failed re-run is retried on the next run"
+    );
+}
+
+// REPEAT-9
+#[test]
+fn force_accept_failures_records_a_failed_repeatable_rerun_in_place() {
+    let settings = Settings::configure_sqlite().memory().build().unwrap();
+    let config = repeatable_config(&settings, "insert into roles (name) values ('admin');");
+    config.setup().unwrap();
+    Migrator::with_config(&config)
+        .all(true)
+        .show_output(false)
+        .apply()
+        .unwrap();
+    let before = recorded_repeatable_rows(&config);
+
+    // Under accept-failures the re-run fails, its SQL is rolled back, but the
+    // bookkeeping is still updated: the migration is marked up to date and is
+    // NOT retried on the next run.
+    let mut broken = config.clone();
+    broken
+        .use_migrations(&[
+            EmbeddedMigration::with_tag("create-roles")
+                .up("create table roles (name text);")
+                .down("drop table roles;")
+                .boxed(),
+            EmbeddedMigration::with_tag("seed-roles")
+                .repeatable()
+                .up("insert into roles (name) values ('editor'); insert into nope values (1);")
+                .boxed(),
+        ])
+        .unwrap();
+    let report = Migrator::with_config(&broken)
+        .all(true)
+        .force(ForceMode::AcceptFailures)
+        .show_output(false)
+        .apply()
+        .unwrap();
+    assert_eq!(report.repeatable_tags(), ["seed-roles"]);
+    assert_eq!(
+        role_names(&broken),
+        ["admin"],
+        "the failed re-run's SQL rolled back"
+    );
+
+    // The row was updated in place: still one row, same id, new checksum.
+    let after = recorded_repeatable_rows(&broken);
+    assert_eq!(before.len(), after.len(), "no extra row was inserted");
+    assert_eq!(before[1].0, after[1].0, "the row keeps its id");
+    assert_ne!(before[1].2, after[1].2, "the checksum was rewritten");
+
+    // Marked up to date despite having failed, which is the documented
+    // accept-failures tradeoff.
+    let broken = broken.reload().unwrap();
+    let statuses = migrant_lib::migration_statuses(&broken).unwrap();
+    assert!(
+        !statuses[1].stale(),
+        "accept-failures records the re-run, so it is not retried"
+    );
+}
+
+// REPEAT-12
+#[test]
+fn rerun_repeatable_reruns_an_unchanged_migration() {
+    let settings = Settings::configure_sqlite().memory().build().unwrap();
+    let config = repeatable_config(&settings, "insert into roles (name) values ('admin');");
+    config.setup().unwrap();
+    Migrator::with_config(&config)
+        .all(true)
+        .show_output(false)
+        .apply()
+        .unwrap();
+    assert_eq!(role_names(&config), ["admin"]);
+    let before = recorded_repeatable_rows(&config);
+
+    // Without the override an unchanged repeatable migration is skipped.
+    let report = Migrator::with_config(&config)
+        .all(true)
+        .show_output(false)
+        .apply()
+        .unwrap();
+    assert!(report.is_empty());
+
+    // With it, the SQL runs again even though nothing changed.
+    let report = Migrator::with_config(&config)
+        .all(true)
+        .show_output(false)
+        .rerun_repeatable(true)
+        .apply()
+        .unwrap();
+    assert_eq!(report.tags(), ["seed-roles"]);
+    assert_eq!(report.repeatable_tags(), ["seed-roles"]);
+    assert_eq!(
+        role_names(&config),
+        ["admin", "admin"],
+        "the seed ran a second time"
+    );
+
+    // Bookkeeping is still one row updated in place, with the same (unchanged)
+    // checksum and the same id.
+    let after = recorded_repeatable_rows(&config);
+    assert_eq!(before.len(), after.len(), "no extra row was inserted");
+    assert_eq!(before[1].0, after[1].0, "the row keeps its id");
+    assert_eq!(before[1].2, after[1].2, "the checksum is unchanged");
+    assert!(after[1].3);
+
+    // The run terminates: the override does not defeat the once-per-run guard.
+    let report = Migrator::with_config(&config)
+        .all(true)
+        .show_output(false)
+        .rerun_repeatable(true)
+        .apply()
+        .unwrap();
+    assert_eq!(
+        report.repeatable_tags(),
+        ["seed-roles"],
+        "each override run re-runs it exactly once"
+    );
+    assert_eq!(role_names(&config), ["admin", "admin", "admin"]);
+}
+
+// REPEAT-12
+#[test]
+fn rerun_repeatable_does_not_re_apply_versioned_migrations() {
+    let settings = Settings::configure_sqlite().memory().build().unwrap();
+    let config = repeatable_config(&settings, "insert into roles (name) values ('admin');");
+    config.setup().unwrap();
+    Migrator::with_config(&config)
+        .all(true)
+        .show_output(false)
+        .apply()
+        .unwrap();
+
+    // `create-roles` would fail if re-applied (the table exists), so a passing
+    // run proves the override left it alone.
+    let report = Migrator::with_config(&config)
+        .all(true)
+        .show_output(false)
+        .rerun_repeatable(true)
+        .apply()
+        .unwrap();
+    assert_eq!(
+        report.tags(),
+        ["seed-roles"],
+        "only the repeatable migration re-ran"
+    );
+}
+
+// REPEAT-7
+#[test]
+fn registering_an_invalid_repeatable_migration_errors() {
+    // A repeatable migration with a down direction.
+    let settings = Settings::configure_sqlite().memory().build().unwrap();
+    let mut config = Config::with_settings(settings.clone());
+    let res = config.use_migrations(&[EmbeddedMigration::with_tag("seed-roles")
+        .repeatable()
+        .up("select 1;")
+        .down("select -1;")
+        .boxed()]);
+    assert!(
+        res.is_err(),
+        "a repeatable migration must not define a down direction"
+    );
+
+    // A repeatable migration with no up-SQL, so no checksum.
+    let mut config = Config::with_settings(settings);
+    let res = config.use_migrations(&[EmbeddedMigration::with_tag("seed-roles")
+        .repeatable()
+        .boxed()]);
+    assert!(
+        res.is_err(),
+        "a repeatable migration must have a checksum to compare"
+    );
+}
+
+// REPEAT-3
+#[test]
+fn file_migrations_declare_repeatable_through_the_up_file_directive() {
+    // The directive is the CLI's route to a repeatable migration: the file set
+    // is discovered from disk, with no builder call available.
+    let dir = tempfile::tempdir().unwrap();
+    let up = dir.path().join("up.sql");
+    std::fs::write(
+        &up,
+        b"-- migrant:repeatable\ninsert into roles (name) values ('admin');",
+    )
+    .unwrap();
+
+    let settings = Settings::configure_sqlite().memory().build().unwrap();
+    let mut config = Config::with_settings(settings);
+    config
+        .use_migrations(&[
+            EmbeddedMigration::with_tag("create-roles")
+                .up("create table roles (name text);")
+                .down("drop table roles;")
+                .boxed(),
+            FileMigration::with_tag("seed-roles").up(&up).boxed(),
+        ])
+        .unwrap();
+    config.setup().unwrap();
+
+    let report = Migrator::with_config(&config)
+        .all(true)
+        .show_output(false)
+        .apply()
+        .unwrap();
+    assert_eq!(
+        report.repeatable_tags(),
+        ["seed-roles"],
+        "the up-file directive declares the migration repeatable"
+    );
+
+    // Editing the file changes its checksum, which re-runs it.
+    std::fs::write(
+        &up,
+        b"-- migrant:repeatable\ninsert into roles (name) values ('editor');",
+    )
+    .unwrap();
+    let report = Migrator::with_config(&config)
+        .all(true)
+        .show_output(false)
+        .apply()
+        .unwrap();
+    assert_eq!(report.repeatable_tags(), ["seed-roles"]);
+    assert_eq!(role_names(&config), ["admin", "editor"]);
+}

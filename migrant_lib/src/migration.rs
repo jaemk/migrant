@@ -25,6 +25,20 @@ use crate::DT_FORMAT;
 /// ```
 pub(crate) const NO_TRANSACTION_DIRECTIVE: &str = "migrant:no-transaction";
 
+/// SQL comment directive that declares a migration repeatable: its up-direction
+/// re-runs whenever its checksum changes, instead of applying exactly once.
+///
+/// Placed on its own `--` comment line in the up-direction SQL, e.g:
+///
+/// ```sql
+/// -- migrant:repeatable
+/// insert into roles (name) values ('admin') on conflict do nothing;
+/// ```
+///
+/// The directive line is part of the up-SQL, so it is included in the migration's
+/// checksum like any other byte.
+pub(crate) const REPEATABLE_DIRECTIVE: &str = "migrant:repeatable";
+
 /// Compute the lowercase hex sha256 of the given raw bytes. Used to fingerprint
 /// a migration's up-direction SQL for the `checksum` bookkeeping column.
 pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
@@ -39,28 +53,37 @@ pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
     out
 }
 
-/// Return `true` if `sql` carries the [`NO_TRANSACTION_DIRECTIVE`] on a comment
-/// line. It is matched case-insensitively as the first token of a `--` line
-/// comment, so a trailing explanation is allowed
-/// (`-- migrant:no-transaction (enum add)`).
-pub(crate) fn sql_opts_out_of_transaction(sql: &str) -> bool {
+/// Return `true` if `sql` carries `directive` on a comment line. It is matched
+/// case-insensitively as the first token of a `--` line comment, so a trailing
+/// explanation is allowed (`-- migrant:no-transaction (enum add)`).
+pub(crate) fn sql_declares(sql: &str, directive: &str) -> bool {
     sql.lines().any(|line| {
         matches!(
             line.trim()
                 .strip_prefix("--")
                 .and_then(|rest| rest.split_whitespace().next()),
-            Some(token) if token.eq_ignore_ascii_case(NO_TRANSACTION_DIRECTIVE)
+            Some(token) if token.eq_ignore_ascii_case(directive)
         )
     })
 }
 
-/// Whether the migration file at `path` declares the no-transaction directive.
-/// A missing or unreadable file is treated as not opting out; the subsequent
-/// apply surfaces any real read error.
-fn file_opts_out_of_transaction(path: &Option<PathBuf>) -> bool {
+/// Return `true` if `sql` carries the [`NO_TRANSACTION_DIRECTIVE`].
+pub(crate) fn sql_opts_out_of_transaction(sql: &str) -> bool {
+    sql_declares(sql, NO_TRANSACTION_DIRECTIVE)
+}
+
+/// Return `true` if `sql` carries the [`REPEATABLE_DIRECTIVE`].
+pub(crate) fn sql_declares_repeatable(sql: &str) -> bool {
+    sql_declares(sql, REPEATABLE_DIRECTIVE)
+}
+
+/// Whether the migration file at `path` declares `directive`. A missing or
+/// unreadable file is treated as not declaring it; the subsequent apply
+/// surfaces any real read error.
+fn file_declares(path: &Option<PathBuf>, directive: &str) -> bool {
     match path {
         Some(p) => std::fs::read_to_string(p)
-            .map(|sql| sql_opts_out_of_transaction(&sql))
+            .map(|sql| sql_declares(&sql, directive))
             .unwrap_or(false),
         None => false,
     }
@@ -81,6 +104,10 @@ fn file_opts_out_of_transaction(path: &Option<PathBuf>) -> bool {
 /// or call [`no_transaction`](FileMigration::no_transaction) to opt out both
 /// directions. A file directive takes precedence over the builder flag, so it
 /// works for migrations discovered from disk by the `migrant` CLI.
+///
+/// *Note:* The down direction is optional. A migration with no down file is a
+/// silent no-op in that direction: reverting it removes its bookkeeping row
+/// without running SQL.
 #[derive(Clone, Debug)]
 pub struct FileMigration {
     pub(crate) tag: String,
@@ -88,6 +115,7 @@ pub struct FileMigration {
     pub(crate) down: Option<PathBuf>,
     pub(crate) stamp: Option<DateTime<Utc>>,
     pub(crate) no_transaction: bool,
+    pub(crate) repeatable: bool,
 }
 
 impl FileMigration {
@@ -99,7 +127,21 @@ impl FileMigration {
             down: None,
             stamp: None,
             no_transaction: false,
+            repeatable: false,
         }
+    }
+
+    /// Declare this migration repeatable: its up file re-runs whenever the
+    /// file's checksum changes, instead of applying exactly once.
+    ///
+    /// Equivalent to putting the `-- migrant:repeatable` directive on a comment
+    /// line in the up file, which is the form the `migrant` CLI can pick up from
+    /// disk. A repeatable migration must have an up file and must not define a
+    /// down file; both are checked when the migration set is registered. See
+    /// [`Migratable::is_repeatable`].
+    pub fn repeatable(mut self) -> Self {
+        self.repeatable = true;
+        self
     }
 
     /// Opt both of this migration's directions out of the migrator's automatic
@@ -196,10 +238,22 @@ impl Migratable for FileMigration {
         };
         // A directive in the migration file takes precedence over the
         // builder-level `no_transaction` flag.
-        if file_opts_out_of_transaction(file) {
+        if file_declares(file, NO_TRANSACTION_DIRECTIVE) {
             return false;
         }
         !self.no_transaction
+    }
+
+    fn is_repeatable(&self) -> bool {
+        // Either form declares it, so migrations discovered from disk (which
+        // have no builder call) can declare themselves repeatable. Unlike
+        // `no_transaction` there is no precedence: neither can un-declare the
+        // other.
+        file_declares(&self.up, REPEATABLE_DIRECTIVE) || self.repeatable
+    }
+
+    fn defines_down(&self) -> bool {
+        self.down.is_some()
     }
 }
 
@@ -252,6 +306,7 @@ pub struct EmbeddedMigration {
     pub(crate) up: Option<Cow<'static, str>>,
     pub(crate) down: Option<Cow<'static, str>>,
     pub(crate) no_transaction: bool,
+    pub(crate) repeatable: bool,
 }
 
 impl EmbeddedMigration {
@@ -262,7 +317,28 @@ impl EmbeddedMigration {
             up: None,
             down: None,
             no_transaction: false,
+            repeatable: false,
         }
+    }
+
+    /// Declare this migration repeatable: its up-SQL re-runs whenever its
+    /// checksum changes, instead of applying exactly once.
+    ///
+    /// Equivalent to putting the `-- migrant:repeatable` directive on a comment
+    /// line in the up-SQL, which travels with an `include_str!`ed file. A
+    /// repeatable migration must have up-SQL and must not define a down
+    /// direction; both are checked when the migration set is registered. See
+    /// [`Migratable::is_repeatable`].
+    ///
+    /// ```rust,no_run
+    /// # use migrant_lib::EmbeddedMigration;
+    /// EmbeddedMigration::with_tag("seed-roles")
+    ///     .repeatable()
+    ///     .up("insert into roles (name) values ('admin') on conflict do nothing;");
+    /// ```
+    pub fn repeatable(mut self) -> Self {
+        self.repeatable = true;
+        self
     }
 
     /// Opt both of this migration's directions out of the migrator's automatic
@@ -340,6 +416,19 @@ impl Migratable for EmbeddedMigration {
             return false;
         }
         !self.no_transaction
+    }
+
+    fn is_repeatable(&self) -> bool {
+        // Either form declares it; neither can un-declare the other.
+        let declared = match self.up {
+            Some(ref up) => sql_declares_repeatable(up),
+            None => false,
+        };
+        declared || self.repeatable
+    }
+
+    fn defines_down(&self) -> bool {
+        self.down.is_some()
     }
 }
 
@@ -450,6 +539,10 @@ where
     /// on its connection. Always `false`.
     fn use_transaction(&self, _direction: Direction) -> bool {
         false
+    }
+
+    fn defines_down(&self) -> bool {
+        self.down.is_some()
     }
 }
 
@@ -571,6 +664,124 @@ mod tests {
         // No up file at all is also `None`.
         let no_up = FileMigration::with_tag("noup").down(&down);
         assert_eq!(None, no_up.checksum());
+    }
+
+    // REPEAT-3
+    #[test]
+    fn detects_repeatable_directive() {
+        assert!(sql_declares_repeatable(
+            "-- migrant:repeatable\ninsert into roles values ('admin');"
+        ));
+        assert!(sql_declares_repeatable("--migrant:repeatable"));
+        assert!(sql_declares_repeatable("-- MIGRANT:Repeatable"));
+        assert!(sql_declares_repeatable(
+            "-- migrant:repeatable (re-seed roles)\nselect 1;"
+        ));
+        // The two directives are matched independently of each other.
+        assert!(!sql_declares_repeatable("-- migrant:no-transaction"));
+        assert!(!sql_opts_out_of_transaction("-- migrant:repeatable"));
+        // Same near-miss rules as the no-transaction directive.
+        assert!(!sql_declares_repeatable("-- migrant:repeatable-please"));
+        assert!(!sql_declares_repeatable("select 'migrant:repeatable';"));
+        assert!(!sql_declares_repeatable("select 1;"));
+        assert!(!sql_declares_repeatable(""));
+    }
+
+    // REPEAT-3
+    #[test]
+    fn embedded_declares_repeatable_by_builder_or_directive() {
+        // Neither: a plain versioned migration.
+        let versioned = EmbeddedMigration::with_tag("m").up("select 1;");
+        assert!(!versioned.is_repeatable());
+
+        // Builder flag.
+        let built = EmbeddedMigration::with_tag("m")
+            .up("select 1;")
+            .repeatable();
+        assert!(built.is_repeatable());
+
+        // Directive in the up-SQL, no builder flag.
+        let declared = EmbeddedMigration::with_tag("m").up("-- migrant:repeatable\nselect 1;");
+        assert!(declared.is_repeatable());
+
+        // The directive is only read from the up direction: a down-SQL
+        // directive does not make the migration repeatable.
+        let down_only = EmbeddedMigration::with_tag("m")
+            .up("select 1;")
+            .down("-- migrant:repeatable\nselect 1;");
+        assert!(!down_only.is_repeatable());
+    }
+
+    // REPEAT-3
+    #[test]
+    fn file_declares_repeatable_by_builder_or_up_file_directive() {
+        let dir = tempfile::tempdir().unwrap();
+        let plain = dir.path().join("plain.sql");
+        let declared = dir.path().join("declared.sql");
+        std::fs::write(&plain, b"select 1;").unwrap();
+        std::fs::write(&declared, b"-- migrant:repeatable\nselect 1;").unwrap();
+
+        assert!(!FileMigration::with_tag("m").up(&plain).is_repeatable());
+        assert!(FileMigration::with_tag("m")
+            .up(&plain)
+            .repeatable()
+            .is_repeatable());
+        // The directive in the up file is what the CLI reads off disk.
+        assert!(FileMigration::with_tag("m").up(&declared).is_repeatable());
+        // A directive in the down file is not consulted.
+        assert!(!FileMigration::with_tag("m")
+            .up(&plain)
+            .down(&declared)
+            .is_repeatable());
+    }
+
+    // REPEAT-4, REPEAT-7
+    #[test]
+    fn defines_down_reports_the_down_direction() {
+        assert!(!EmbeddedMigration::with_tag("m")
+            .up("select 1;")
+            .defines_down());
+        assert!(EmbeddedMigration::with_tag("m")
+            .up("select 1;")
+            .down("select -1;")
+            .defines_down());
+
+        let dir = tempfile::tempdir().unwrap();
+        let up = dir.path().join("up.sql");
+        let down = dir.path().join("down.sql");
+        std::fs::write(&up, b"select 1;").unwrap();
+        std::fs::write(&down, b"select -1;").unwrap();
+        assert!(!FileMigration::with_tag("m").up(&up).defines_down());
+        assert!(FileMigration::with_tag("m")
+            .up(&up)
+            .down(&down)
+            .defines_down());
+
+        // Programmatic migrations report their down function too, so the
+        // predicate means the same thing for every migration type.
+        type Noop = fn(ConnConfig) -> std::result::Result<(), Box<dyn std::error::Error>>;
+        assert!(FnMigration::with_tag("f")
+            .up(noop)
+            .down(noop)
+            .defines_down());
+        let no_down: FnMigration<Noop, Noop> = FnMigration::with_tag("f").up(noop);
+        assert!(!no_down.defines_down());
+    }
+
+    // REPEAT-3
+    #[test]
+    fn repeatable_directive_is_part_of_the_checksum() {
+        // The directive travels with the SQL, so adding it changes the
+        // migration's fingerprint like any other edit.
+        let plain = EmbeddedMigration::with_tag("m").up("select 1;");
+        let declared = EmbeddedMigration::with_tag("m").up("-- migrant:repeatable\nselect 1;");
+        assert_ne!(plain.checksum(), declared.checksum());
+
+        // The builder flag is not part of the SQL, so it does not.
+        let built = EmbeddedMigration::with_tag("m")
+            .up("select 1;")
+            .repeatable();
+        assert_eq!(plain.checksum(), built.checksum());
     }
 
     #[test]

@@ -80,6 +80,36 @@ config.use_migrations(&[
 ```
 
 
+## Repeatable migrations
+
+A migration declared repeatable re-runs whenever its up-SQL checksum changes, instead of
+applying exactly once. This suits idempotent data work (seeding, backfills, refreshing views)
+rather than schema versioning, where a changed checksum is instead reported as drift.
+
+Declare one with the `repeatable()` builder method, or with a `-- migrant:repeatable` directive
+on a comment line in the up-SQL (the form the `migrant` CLI reads off disk):
+
+```rust,no_run
+# use migrant_lib::EmbeddedMigration;
+EmbeddedMigration::with_tag("seed-roles")
+    .repeatable()
+    .up("insert into roles (name) values ('admin') on conflict do nothing;");
+```
+
+Run semantics:
+
+- An `Up` run applies every pending versioned migration first, then re-runs the repeatable
+  migrations whose checksum changed (or that have never run), in definition order.
+- A repeatable migration runs at most once per run.
+- It keeps a single bookkeeping row, updated in place, and is exempt from the checksum-drift,
+  unknown-tag, and out-of-order checks.
+- It is forward-only: a `Down` run never selects it and never removes its row, so `redo` never
+  reverts one (its `Up` phase re-runs one only if the checksum changed, like any other run).
+- Changing the SQL is the usual re-run trigger; `Migrator::rerun_repeatable(true)` re-runs them
+  all regardless of checksum.
+- Declaring one with no up-SQL to hash, or with a down direction, is an error.
+- `fake(true)` records the new checksum without running the SQL, marking it up to date.
+
 ## In-memory sqlite databases
 
 With the `sqlite` feature, the special database path `:memory:` selects an
@@ -149,8 +179,8 @@ pub use crate::migratable::Migratable;
 pub use crate::migration::{noop, EmbeddedMigration, FileMigration, FnMigration};
 pub use crate::migrator::{Direction, ForceMode, Migrator, Report};
 pub use crate::ops::{
-    create_migration, migration_statuses, pending_migrations, search_for_settings_file,
-    MigrationStatus, NewMigration,
+    create_migration, create_repeatable_migration, migration_statuses, pending_migrations,
+    search_for_settings_file, MigrationStatus, NewMigration,
 };
 
 /// Interactive, terminal-oriented operations used by the `migrant` CLI.

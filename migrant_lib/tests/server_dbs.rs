@@ -75,6 +75,149 @@ fn apply_and_unapply(settings: &Settings) {
     assert!(statuses.iter().all(|m| !m.applied()));
 }
 
+/// An already-applied migration whose up-SQL later changes is detected as drift:
+/// an up run aborts with `ChecksumMismatch` before applying, and
+/// `allow_checksum_mismatch(true)` proceeds past it. Backend-agnostic, so it
+/// runs as a phase of both the postgres and mysql end-to-end tests, sharing
+/// their database.
+fn assert_checksum_drift_detected(settings: &Settings) {
+    let mut config = Config::with_settings(settings.clone());
+    config.setup().unwrap();
+    config
+        .use_migrations(&[EmbeddedMigration::with_tag("drift-probe")
+            .up("create table if not exists drift_probe (x integer);")
+            .down("drop table drift_probe;")
+            .boxed()])
+        .unwrap();
+    let config = config.reload().unwrap();
+    Migrator::with_config(&config)
+        .all(true)
+        .show_output(false)
+        .apply()
+        .unwrap();
+
+    // Same tag, edited up-SQL: the recorded checksum no longer matches.
+    let mut config = Config::with_settings(settings.clone());
+    config
+        .use_migrations(&[EmbeddedMigration::with_tag("drift-probe")
+            .up("create table if not exists drift_probe (x integer, y integer);")
+            .down("drop table drift_probe;")
+            .boxed()])
+        .unwrap();
+    let config = config.reload().unwrap();
+    let err = Migrator::with_config(&config)
+        .all(true)
+        .show_output(false)
+        .apply()
+        .unwrap_err();
+    assert!(
+        err.is_checksum_mismatch(),
+        "an edited already-applied migration must abort the run, got: {err:?}"
+    );
+
+    // Opting out bypasses the check; nothing is pending, so the run is a no-op.
+    let report = Migrator::with_config(&config)
+        .all(true)
+        .show_output(false)
+        .allow_checksum_mismatch(true)
+        .apply()
+        .unwrap();
+    assert!(report.is_empty());
+
+    // Revert the probe migration so a re-run starts clean (Down does not run the
+    // Up-only drift check; the opt-out is set only for symmetry).
+    Migrator::with_config(&config)
+        .direction(Direction::Down)
+        .all(true)
+        .show_output(false)
+        .allow_checksum_mismatch(true)
+        .apply()
+        .unwrap();
+}
+
+/// REPEAT-1/REPEAT-2/REPEAT-6: a repeatable migration re-runs when its up-SQL
+/// changes (rather than aborting as drift), keeps a single bookkeeping row
+/// updated in place, and is left alone by a `Down` run.
+///
+/// Backend-agnostic, so both the postgres and mysql end-to-end tests run it as
+/// a phase against their own database.
+#[cfg(any(feature = "postgres", feature = "mysql"))]
+fn assert_repeatable_reruns_in_place(settings: &Settings) {
+    fn config_with_seed(settings: &Settings, seed: &'static str) -> Config {
+        let mut config = Config::with_settings(settings.clone());
+        config
+            .use_migrations(&[
+                EmbeddedMigration::with_tag("create-roles")
+                    .up("create table if not exists roles (name varchar(64));")
+                    .down("drop table roles;")
+                    .boxed(),
+                EmbeddedMigration::with_tag("seed-roles")
+                    .repeatable()
+                    .up(seed)
+                    .boxed(),
+            ])
+            .unwrap();
+        config
+    }
+
+    let config = config_with_seed(settings, "insert into roles (name) values ('admin');");
+    config.setup().unwrap();
+    let config = config.reload().unwrap();
+    let report = Migrator::with_config(&config)
+        .all(true)
+        .show_output(false)
+        .apply()
+        .unwrap();
+    assert_eq!(report.tags(), ["create-roles", "seed-roles"]);
+    assert_eq!(report.repeatable_tags(), ["seed-roles"]);
+
+    // Unchanged SQL: nothing re-runs.
+    let config = config.reload().unwrap();
+    let report = Migrator::with_config(&config)
+        .all(true)
+        .show_output(false)
+        .apply()
+        .unwrap();
+    assert!(
+        report.is_empty(),
+        "an unchanged repeatable migration must not re-run"
+    );
+
+    // Changed SQL re-runs it instead of aborting with a checksum mismatch, with
+    // the drift check left at its strict default.
+    let changed = config_with_seed(settings, "insert into roles (name) values ('editor');")
+        .reload()
+        .unwrap();
+    let report = Migrator::with_config(&changed)
+        .all(true)
+        .show_output(false)
+        .apply()
+        .expect("a repeatable migration's changed checksum is not drift");
+    assert_eq!(report.repeatable_tags(), ["seed-roles"]);
+
+    // A Down run reverts only the versioned migration, leaving the repeatable
+    // row recorded.
+    let changed = changed.reload().unwrap();
+    let report = Migrator::with_config(&changed)
+        .direction(Direction::Down)
+        .all(true)
+        .show_output(false)
+        .apply()
+        .unwrap();
+    assert_eq!(report.tags(), ["create-roles"]);
+    assert!(report.repeatable_tags().is_empty());
+    let changed = changed.reload().unwrap();
+    let statuses = migrant_lib::migration_statuses(&changed).unwrap();
+    let seed = statuses
+        .iter()
+        .find(|s| s.tag() == "seed-roles")
+        .expect("the repeatable migration is still managed");
+    assert!(
+        seed.applied() && seed.repeatable(),
+        "the repeatable row survives a full down run: {seed:?}"
+    );
+}
+
 /// Drop the migration table so the next run starts from a clean database.
 #[cfg(feature = "postgres")]
 fn drop_pg_migration_table(conn_str: &str) {
@@ -93,6 +236,26 @@ fn drop_mysql_migration_table(conn_str: &str) {
     let mut conn = mysql::Conn::new(opts).expect("connect to drop mysql migration table");
     conn.query_drop("drop table if exists __migrant_migrations;")
         .expect("drop mysql migration table");
+}
+
+/// Drop the `roles` table the repeatable phase migrates, so it starts clean.
+#[cfg(feature = "postgres")]
+fn drop_pg_roles_table(conn_str: &str) {
+    let mut client = postgres::Client::connect(conn_str, postgres::NoTls)
+        .expect("connect to drop postgres roles table");
+    client
+        .batch_execute("drop table if exists roles;")
+        .expect("drop postgres roles table");
+}
+
+/// Drop the `roles` table the repeatable phase migrates, so it starts clean.
+#[cfg(feature = "mysql")]
+fn drop_mysql_roles_table(conn_str: &str) {
+    use mysql::prelude::Queryable;
+    let opts = mysql::Opts::from_url(conn_str).expect("parse mysql connection string");
+    let mut conn = mysql::Conn::new(opts).expect("connect to drop mysql roles table");
+    conn.query_drop("drop table if exists roles;")
+        .expect("drop mysql roles table");
 }
 
 #[cfg(feature = "postgres")]
@@ -129,6 +292,14 @@ fn postgres_end_to_end() {
     drop_pg_migration_table(&conn_str);
     // synchronized(false) phase, also against the same database
     assert_unsynchronized_run_skips_lock(&conn_str, &settings);
+    drop_pg_migration_table(&conn_str);
+    // checksum-drift phase, also against the same database
+    assert_checksum_drift_detected(&settings);
+    drop_pg_migration_table(&conn_str);
+    // repeatable re-run phase, also against the same database
+    drop_pg_roles_table(&conn_str);
+    assert_repeatable_reruns_in_place(&settings);
+    drop_pg_roles_table(&conn_str);
     drop_pg_migration_table(&conn_str);
 }
 
@@ -220,7 +391,7 @@ fn assert_pg_schema_records_checksum_and_order(conn_str: &str, settings: &Settin
     let mut client = postgres::Client::connect(conn_str, postgres::NoTls).unwrap();
 
     // The new columns exist.
-    for col in ["id", "tag", "checksum", "applied_at"] {
+    for col in ["id", "tag", "checksum", "applied_at", "is_repeatable"] {
         let exists: bool = client
             .query_one(
                 "select exists(select 1 from information_schema.columns \
@@ -398,6 +569,14 @@ fn mysql_end_to_end() {
     // schema (checksum/applied_at) + recorded-order phase, same database
     assert_mysql_schema_records_checksum_and_order(&conn_str, &settings);
     drop_mysql_migration_table(&conn_str);
+    // checksum-drift phase, also against the same database
+    assert_checksum_drift_detected(&settings);
+    drop_mysql_migration_table(&conn_str);
+    // repeatable re-run phase, also against the same database
+    drop_mysql_roles_table(&conn_str);
+    assert_repeatable_reruns_in_place(&settings);
+    drop_mysql_roles_table(&conn_str);
+    drop_mysql_migration_table(&conn_str);
 }
 
 /// After applying two embedded migrations, the `__migrant_migrations` table on
@@ -444,7 +623,7 @@ fn assert_mysql_schema_records_checksum_and_order(conn_str: &str, settings: &Set
     let mut conn = mysql::Conn::new(opts).unwrap();
 
     // The new columns exist.
-    for col in ["id", "tag", "checksum", "applied_at"] {
+    for col in ["id", "tag", "checksum", "applied_at", "is_repeatable"] {
         let exists: Option<i64> = conn
             .exec_first(
                 "select count(*) from information_schema.columns \

@@ -175,14 +175,25 @@ impl App {
             .statuses
             .iter()
             .map(|mig| {
-                let (mark, style) = if mig.applied() {
-                    ("✓", Style::new().fg(Color::Green))
-                } else {
-                    (" ", Style::new().fg(Color::DarkGray))
+                // An applied repeatable migration whose SQL changed is marked
+                // stale: it is recorded, but the next up run re-runs it.
+                let (mark, style) = match (mig.applied(), mig.stale()) {
+                    (true, true) => ("~", Style::new().fg(Color::Yellow)),
+                    (true, false) => ("✓", Style::new().fg(Color::Green)),
+                    (false, _) => (" ", Style::new().fg(Color::DarkGray)),
+                };
+                // Matches the `list`/`status` annotations so the three
+                // renderings of a migration row agree.
+                let note = match (mig.repeatable(), mig.stale(), mig.applied()) {
+                    (false, _, _) => "",
+                    (true, true, true) => "  (repeatable, will re-run)",
+                    (true, true, false) => "  (repeatable, will run)",
+                    (true, false, _) => "  (repeatable)",
                 };
                 ListItem::new(Line::from(vec![
                     Span::styled(format!("[{}] ", mark), style),
                     Span::raw(mig.tag().to_string()),
+                    Span::styled(note, Style::new().fg(Color::DarkGray)),
                 ]))
             })
             .collect::<Vec<_>>();

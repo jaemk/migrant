@@ -2,6 +2,23 @@
 
 ## [Unreleased]
 ### Added
+- An up run verifies that each already-applied migration still matches its recorded checksum
+  and aborts with `ChecksumMismatch` if one changed since it was applied. `apply` and `redo`
+  accept `--allow-checksum-mismatch` (library: `Migrator::allow_checksum_mismatch`) to apply
+  despite the drift. Programmatic migrations and rows with a null recorded checksum are not
+  checked
+- Repeatable migrations: a migration whose up-SQL carries the `-- migrant:repeatable` directive
+  re-runs whenever its checksum changes, instead of applying exactly once. They run after all
+  pending versioned migrations, keep a single bookkeeping row updated in place, and are never
+  reverted by `apply --down` or `redo`. `new --repeatable <tag>` creates one (an `up.sql` seeded
+  with the directive, and no `down.sql`)
+- `apply` and `redo` accept `--rerun-repeatable` to re-run every repeatable migration even if
+  its SQL has not changed, since editing the file is otherwise the only trigger
+- `redo` prints a note naming the applied repeatable migrations it will not revert, since it
+  targets the most recent versioned migration instead
+- `status` reports whether each migration is repeatable and whether it is stale (due to re-run),
+  with a `stale` summary count. Text output annotates repeatable rows and marks stale ones `[~]`;
+  the JSON rows gain `repeatable` and `stale` fields
 - `apply` accepts `--step N` to apply exactly N migrations, in either direction
 - `apply` and `redo` accept `--allow-unknown-tags` to permit a run when the database has an
   applied tag not present in the defined migration set, and `--allow-out-of-order` to permit
@@ -12,11 +29,14 @@
 - `apply` applies all pending migrations by default, instead of just the next one. Use
   `--step 1`, or `--down` (which remains single-step by default), to move one migration at a
   time
+- A migration directory no longer needs a `down.sql`. A migration with no down file is a no-op
+  in the down direction: reverting it removes its bookkeeping row without running SQL
 - The `__migrant_migrations` bookkeeping table is now multi-column (`id`, `tag`, `checksum`,
-  `applied_at`) instead of a single `tag` column. Each applied migration now records a sha256
-  checksum of its up-SQL (null for programmatic migrations) and an applied-at timestamp, and
-  applied order is tracked by `id` rather than inferred from file/tag order. `redo` and
-  `apply --down` now target the most-recently-applied migration by this recorded order.
+  `applied_at`, `is_repeatable`) instead of a single `tag` column. Each applied migration now
+  records a sha256 checksum of its up-SQL (null for programmatic migrations), an applied-at
+  timestamp, and whether it is repeatable, and applied order is tracked by `id` rather than
+  inferred from file/tag order. `redo` and `apply --down` now target the most-recently-applied
+  migration by this recorded order.
 
   This is a one-time breaking change to the on-disk schema. If you don't need to preserve
   applied history, the simplest upgrade is to drop the existing `__migrant_migrations` table
@@ -28,16 +48,19 @@
   alter table __migrant_migrations add column id bigserial;
   alter table __migrant_migrations add column checksum text;
   alter table __migrant_migrations add column applied_at timestamptz not null default now();
+  alter table __migrant_migrations add column is_repeatable boolean not null default false;
 
   -- sqlite
   alter table __migrant_migrations add column id integer;
   alter table __migrant_migrations add column checksum text;
   alter table __migrant_migrations add column applied_at text not null default (datetime('now'));
+  alter table __migrant_migrations add column is_repeatable boolean not null default false;
 
   -- mysql
   alter table __migrant_migrations add column id bigint unsigned auto_increment unique;
   alter table __migrant_migrations add column checksum text;
   alter table __migrant_migrations add column applied_at timestamp not null default current_timestamp;
+  alter table __migrant_migrations add column is_repeatable boolean not null default false;
   ```
 
   Since applied order was not previously tracked, `id` will not necessarily reflect the
