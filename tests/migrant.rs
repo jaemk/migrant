@@ -17,8 +17,50 @@ fn migrant() -> Command {
     Command::cargo_bin("migrant").expect("binary built")
 }
 
+/// A tempdir holding a copy of the repo's own `Migrant.toml` and `migrations/`
+/// directory, so the project committed at the repo root is exercised without
+/// running against it in place.
+///
+/// Running in place would leave a `db/migrant.db` behind that outlives the test.
+/// A later change to the bookkeeping schema then breaks the *next* run against
+/// that stale file, which CI never reproduces because it always starts from a
+/// fresh checkout. Copying keeps the fixture and makes every run start clean.
+fn repo_project() -> tempfile::TempDir {
+    let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let dir = tempfile::tempdir().expect("create tempdir");
+    std::fs::copy(repo.join("Migrant.toml"), dir.path().join("Migrant.toml"))
+        .expect("copy Migrant.toml");
+    copy_dir(&repo.join("migrations"), &dir.path().join("migrations"));
+    dir
+}
+
+/// Recursively copy the contents of `from` into `to`, creating `to` if needed.
+fn copy_dir(from: &std::path::Path, to: &std::path::Path) {
+    std::fs::create_dir_all(to).expect("create dir");
+    for entry in std::fs::read_dir(from).expect("read dir") {
+        let entry = entry.expect("dir entry");
+        let target = to.join(entry.file_name());
+        if entry.file_type().expect("file type").is_dir() {
+            copy_dir(&entry.path(), &target);
+        } else {
+            std::fs::copy(entry.path(), &target).expect("copy file");
+        }
+    }
+}
+
 #[test]
 fn kitchen_sink() {
+    // A copy of the repo's own project, so this starts from an empty database
+    // every run (see `repo_project`).
+    let project = repo_project();
+    // Shadows the module-level helper so every invocation below runs inside the
+    // copied project rather than the repo root.
+    let migrant = || {
+        let mut cmd = Command::cargo_bin("migrant").expect("binary built");
+        cmd.current_dir(project.path());
+        cmd
+    };
+
     // make sure we're setup and back to no applied migrations. `--step` with
     // a count comfortably larger than the number of migrations reverts
     // everything and stops early once nothing remains.
