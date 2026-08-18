@@ -1,13 +1,13 @@
 /*!
 Migration application
 */
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 
 use crate::config::Config;
 use crate::errors::*;
 use crate::macros::bail;
-use crate::migratable::Migratable;
+use crate::migratable::{validate_migrations, Migratable};
 use crate::ops;
 use crate::util::print_flush;
 use crate::DbKind;
@@ -85,6 +85,7 @@ impl std::str::FromStr for ForceMode {
 pub struct Report {
     direction: Direction,
     tags: Vec<String>,
+    repeatable_tags: Vec<String>,
 }
 
 impl Report {
@@ -92,6 +93,7 @@ impl Report {
         Self {
             direction,
             tags: Vec::new(),
+            repeatable_tags: Vec::new(),
         }
     }
 
@@ -101,8 +103,27 @@ impl Report {
     }
 
     /// The migration tags whose bookkeeping this run changed, in order.
+    ///
+    /// A tag can appear because a repeatable migration was *re-run* rather than
+    /// applied for the first time, so this is not a count of newly-applied
+    /// migrations. Use [`Report::repeatable_tags`] to tell the two apart.
     pub fn tags(&self) -> &[String] {
         &self.tags
+    }
+
+    /// The repeatable migration tags this run re-ran, in order. A subset of
+    /// [`Report::tags`]; always empty for a `Down` run, which never selects a
+    /// repeatable migration.
+    pub fn repeatable_tags(&self) -> &[String] {
+        &self.repeatable_tags
+    }
+
+    /// Record a tag this run changed the bookkeeping of.
+    fn record(&mut self, tag: String, repeatable: bool) {
+        if repeatable {
+            self.repeatable_tags.push(tag.clone());
+        }
+        self.tags.push(tag);
     }
 
     /// `true` if nothing ran (the database was already up to date, or fully
@@ -120,12 +141,60 @@ impl Report {
 /// Outcome of attempting the next migration in a run.
 enum Step {
     /// A migration's bookkeeping was changed (applied/reverted, faked, or
-    /// force-recorded); carries its tag.
-    Applied(String),
+    /// force-recorded); carries its tag and whether it is repeatable.
+    Applied { tag: String, repeatable: bool },
     /// A migration failed and was skipped under `ForceMode::SkipFailures`.
     Skipped,
     /// No further migration is available in this direction.
     Complete,
+}
+
+/// Which `Up`-run consistency checks are bypassed on a run. Grouped so the
+/// selection helpers stay within argument-count limits and pass the set as a
+/// unit.
+#[derive(Debug, Clone, Copy)]
+struct StrictChecks {
+    allow_unknown_tags: bool,
+    allow_out_of_order: bool,
+    allow_checksum_mismatch: bool,
+}
+
+/// The recorded bookkeeping state that migration selection and the `Up`-run
+/// consistency checks are decided against, grouped so it passes as a unit.
+#[derive(Debug, Clone, Copy)]
+struct AppliedState<'a> {
+    /// Applied tags, in recorded application order
+    tags: &'a [String],
+    /// Checksum recorded per applied tag (`None` where the column is NULL)
+    checksums: &'a HashMap<String, Option<String>>,
+    /// Applied tags whose row is marked repeatable. Recognizes a recorded
+    /// repeatable migration even when its tag is no longer available.
+    repeatable: &'a HashSet<String>,
+}
+
+impl AppliedState<'_> {
+    fn contains(&self, tag: &str) -> bool {
+        self.tags.iter().any(|t| t == tag)
+    }
+
+    /// Whether a repeatable migration needs to re-run: it has no row yet, or
+    /// its current checksum differs from the recorded one.
+    fn is_stale(&self, migration: &dyn Migratable) -> bool {
+        match self.checksums.get(&migration.tag()) {
+            None => true,
+            Some(recorded) => recorded.as_deref() != migration.checksum().as_deref(),
+        }
+    }
+}
+
+/// Tags excluded from selection for the remainder of a run: those that failed
+/// under `ForceMode::SkipFailures`, and the repeatable migrations already
+/// re-run this run (a repeatable migration runs at most once per run, which
+/// also keeps an `all` run from looping on one).
+#[derive(Debug, Clone, Copy)]
+struct RunExclusions<'a> {
+    skipped: &'a HashSet<String>,
+    ran_repeatable: &'a HashSet<String>,
 }
 
 /// Migration applicator
@@ -151,6 +220,8 @@ pub struct Migrator {
     synchronized: bool,
     allow_unknown_tags: bool,
     allow_out_of_order: bool,
+    allow_checksum_mismatch: bool,
+    rerun_repeatable: bool,
 }
 
 impl Migrator {
@@ -166,6 +237,8 @@ impl Migrator {
             synchronized: true,
             allow_unknown_tags: false,
             allow_out_of_order: false,
+            allow_checksum_mismatch: false,
+            rerun_repeatable: false,
         }
     }
 
@@ -253,6 +326,40 @@ impl Migrator {
         self
     }
 
+    /// Allow an already-applied migration whose current checksum no longer
+    /// matches the checksum recorded when it was applied. Default is `false`.
+    ///
+    /// By default an `Up` run aborts with [`Error::ChecksumMismatch`] before
+    /// applying anything if an already-applied migration's up-SQL has changed
+    /// since it was recorded -- the situation that arises when a migration file
+    /// is edited after it has run somewhere. The comparison only fires when both
+    /// the recorded and current checksums are present, so programmatic
+    /// migrations (which record no checksum) and legacy rows recorded before
+    /// checksums existed are never flagged. Set this to `true` to apply despite
+    /// such drift. Independent of `allow_unknown_tags` and `allow_out_of_order`.
+    pub fn allow_checksum_mismatch(mut self, allow: bool) -> Self {
+        self.allow_checksum_mismatch = allow;
+        self
+    }
+
+    /// Re-run every repeatable migration on this `Up` run, whether or not its
+    /// checksum changed. Default is `false`.
+    ///
+    /// Normally a repeatable migration re-runs only when its up-SQL changed
+    /// (see [`Migratable::is_repeatable`](crate::Migratable::is_repeatable)),
+    /// so re-running an unedited one otherwise means touching its SQL. Set this
+    /// to `true` to run them all regardless, for example to re-seed after
+    /// restoring a database. Everything else is unchanged: they still run after
+    /// the pending versioned migrations, still at most once per run, and each
+    /// still records its checksum afterwards.
+    ///
+    /// Has no effect on a `Down` run, which never selects a repeatable
+    /// migration.
+    pub fn rerun_repeatable(mut self, rerun: bool) -> Self {
+        self.rerun_repeatable = rerun;
+        self
+    }
+
     /// Apply migrations using the current configuration.
     ///
     /// Returns a [`Report`] of the migration tags whose bookkeeping this run
@@ -296,12 +403,20 @@ impl Migrator {
         // Tags that failed under `ForceMode::SkipFailures`, excluded from
         // migration selection for the remainder of this run.
         let mut skipped = HashSet::new();
+        // Repeatable tags already re-run this run. A repeatable migration runs
+        // at most once per run, so an `all` run cannot loop on one whose
+        // bookkeeping did not end up matching (a `fake` or force-recorded run
+        // still records, but this keeps the loop bounded regardless).
+        let mut ran_repeatable = HashSet::new();
         let mut report = Report::new(self.direction);
         loop {
             self.check_lock_still_held(&config, lock_generation)?;
-            match self.apply_next(&config, &mut skipped, lock_generation)? {
-                Step::Applied(tag) => {
-                    report.tags.push(tag);
+            match self.apply_next(&config, &mut skipped, &ran_repeatable, lock_generation)? {
+                Step::Applied { tag, repeatable } => {
+                    if repeatable {
+                        ran_repeatable.insert(tag.clone());
+                    }
+                    report.record(tag, repeatable);
                     if !self.all {
                         return Ok(report);
                     }
@@ -339,7 +454,7 @@ impl Migrator {
     /// The set of migrations being managed: either those explicitly defined
     /// on the config, or file-migrations discovered under `migration_location`
     fn available_migrations(config: &Config) -> Result<Vec<Box<dyn Migratable>>> {
-        Ok(match config.migrations {
+        let migrations: Vec<Box<dyn Migratable>> = match config.migrations {
             Some(ref migrations) => migrations.clone(),
             None => {
                 let location = config.migration_location()?;
@@ -348,48 +463,81 @@ impl Migrator {
                     .map(|fm| fm.boxed())
                     .collect()
             }
-        })
+        };
+        // Explicit sets are validated when registered, but file-discovered ones
+        // declare themselves repeatable through a directive in their SQL, so the
+        // same rules are enforced here.
+        validate_migrations(&migrations)?;
+        Ok(migrations)
     }
 
     /// Return the next available up or down migration, excluding any tags
-    /// skipped earlier in this run (`ForceMode::SkipFailures`).
+    /// skipped earlier in this run (`ForceMode::SkipFailures`) or already re-run
+    /// this run (repeatable migrations).
     ///
     /// For an `Up` run this first enforces the strictness checks (unknown applied
-    /// tags, out-of-order application) unless they have been opted out of.
+    /// tags, out-of-order application, checksum drift) unless they have been
+    /// opted out of. Pending versioned migrations are selected first, in
+    /// definition order; only once none remain are the stale repeatable
+    /// migrations selected, also in definition order. `rerun_repeatable` treats
+    /// every repeatable migration as stale.
     fn next_available<'a>(
         direction: Direction,
         available: &'a [Box<dyn Migratable>],
-        applied: &[String],
-        skipped: &HashSet<String>,
-        allow_unknown_tags: bool,
-        allow_out_of_order: bool,
+        state: AppliedState<'_>,
+        exclusions: RunExclusions<'_>,
+        checks: StrictChecks,
+        rerun_repeatable: bool,
     ) -> Result<Option<&'a dyn Migratable>> {
         Ok(match direction {
             Direction::Up => {
-                Self::check_applied_consistency(
-                    available,
-                    applied,
-                    skipped,
-                    allow_unknown_tags,
-                    allow_out_of_order,
-                )?;
+                Self::check_applied_consistency(available, state, exclusions.skipped, checks)?;
+                let pending = available.iter().find(|m| {
+                    !m.is_repeatable()
+                        && !state.contains(&m.tag())
+                        && !exclusions.skipped.contains(&m.tag())
+                });
+                if let Some(pending) = pending {
+                    return Ok(Some(pending.as_ref()));
+                }
+                // Every pending versioned migration has been applied, so the
+                // repeatable migrations whose SQL changed (or that have never
+                // run) go next. `rerun_repeatable` takes them all.
                 available
                     .iter()
-                    .find(|m| !applied.contains(&m.tag()) && !skipped.contains(&m.tag()))
+                    .find(|m| {
+                        m.is_repeatable()
+                            && !exclusions.skipped.contains(&m.tag())
+                            && !exclusions.ran_repeatable.contains(&m.tag())
+                            && (rerun_repeatable || state.is_stale(m.as_ref()))
+                    })
                     .map(AsRef::as_ref)
             }
             Direction::Down => {
                 // Recorded application order is authoritative, so the most
-                // recently applied migration is `applied.last()`. Walk backwards,
-                // skipping tags that failed earlier this run, and return the
-                // corresponding available migration. A target tag absent from the
-                // available set is a hard error, matching the previous behavior.
-                for tag in applied.iter().rev() {
-                    if skipped.contains(tag) {
+                // recently applied migration is the last applied tag. Walk
+                // backwards, skipping tags that failed earlier this run, and
+                // return the corresponding available migration. A target tag
+                // absent from the available set is a hard error, matching the
+                // previous behavior.
+                for tag in state.tags.iter().rev() {
+                    if exclusions.skipped.contains(tag) {
                         continue;
                     }
                     match available.iter().find(|m| &m.tag() == tag) {
+                        // Repeatable migrations are forward-only: a `Down` run
+                        // neither reverts them nor removes their bookkeeping
+                        // row. The available set is authoritative on kind for a
+                        // tag it still defines, so a migration converted back to
+                        // versioned is reverted normally despite what its row
+                        // recorded.
+                        Some(m) if m.is_repeatable() => continue,
                         Some(m) => return Ok(Some(m.as_ref())),
+                        // Absent from the available set, so only the recorded
+                        // row says what kind it was: a repeatable one is not
+                        // part of the versioned sequence and is skipped rather
+                        // than treated as a missing down target.
+                        None if state.repeatable.contains(tag) => continue,
                         None => bail!(
                             MigrationNotFound,
                             "Applied migration not found in available migrations: {}",
@@ -408,14 +556,19 @@ impl Migrator {
     /// self-defeating.
     fn check_applied_consistency(
         available: &[Box<dyn Migratable>],
-        applied: &[String],
+        state: AppliedState<'_>,
         skipped: &HashSet<String>,
-        allow_unknown_tags: bool,
-        allow_out_of_order: bool,
+        checks: StrictChecks,
     ) -> Result<()> {
-        if !allow_unknown_tags {
-            for tag in applied {
+        if !checks.allow_unknown_tags {
+            for tag in state.tags {
                 if skipped.contains(tag) {
+                    continue;
+                }
+                // A repeatable tag is not part of the versioned sequence, so a
+                // recorded repeatable row is never an unknown versioned tag
+                // even once it is gone from the available set.
+                if state.repeatable.contains(tag) {
                     continue;
                 }
                 if !available.iter().any(|m| &m.tag() == tag) {
@@ -428,7 +581,7 @@ impl Migrator {
                 }
             }
         }
-        if !allow_out_of_order {
+        if !checks.allow_out_of_order {
             // Walk definition order tracking the first un-applied (and un-skipped)
             // migration. An applied migration appearing after it was applied out
             // of order.
@@ -438,7 +591,12 @@ impl Migrator {
                 if skipped.contains(&tag) {
                     continue;
                 }
-                if applied.contains(&tag) {
+                // Repeatable migrations run after the versioned sequence and
+                // re-run repeatedly, so they take no part in its ordering.
+                if m.is_repeatable() {
+                    continue;
+                }
+                if state.contains(&tag) {
                     if let Some(ref earlier) = first_unapplied {
                         bail!(
                             MigrationOrdering,
@@ -454,6 +612,45 @@ impl Migrator {
                 }
             }
         }
+        if !checks.allow_checksum_mismatch {
+            // Compare each already-applied migration's current checksum against
+            // the checksum recorded when it was applied. The checksum map is
+            // keyed by applied tag, so a lookup hit means the migration is both
+            // applied and available. The comparison only fires when both the
+            // recorded and current checksums are present -- a null on either
+            // side (programmatic migration, or a legacy/backfilled row) is not a
+            // mismatch.
+            for m in available {
+                let tag = m.tag();
+                if skipped.contains(&tag) {
+                    continue;
+                }
+                // For a repeatable migration a changed checksum is the signal to
+                // re-run, not drift. This walks the available migrations, which
+                // are authoritative on kind: a migration converted back to
+                // versioned is drift-checked again even though its recorded row
+                // still says repeatable.
+                if m.is_repeatable() {
+                    continue;
+                }
+                if let Some(Some(recorded)) = state.checksums.get(&tag) {
+                    if let Some(current) = m.checksum() {
+                        if *recorded != current {
+                            bail!(
+                                ChecksumMismatch,
+                                "Migration `{}` has changed since it was applied: recorded \
+                                 checksum `{}` does not match its current checksum `{}`. Revert \
+                                 the change, or pass `allow_checksum_mismatch(true)` to apply \
+                                 despite the drift.",
+                                tag,
+                                recorded,
+                                current
+                            )
+                        }
+                    }
+                }
+            }
+        }
         Ok(())
     }
 
@@ -462,33 +659,53 @@ impl Migrator {
         &self,
         config: &Config,
         skipped: &mut HashSet<String>,
+        ran_repeatable: &HashSet<String>,
         lock_generation: Option<u64>,
     ) -> Result<Step> {
         let migrations = Self::available_migrations(config)?;
         let next = match Self::next_available(
             self.direction,
             &migrations,
-            &config.applied,
-            skipped,
-            self.allow_unknown_tags,
-            self.allow_out_of_order,
+            AppliedState {
+                tags: &config.applied,
+                checksums: &config.recorded_checksums,
+                repeatable: &config.recorded_repeatable,
+            },
+            RunExclusions {
+                skipped,
+                ran_repeatable,
+            },
+            StrictChecks {
+                allow_unknown_tags: self.allow_unknown_tags,
+                allow_out_of_order: self.allow_out_of_order,
+                allow_checksum_mismatch: self.allow_checksum_mismatch,
+            },
+            self.rerun_repeatable,
         )? {
             Some(next) => next,
             None => return Ok(Step::Complete),
         };
 
+        let tag = next.tag();
+        let repeatable = next.is_repeatable();
+        // A repeatable migration that already has a bookkeeping row is being
+        // re-run rather than applied for the first time.
+        let verb = if repeatable && config.applied.contains(&tag) {
+            "Re-applying"
+        } else {
+            "Applying"
+        };
         self.print(&format!(
-            "Applying[{}]: {}",
+            "{}[{}]: {}",
+            verb,
             self.direction,
             next.description(self.direction)
         ));
 
-        let tag = next.tag();
-
         if self.fake {
             self.println("  ✓ (fake)");
             self.record_tag(config, next)?;
-            return Ok(Step::Applied(tag));
+            return Ok(Step::Applied { tag, repeatable });
         }
 
         // Wrap the migration's SQL and its bookkeeping row in one transaction so
@@ -505,7 +722,7 @@ impl Migrator {
                     config.commit_transaction()?;
                 }
                 self.println("  ✓");
-                Ok(Step::Applied(tag))
+                Ok(Step::Applied { tag, repeatable })
             }
             Err(msg) => {
                 if transactional {
@@ -530,7 +747,7 @@ impl Migrator {
                         // The transaction (if any) was rolled back, so this
                         // bookkeeping row stands alone.
                         self.record_tag(config, next)?;
-                        Ok(Step::Applied(tag))
+                        Ok(Step::Applied { tag, repeatable })
                     }
                     ForceMode::SkipFailures => {
                         self.println(&format!(
@@ -565,11 +782,22 @@ impl Migrator {
 
     /// Record the migration as applied (`Up`) or un-applied (`Down`) in the
     /// `__migrant_migrations` table. An `Up` record carries the migration's
-    /// checksum (`None` for programmatic migrations, stored as NULL).
+    /// checksum (`None` for programmatic migrations, stored as NULL) and
+    /// whether it is repeatable.
+    ///
+    /// A repeatable migration that already has a row is updated in place rather
+    /// than inserted again, so it keeps one row (and its recorded application
+    /// order) across re-runs.
     fn record_tag(&self, config: &Config, next: &dyn Migratable) -> Result<()> {
         let tag = next.tag();
+        let checksum = next.checksum();
         match self.direction {
-            Direction::Up => config.insert_migration_tag(&tag, next.checksum().as_deref()),
+            Direction::Up if next.is_repeatable() && config.applied.contains(&tag) => {
+                config.update_migration_tag(&tag, checksum.as_deref())
+            }
+            Direction::Up => {
+                config.insert_migration_tag(&tag, checksum.as_deref(), next.is_repeatable())
+            }
             Direction::Down => config.delete_migration_tag(&tag),
         }
     }
@@ -632,14 +860,128 @@ mod tests {
         strs.iter().map(|s| (*s).to_owned()).collect()
     }
 
-    /// Strict selection with both opt-outs off -- the default the migrator uses.
+    /// Empty recorded-checksum map: tag-only embedded migrations record no
+    /// checksum, so the drift check is a no-op for these selection tests.
+    fn no_checksums() -> HashMap<String, Option<String>> {
+        HashMap::new()
+    }
+
+    /// No applied row is marked repeatable.
+    fn no_repeatable() -> HashSet<String> {
+        HashSet::new()
+    }
+
+    /// All consistency checks enabled (no opt-outs) -- the migrator default.
+    fn all_checks() -> StrictChecks {
+        StrictChecks {
+            allow_unknown_tags: false,
+            allow_out_of_order: false,
+            allow_checksum_mismatch: false,
+        }
+    }
+
+    /// Nothing excluded: no run-skipped tags and no repeatable migration run yet.
+    fn no_exclusions<'a>(
+        skipped: &'a HashSet<String>,
+        ran_repeatable: &'a HashSet<String>,
+    ) -> RunExclusions<'a> {
+        RunExclusions {
+            skipped,
+            ran_repeatable,
+        }
+    }
+
+    /// Strict selection with all opt-outs off -- the default the migrator uses.
     fn next_strict<'a>(
         direction: Direction,
         available: &'a [Box<dyn Migratable>],
         applied: &[String],
         skipped: &HashSet<String>,
     ) -> Result<Option<&'a dyn Migratable>> {
-        Migrator::next_available(direction, available, applied, skipped, false, false)
+        let checksums = no_checksums();
+        let repeatable = no_repeatable();
+        let ran = no_skips();
+        Migrator::next_available(
+            direction,
+            available,
+            AppliedState {
+                tags: applied,
+                checksums: &checksums,
+                repeatable: &repeatable,
+            },
+            no_exclusions(skipped, &ran),
+            all_checks(),
+            false,
+        )
+    }
+
+    /// Selection with a specific set of check opt-outs, nothing else excluded.
+    fn next_with_checks<'a>(
+        direction: Direction,
+        available: &'a [Box<dyn Migratable>],
+        applied: &[String],
+        checks: StrictChecks,
+    ) -> Result<Option<&'a dyn Migratable>> {
+        let checksums = no_checksums();
+        let repeatable = no_repeatable();
+        let skipped = no_skips();
+        let ran = no_skips();
+        Migrator::next_available(
+            direction,
+            available,
+            AppliedState {
+                tags: applied,
+                checksums: &checksums,
+                repeatable: &repeatable,
+            },
+            no_exclusions(&skipped, &ran),
+            checks,
+            false,
+        )
+    }
+
+    /// Selection against a full recorded state, for the repeatable cases where
+    /// the recorded checksums decide what runs next.
+    fn next_with_state<'a>(
+        direction: Direction,
+        available: &'a [Box<dyn Migratable>],
+        applied: &[String],
+        checksums: &HashMap<String, Option<String>>,
+        ran_repeatable: &HashSet<String>,
+    ) -> Result<Option<&'a dyn Migratable>> {
+        next_with_state_rerunning(
+            direction,
+            available,
+            applied,
+            checksums,
+            ran_repeatable,
+            false,
+        )
+    }
+
+    /// As `next_with_state`, with control over the `rerun_repeatable` override.
+    fn next_with_state_rerunning<'a>(
+        direction: Direction,
+        available: &'a [Box<dyn Migratable>],
+        applied: &[String],
+        checksums: &HashMap<String, Option<String>>,
+        ran_repeatable: &HashSet<String>,
+        rerun_repeatable: bool,
+    ) -> Result<Option<&'a dyn Migratable>> {
+        let repeatable = no_repeatable();
+        let skipped = no_skips();
+        Migrator::next_available(
+            direction,
+            available,
+            AppliedState {
+                tags: applied,
+                checksums,
+                repeatable: &repeatable,
+            },
+            no_exclusions(&skipped, ran_repeatable),
+            all_checks(),
+            rerun_repeatable,
+        )
     }
 
     #[test]
@@ -790,10 +1132,17 @@ mod tests {
         let applied = tags(&["a", "x"]);
         // With `allow_unknown_tags`, the unknown `x` is ignored and the next
         // available migration `b` is selected.
-        let next =
-            Migrator::next_available(Direction::Up, &avail, &applied, &no_skips(), true, false)
-                .unwrap()
-                .expect("expected an un-applied migration");
+        let next = next_with_checks(
+            Direction::Up,
+            &avail,
+            &applied,
+            StrictChecks {
+                allow_unknown_tags: true,
+                ..all_checks()
+            },
+        )
+        .unwrap()
+        .expect("expected an un-applied migration");
         assert_eq!(next.tag(), "b");
     }
 
@@ -823,10 +1172,17 @@ mod tests {
         let avail = available(&["a", "b", "c"]);
         let applied = tags(&["a", "c"]);
         // With `allow_out_of_order`, the intervening `b` is selected next.
-        let next =
-            Migrator::next_available(Direction::Up, &avail, &applied, &no_skips(), false, true)
-                .unwrap()
-                .expect("expected an un-applied migration");
+        let next = next_with_checks(
+            Direction::Up,
+            &avail,
+            &applied,
+            StrictChecks {
+                allow_out_of_order: true,
+                ..all_checks()
+            },
+        )
+        .unwrap()
+        .expect("expected an un-applied migration");
         assert_eq!(next.tag(), "b");
     }
 
@@ -869,7 +1225,15 @@ mod tests {
         // ordering check catches `c` applied ahead of the earlier migrations.
         let avail = available(&["a", "b", "c"]);
         let applied = tags(&["x", "c"]);
-        match Migrator::next_available(Direction::Up, &avail, &applied, &no_skips(), true, false) {
+        match next_with_checks(
+            Direction::Up,
+            &avail,
+            &applied,
+            StrictChecks {
+                allow_unknown_tags: true,
+                ..all_checks()
+            },
+        ) {
             Err(Error::MigrationOrdering(_)) => {}
             other => panic!(
                 "ordering check must remain active when only unknown tags are allowed, got: {:?}",
@@ -885,7 +1249,15 @@ mod tests {
         // `MigrationNotFound` even with `allow_out_of_order`.
         let avail = available(&["a", "b"]);
         let applied = tags(&["a", "x"]);
-        match Migrator::next_available(Direction::Up, &avail, &applied, &no_skips(), false, true) {
+        match next_with_checks(
+            Direction::Up,
+            &avail,
+            &applied,
+            StrictChecks {
+                allow_out_of_order: true,
+                ..all_checks()
+            },
+        ) {
             Err(Error::MigrationNotFound(_)) => {}
             other => panic!(
                 "unknown-tag check must remain active when only ordering is allowed, got: {:?}",
@@ -938,5 +1310,520 @@ mod tests {
                 other.map(|o| o.map(|m| m.tag()))
             ),
         }
+    }
+
+    /// Available migrations carrying up-SQL, so each reports a real `checksum()`.
+    fn available_with_up(pairs: &[(&str, &str)]) -> Vec<Box<dyn Migratable>> {
+        pairs
+            .iter()
+            .map(|(tag, up)| EmbeddedMigration::with_tag(tag).up(up.to_string()).boxed())
+            .collect()
+    }
+
+    fn recorded(pairs: &[(&str, Option<&str>)]) -> HashMap<String, Option<String>> {
+        pairs
+            .iter()
+            .map(|(tag, sum)| ((*tag).to_owned(), sum.map(|s| s.to_owned())))
+            .collect()
+    }
+
+    /// Run the Up consistency checks with only the drift check able to fire.
+    fn check_drift(
+        available: &[Box<dyn Migratable>],
+        applied: &[String],
+        recorded: &HashMap<String, Option<String>>,
+        allow_checksum_mismatch: bool,
+    ) -> Result<()> {
+        let repeatable = no_repeatable();
+        Migrator::check_applied_consistency(
+            available,
+            AppliedState {
+                tags: applied,
+                checksums: recorded,
+                repeatable: &repeatable,
+            },
+            &no_skips(),
+            StrictChecks {
+                allow_checksum_mismatch,
+                ..all_checks()
+            },
+        )
+    }
+
+    #[test]
+    fn up_checksum_mismatch_aborts_by_default() {
+        let avail = available_with_up(&[("a", "select 1;")]);
+        let applied = tags(&["a"]);
+        // `a` was recorded with a different checksum than its current up-SQL.
+        let recorded = recorded(&[("a", Some("stale-checksum"))]);
+        match check_drift(&avail, &applied, &recorded, false) {
+            Err(Error::ChecksumMismatch(msg)) => {
+                assert!(
+                    msg.contains("a"),
+                    "message should name the drifted tag: {msg}"
+                );
+            }
+            other => panic!("expected ChecksumMismatch, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn up_checksum_match_passes() {
+        let avail = available_with_up(&[("a", "select 1;")]);
+        let applied = tags(&["a"]);
+        // Record the migration's actual current checksum: no drift.
+        let current = avail[0].checksum().expect("embedded up-SQL has a checksum");
+        let recorded = recorded(&[("a", Some(&current))]);
+        check_drift(&avail, &applied, &recorded, false).expect("matching checksum must pass");
+    }
+
+    #[test]
+    fn up_null_recorded_checksum_skips_drift_check() {
+        // A recorded NULL checksum (programmatic migration, or a legacy row) is
+        // not comparable, so it is skipped rather than treated as a mismatch.
+        let avail = available_with_up(&[("a", "select 1;")]);
+        let applied = tags(&["a"]);
+        let recorded = recorded(&[("a", None)]);
+        check_drift(&avail, &applied, &recorded, false).expect("null recorded checksum skips");
+    }
+
+    #[test]
+    fn up_null_current_checksum_skips_drift_check() {
+        // A tag-only migration reports no current checksum, so there is nothing
+        // to compare against a recorded value: skipped, not a mismatch.
+        let avail = available(&["a"]);
+        let applied = tags(&["a"]);
+        let recorded = recorded(&[("a", Some("anything"))]);
+        check_drift(&avail, &applied, &recorded, false).expect("null current checksum skips");
+    }
+
+    #[test]
+    fn up_checksum_mismatch_allowed_when_opted_out() {
+        let avail = available_with_up(&[("a", "select 1;")]);
+        let applied = tags(&["a"]);
+        let recorded = recorded(&[("a", Some("stale-checksum"))]);
+        check_drift(&avail, &applied, &recorded, true)
+            .expect("allow_checksum_mismatch applies despite drift");
+    }
+
+    #[test]
+    fn up_checksum_drift_of_unapplied_migration_is_ignored() {
+        // Drift only concerns already-applied migrations. A recorded checksum for
+        // a tag that is not applied (absent from the applied set, so not in the
+        // recorded map) never fires the check.
+        let avail = available_with_up(&[("a", "select 1;"), ("b", "select 2;")]);
+        let applied = tags(&["a"]);
+        let current = avail[0].checksum().unwrap();
+        let recorded = recorded(&[("a", Some(&current))]);
+        // `b` is pending; its checksum is irrelevant to drift.
+        check_drift(&avail, &applied, &recorded, false).expect("pending migration is not checked");
+    }
+
+    /// A mixed available set: versioned migrations plus repeatable ones,
+    /// identified by the trailing `repeatable` flag of each entry.
+    fn available_mixed(entries: &[(&str, &str, bool)]) -> Vec<Box<dyn Migratable>> {
+        entries
+            .iter()
+            .map(|(tag, up, repeatable)| {
+                let m = EmbeddedMigration::with_tag(tag).up(up.to_string());
+                if *repeatable { m.repeatable() } else { m }.boxed()
+            })
+            .collect()
+    }
+
+    /// The current checksum of the available migration with the given tag.
+    fn current_sum(available: &[Box<dyn Migratable>], tag: &str) -> String {
+        available
+            .iter()
+            .find(|m| m.tag() == tag)
+            .expect("tag is available")
+            .checksum()
+            .expect("embedded up-SQL has a checksum")
+    }
+
+    // REPEAT-5
+    #[test]
+    fn up_runs_pending_versioned_migrations_before_repeatable_ones() {
+        // `seed` is repeatable and stale (never run), but the pending versioned
+        // `b` must still be selected first: repeatables run after the versioned
+        // sequence even when they come earlier in definition order.
+        let avail = available_mixed(&[
+            ("seed", "insert into roles values ('admin');", true),
+            ("a", "select 1;", false),
+            ("b", "select 2;", false),
+        ]);
+        let applied = tags(&["a"]);
+        let checksums = recorded(&[("a", Some(&current_sum(&avail, "a")))]);
+        let next = next_with_state(Direction::Up, &avail, &applied, &checksums, &no_skips())
+            .unwrap()
+            .expect("expected a migration");
+        assert_eq!(next.tag(), "b");
+    }
+
+    // REPEAT-1
+    #[test]
+    fn up_runs_a_repeatable_migration_that_has_never_run() {
+        let avail = available_mixed(&[("a", "select 1;", false), ("seed", "select 2;", true)]);
+        let applied = tags(&["a"]);
+        // Only `a` has a row; `seed` has never run, so it is stale.
+        let checksums = recorded(&[("a", Some(&current_sum(&avail, "a")))]);
+        let next = next_with_state(Direction::Up, &avail, &applied, &checksums, &no_skips())
+            .unwrap()
+            .expect("expected the repeatable migration");
+        assert_eq!(next.tag(), "seed");
+    }
+
+    // REPEAT-1
+    #[test]
+    fn up_reruns_a_repeatable_migration_whose_checksum_changed() {
+        let avail = available_mixed(&[("a", "select 1;", false), ("seed", "select 2;", true)]);
+        let applied = tags(&["a", "seed"]);
+        // `seed` ran before with different SQL: its recorded checksum no longer
+        // matches, which is the signal to re-run it (not drift).
+        let checksums = recorded(&[
+            ("a", Some(&current_sum(&avail, "a"))),
+            ("seed", Some("checksum-of-the-old-sql")),
+        ]);
+        let next = next_with_state(Direction::Up, &avail, &applied, &checksums, &no_skips())
+            .unwrap()
+            .expect("expected the repeatable migration to re-run");
+        assert_eq!(next.tag(), "seed");
+    }
+
+    // REPEAT-1
+    #[test]
+    fn up_skips_a_repeatable_migration_whose_checksum_is_unchanged() {
+        let avail = available_mixed(&[("a", "select 1;", false), ("seed", "select 2;", true)]);
+        let applied = tags(&["a", "seed"]);
+        let checksums = recorded(&[
+            ("a", Some(&current_sum(&avail, "a"))),
+            ("seed", Some(&current_sum(&avail, "seed"))),
+        ]);
+        let next =
+            next_with_state(Direction::Up, &avail, &applied, &checksums, &no_skips()).unwrap();
+        assert!(
+            next.is_none(),
+            "an up-to-date repeatable migration must not re-run"
+        );
+    }
+
+    // REPEAT-12
+    #[test]
+    fn rerun_repeatable_runs_an_unchanged_repeatable_migration() {
+        let avail = available_mixed(&[("a", "select 1;", false), ("seed", "select 2;", true)]);
+        let applied = tags(&["a", "seed"]);
+        // Both checksums match, so nothing is stale.
+        let checksums = recorded(&[
+            ("a", Some(&current_sum(&avail, "a"))),
+            ("seed", Some(&current_sum(&avail, "seed"))),
+        ]);
+        assert!(
+            next_with_state(Direction::Up, &avail, &applied, &checksums, &no_skips())
+                .unwrap()
+                .is_none(),
+            "nothing is stale without the override"
+        );
+
+        let next = next_with_state_rerunning(
+            Direction::Up,
+            &avail,
+            &applied,
+            &checksums,
+            &no_skips(),
+            true,
+        )
+        .unwrap()
+        .expect("the override re-runs it regardless of checksum");
+        assert_eq!(next.tag(), "seed");
+    }
+
+    // REPEAT-12
+    #[test]
+    fn rerun_repeatable_still_runs_each_at_most_once_and_leaves_versioned_alone() {
+        let avail = available_mixed(&[("a", "select 1;", false), ("seed", "select 2;", true)]);
+        // `a` is not applied, so it is selected first even with the override:
+        // the override only makes repeatable migrations eligible, it does not
+        // reorder the run or re-apply versioned migrations.
+        let next = next_with_state_rerunning(
+            Direction::Up,
+            &avail,
+            &tags(&[]),
+            &no_checksums(),
+            &no_skips(),
+            true,
+        )
+        .unwrap()
+        .expect("expected the pending versioned migration");
+        assert_eq!(next.tag(), "a");
+
+        // An applied versioned migration is never re-selected by the override.
+        let applied = tags(&["a", "seed"]);
+        let checksums = recorded(&[
+            ("a", Some(&current_sum(&avail, "a"))),
+            ("seed", Some(&current_sum(&avail, "seed"))),
+        ]);
+        // Once `seed` has run this run, the override does not select it again,
+        // so an `all` run still terminates.
+        let ran = skips(&["seed"]);
+        assert!(
+            next_with_state_rerunning(Direction::Up, &avail, &applied, &checksums, &ran, true)
+                .unwrap()
+                .is_none(),
+            "the override must not defeat the once-per-run guard"
+        );
+    }
+
+    // REPEAT-12
+    #[test]
+    fn rerun_repeatable_has_no_effect_on_a_down_run() {
+        let avail = available_mixed(&[("a", "select 1;", false), ("seed", "select 2;", true)]);
+        let applied = tags(&["a", "seed"]);
+        let next = next_with_state_rerunning(
+            Direction::Down,
+            &avail,
+            &applied,
+            &no_checksums(),
+            &no_skips(),
+            true,
+        )
+        .unwrap()
+        .expect("expected a down migration");
+        assert_eq!(
+            next.tag(),
+            "a",
+            "a Down run never selects a repeatable migration, override or not"
+        );
+    }
+
+    // REPEAT-1
+    #[test]
+    fn up_runs_a_repeatable_migration_at_most_once_per_run() {
+        // Having re-run `seed` this run, it is excluded for the rest of the run
+        // even though the recorded checksum here still looks stale. This is what
+        // keeps an `all` run from looping on a single repeatable migration.
+        let avail = available_mixed(&[("seed", "select 2;", true)]);
+        let applied = tags(&["seed"]);
+        let checksums = recorded(&[("seed", Some("stale"))]);
+        let ran = skips(&["seed"]);
+        let next = next_with_state(Direction::Up, &avail, &applied, &checksums, &ran).unwrap();
+        assert!(next.is_none(), "a repeatable migration runs once per run");
+    }
+
+    // REPEAT-5
+    #[test]
+    fn up_runs_stale_repeatable_migrations_in_definition_order() {
+        let avail =
+            available_mixed(&[("seed-b", "select 2;", true), ("seed-a", "select 1;", true)]);
+        // Neither has ever run, so both are stale; definition order decides.
+        let next = next_with_state(
+            Direction::Up,
+            &avail,
+            &tags(&[]),
+            &no_checksums(),
+            &no_skips(),
+        )
+        .unwrap()
+        .expect("expected a repeatable migration");
+        assert_eq!(next.tag(), "seed-b");
+    }
+
+    // REPEAT-4
+    #[test]
+    fn down_never_selects_a_repeatable_migration() {
+        let avail = available_mixed(&[("a", "select 1;", false), ("seed", "select 2;", true)]);
+        // `seed` was applied most recently, but a Down run walks past it to the
+        // versioned `a`.
+        let applied = tags(&["a", "seed"]);
+        let next = next_with_state(
+            Direction::Down,
+            &avail,
+            &applied,
+            &no_checksums(),
+            &no_skips(),
+        )
+        .unwrap()
+        .expect("expected a down migration");
+        assert_eq!(next.tag(), "a");
+    }
+
+    // REPEAT-4
+    #[test]
+    fn down_with_only_repeatable_migrations_applied_returns_none() {
+        let avail = available_mixed(&[("seed", "select 2;", true)]);
+        let applied = tags(&["seed"]);
+        let next = next_with_state(
+            Direction::Down,
+            &avail,
+            &applied,
+            &no_checksums(),
+            &no_skips(),
+        )
+        .unwrap();
+        assert!(
+            next.is_none(),
+            "there is nothing to revert when only repeatable rows are recorded"
+        );
+    }
+
+    /// Run the Up consistency checks against a state that also carries the
+    /// applied tags recorded as repeatable.
+    fn check_with_recorded_repeatable(
+        available: &[Box<dyn Migratable>],
+        applied: &[String],
+        checksums: &HashMap<String, Option<String>>,
+        recorded_repeatable: &HashSet<String>,
+    ) -> Result<()> {
+        Migrator::check_applied_consistency(
+            available,
+            AppliedState {
+                tags: applied,
+                checksums,
+                repeatable: recorded_repeatable,
+            },
+            &no_skips(),
+            all_checks(),
+        )
+    }
+
+    // REPEAT-2
+    #[test]
+    fn repeatable_checksum_change_is_not_drift() {
+        // The same recorded-vs-current mismatch that aborts a versioned run is
+        // the expected re-run signal for a repeatable migration, so the drift
+        // check must not fire on it.
+        let avail = available_mixed(&[("seed", "select 2;", true)]);
+        let applied = tags(&["seed"]);
+        let checksums = recorded(&[("seed", Some("checksum-of-the-old-sql"))]);
+        check_with_recorded_repeatable(&avail, &applied, &checksums, &no_repeatable())
+            .expect("a repeatable migration's changed checksum is not drift");
+    }
+
+    // REPEAT-5
+    #[test]
+    fn repeatable_migrations_do_not_trigger_the_ordering_check() {
+        // `seed` is repeatable, applied, and sits before the un-applied `b` in
+        // definition order. For a versioned migration that is an out-of-order
+        // violation; a repeatable one takes no part in the versioned sequence.
+        let avail = available_mixed(&[
+            ("a", "select 1;", false),
+            ("seed", "select 2;", true),
+            ("b", "select 3;", false),
+        ]);
+        let applied = tags(&["seed"]);
+        let checksums = recorded(&[("seed", Some(&current_sum(&avail, "seed")))]);
+        check_with_recorded_repeatable(&avail, &applied, &checksums, &no_repeatable())
+            .expect("a repeatable migration is not part of the versioned ordering");
+    }
+
+    // REPEAT-5
+    #[test]
+    fn a_removed_repeatable_tag_is_not_an_unknown_tag() {
+        // `seed` was recorded as repeatable and has since been dropped from the
+        // available set. Its row is recognized by the `is_repeatable` column, so
+        // it is not reported as an unknown versioned tag.
+        let avail = available_mixed(&[("a", "select 1;", false)]);
+        let applied = tags(&["a", "seed"]);
+        let checksums = recorded(&[("a", Some(&current_sum(&avail, "a")))]);
+        let recorded_repeatable = skips(&["seed"]);
+        check_with_recorded_repeatable(&avail, &applied, &checksums, &recorded_repeatable)
+            .expect("a recorded repeatable row is never an unknown versioned tag");
+
+        // A removed *versioned* tag is still an error, so the exemption is not
+        // blanket.
+        match check_with_recorded_repeatable(&avail, &applied, &checksums, &no_repeatable()) {
+            Err(Error::MigrationNotFound(_)) => {}
+            other => panic!("expected MigrationNotFound for a removed versioned tag: {other:?}"),
+        }
+    }
+
+    // REPEAT-6
+    #[test]
+    fn the_available_set_outranks_a_stale_recorded_kind() {
+        // A migration recorded as repeatable that is now declared versioned
+        // must be drift-checked again: the available set is authoritative on
+        // kind for a tag it still defines, so the recorded flag cannot become a
+        // one-way door that disables drift detection forever.
+        let avail = available_with_up(&[("a", "select 1;")]);
+        let applied = tags(&["a"]);
+        let recorded = recorded(&[("a", Some("checksum-from-when-it-was-repeatable"))]);
+        let still_marked_repeatable = skips(&["a"]);
+        match check_with_recorded_repeatable(&avail, &applied, &recorded, &still_marked_repeatable)
+        {
+            Err(Error::ChecksumMismatch(_)) => {}
+            other => panic!("a now-versioned migration must be drift-checked: {other:?}"),
+        }
+    }
+
+    // REPEAT-4, REPEAT-6
+    #[test]
+    fn down_reverts_a_migration_converted_back_to_versioned() {
+        // Mirror case for selection: the row still says repeatable, but the
+        // available set now declares it versioned, so Down targets it.
+        let avail = available_mixed(&[("a", "select 1;", false), ("seed", "select 2;", false)]);
+        let applied = tags(&["a", "seed"]);
+        let checksums = no_checksums();
+        let still_marked_repeatable = skips(&["seed"]);
+        let skipped = no_skips();
+        let ran = no_skips();
+        let next = Migrator::next_available(
+            Direction::Down,
+            &avail,
+            AppliedState {
+                tags: &applied,
+                checksums: &checksums,
+                repeatable: &still_marked_repeatable,
+            },
+            no_exclusions(&skipped, &ran),
+            all_checks(),
+            false,
+        )
+        .unwrap()
+        .expect("expected a down migration");
+        assert_eq!(
+            next.tag(),
+            "seed",
+            "the available set decides kind for a tag it still defines"
+        );
+    }
+
+    // REPEAT-5
+    #[test]
+    fn down_skips_a_removed_repeatable_tag_instead_of_erroring() {
+        // The tag is gone from the available set, so only its recorded row says
+        // what it was. A repeatable one is skipped rather than raising
+        // MigrationNotFound for a down target that never existed.
+        let avail = available_mixed(&[("a", "select 1;", false)]);
+        let applied = tags(&["a", "seed"]);
+        let checksums = no_checksums();
+        let recorded_repeatable = skips(&["seed"]);
+        let skipped = no_skips();
+        let ran = no_skips();
+        let next = Migrator::next_available(
+            Direction::Down,
+            &avail,
+            AppliedState {
+                tags: &applied,
+                checksums: &checksums,
+                repeatable: &recorded_repeatable,
+            },
+            no_exclusions(&skipped, &ran),
+            all_checks(),
+            false,
+        )
+        .unwrap()
+        .expect("expected a down migration");
+        assert_eq!(next.tag(), "a");
+    }
+
+    // REPEAT-8
+    #[test]
+    fn report_separates_repeatable_tags_from_the_full_tag_list() {
+        let mut report = Report::new(Direction::Up);
+        report.record("a".to_string(), false);
+        report.record("seed".to_string(), true);
+        assert_eq!(report.tags(), ["a", "seed"]);
+        assert_eq!(report.repeatable_tags(), ["seed"]);
+        assert_eq!(report.len(), 2);
+        assert!(!report.is_empty());
     }
 }

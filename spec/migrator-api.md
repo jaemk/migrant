@@ -77,8 +77,26 @@ By default, a run errors before applying anything if either check fails:
 - Out of order: a pending migration would apply out of the order defined by the migration
   set, given what is already recorded as applied.
 
-`Migrator::allow_unknown_tags(bool)` (default `false`) and `Migrator::allow_out_of_order(bool)`
-(default `false`) each opt out of the corresponding check.
+- Checksum drift: an already-applied migration's current checksum no longer matches the one
+  recorded when it was applied. See [checksum-drift-detection.md](checksum-drift-detection.md).
+
+`Migrator::allow_unknown_tags(bool)`, `Migrator::allow_out_of_order(bool)`, and
+`Migrator::allow_checksum_mismatch(bool)` (each default `false`) opt out of the corresponding
+check, independently of one another.
+
+Repeatable migrations are exempt from all three checks: a checksum change is their re-run
+signal, and their tags are not part of the versioned sequence. See
+[repeatable-migrations.md](repeatable-migrations.md) REPEAT-2 and REPEAT-5.
+
+## MIGRATOR-8
+
+An `Up` run applies pending versioned migrations first, then re-runs the stale repeatable
+migrations (REPEAT-5). `Report::repeatable_tags()` returns the repeatable tags the run
+re-ran, a subset of `Report::tags()`. A `Down` run never selects a repeatable migration.
+
+`Migrator::rerun_repeatable(bool)` (default `false`) re-runs every repeatable migration on an
+`Up` run regardless of checksum. See
+[repeatable-migrations.md](repeatable-migrations.md) REPEAT-12.
 
 Coverage: `migrant_lib/tests/sqlite.rs`, `server_dbs.rs`, `reload_memory.rs`,
 `tests/migrant.rs`; unit tests in `migrant_lib/src/migrator.rs`.

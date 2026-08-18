@@ -8,10 +8,36 @@
   has an applied tag not present in the defined migration set, instead of erroring
 - `Migrator::allow_out_of_order(bool)` (default `false`) lets a run apply migrations out of
   their defined order, instead of erroring
+- `Migrator::allow_checksum_mismatch(bool)` (default `false`) lets a run proceed when an
+  already-applied migration's current checksum no longer matches the recorded one, instead of
+  erroring with the new `Error::ChecksumMismatch`
+- `Error::ChecksumMismatch` and its `is_checksum_mismatch()` predicate
+- Repeatable migrations: `Migratable::is_repeatable()` (default `false`) marks a migration that
+  re-runs whenever its up-SQL checksum changes instead of applying once. `EmbeddedMigration` and
+  `FileMigration` declare it with a `repeatable()` builder method or a `-- migrant:repeatable`
+  directive in their up-SQL (either form declares it). Repeatable migrations run after all
+  pending versioned ones, are exempt from the unknown-tag, ordering, and drift checks, keep a
+  single bookkeeping row updated in place, and are never selected by a `Down` run. Registering
+  one with no checksum, or with a down direction, is an `Error::Migration`
+- `Migratable::defines_down()` (default `false`) reports whether a migration has a down direction
+  to run, used to reject a down on a repeatable migration
+- `Migrator::rerun_repeatable(bool)` (default `false`) re-runs every repeatable migration on an
+  `Up` run regardless of checksum, so re-running an unedited one does not require touching its
+  SQL. Still at most once per run, and it never re-applies a versioned migration
+- `Report::repeatable_tags()` lists the repeatable tags a run re-ran, a subset of `tags()`
+- `MigrationStatus::repeatable()` and `MigrationStatus::stale()` report whether a migration is
+  repeatable and whether it will run on the next `Up` run
+- `create_repeatable_migration` creates a migration directory with only an `up.sql`, seeded with
+  the `-- migrant:repeatable` directive
 
 ### Changed
 - `migrant_lib::new` is renamed to `migrant_lib::create_migration` and now returns a
-  `NewMigration` (with `dir()`/`up_path()`/`down_path()` accessors) instead of `()`
+  `NewMigration` (with `dir()`/`up_path()`/`down_path()` accessors) instead of `()`.
+  `NewMigration::down_path()` returns `Option<&Path>`, since a repeatable migration has none
+- A file-discovered migration no longer requires a `down.sql`. A migration with no down file
+  reports `defines_down() == false` and is a no-op in the down direction
+- `pending_migrations` now lists stale repeatable tags after the pending versioned ones, in the
+  order a run would apply them
 - `migrant_lib::list` moved to `migrant_lib::cli::list`
 - `SqliteSettingsBuilder`/`PostgresSettingsBuilder`/`MySqlSettingsBuilder` setters
   `database_path`/`migration_location` are now infallible: they take and return `Self` instead

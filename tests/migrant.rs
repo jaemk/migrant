@@ -10,14 +10,57 @@
 #![cfg(all(feature = "integration_tests", feature = "sqlite"))]
 
 use assert_cmd::Command;
+use predicates::prelude::PredicateBooleanExt;
 use predicates::str::contains;
 
 fn migrant() -> Command {
     Command::cargo_bin("migrant").expect("binary built")
 }
 
+/// A tempdir holding a copy of the repo's own `Migrant.toml` and `migrations/`
+/// directory, so the project committed at the repo root is exercised without
+/// running against it in place.
+///
+/// Running in place would leave a `db/migrant.db` behind that outlives the test.
+/// A later change to the bookkeeping schema then breaks the *next* run against
+/// that stale file, which CI never reproduces because it always starts from a
+/// fresh checkout. Copying keeps the fixture and makes every run start clean.
+fn repo_project() -> tempfile::TempDir {
+    let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let dir = tempfile::tempdir().expect("create tempdir");
+    std::fs::copy(repo.join("Migrant.toml"), dir.path().join("Migrant.toml"))
+        .expect("copy Migrant.toml");
+    copy_dir(&repo.join("migrations"), &dir.path().join("migrations"));
+    dir
+}
+
+/// Recursively copy the contents of `from` into `to`, creating `to` if needed.
+fn copy_dir(from: &std::path::Path, to: &std::path::Path) {
+    std::fs::create_dir_all(to).expect("create dir");
+    for entry in std::fs::read_dir(from).expect("read dir") {
+        let entry = entry.expect("dir entry");
+        let target = to.join(entry.file_name());
+        if entry.file_type().expect("file type").is_dir() {
+            copy_dir(&entry.path(), &target);
+        } else {
+            std::fs::copy(entry.path(), &target).expect("copy file");
+        }
+    }
+}
+
 #[test]
 fn kitchen_sink() {
+    // A copy of the repo's own project, so this starts from an empty database
+    // every run (see `repo_project`).
+    let project = repo_project();
+    // Shadows the module-level helper so every invocation below runs inside the
+    // copied project rather than the repo root.
+    let migrant = || {
+        let mut cmd = Command::cargo_bin("migrant").expect("binary built");
+        cmd.current_dir(project.path());
+        cmd
+    };
+
     // make sure we're setup and back to no applied migrations. `--step` with
     // a count comfortably larger than the number of migrations reverts
     // everything and stops early once nothing remains.
@@ -239,6 +282,22 @@ fn remove_migration(dir: &std::path::Path, tag: &str) {
     std::fs::remove_dir_all(&mig_dir).expect("remove migration dir");
 }
 
+/// Rewrite the up.sql of the on-disk migration whose name ends in `_<tag>`,
+/// changing its checksum as if the file were edited after it was applied.
+fn edit_migration_up(dir: &std::path::Path, tag: &str, up: &str) {
+    let migrations = dir.join("migrations");
+    let mig_dir = std::fs::read_dir(&migrations)
+        .expect("read migrations dir")
+        .map(|e| e.expect("dir entry").path())
+        .find(|p| {
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.ends_with(&format!("_{}", tag)))
+        })
+        .unwrap_or_else(|| panic!("migration dir for `{}` not found", tag));
+    std::fs::write(mig_dir.join("up.sql"), up).expect("write up.sql");
+}
+
 // CLIMIG: `apply --step N --down` reverts at most N applied migrations
 // (newest-first) and stops early once nothing remains, mirroring the up
 // direction. Only the up direction was exercised before.
@@ -417,6 +476,54 @@ fn apply_out_of_order_rejected_then_allowed() {
         .stdout(predicates::str::is_match(r"\[✓\] \d{14}_a-bad").expect("valid regex"));
 }
 
+// DRIFT-1/DRIFT-6: an already-applied migration whose up.sql is edited aborts a
+// following `apply` with a checksum mismatch, and `--allow-checksum-mismatch`
+// proceeds past the drift.
+#[test]
+fn apply_checksum_drift_rejected_then_allowed() {
+    let dir = sqlite_project();
+    migrant()
+        .current_dir(dir.path())
+        .arg("setup")
+        .assert()
+        .success();
+    new_migration(
+        dir.path(),
+        "seed",
+        "create table seed (x integer);",
+        "drop table seed;",
+    );
+    migrant()
+        .current_dir(dir.path())
+        .arg("apply")
+        .assert()
+        .success();
+
+    // Edit the applied migration's up.sql: its checksum no longer matches.
+    edit_migration_up(
+        dir.path(),
+        "seed",
+        "create table seed (x integer, y integer);",
+    );
+
+    // A plain up run detects the drift and aborts before applying anything.
+    migrant()
+        .current_dir(dir.path())
+        .arg("apply")
+        .assert()
+        .failure()
+        .stderr(contains("ChecksumMismatch"))
+        .stderr(contains("has changed since it was applied"));
+
+    // Opting out lets the run proceed (the migration is already applied, so
+    // there is nothing left to do).
+    migrant()
+        .current_dir(dir.path())
+        .args(["apply", "--allow-checksum-mismatch"])
+        .assert()
+        .success();
+}
+
 // CLIMIG-3: `new` reports the created up/down file paths on stdout.
 #[test]
 fn new_reports_created_paths() {
@@ -438,6 +545,347 @@ fn new_reports_created_paths() {
         .stdout(
             predicates::str::is_match(r"Created: .*_reported[\\/]+down\.sql").expect("valid regex"),
         );
+}
+
+/// Create a repeatable migration via `migrant new --repeatable` and overwrite
+/// its up file, keeping the `-- migrant:repeatable` directive.
+fn new_repeatable_migration(dir: &std::path::Path, tag: &str, up: &str) {
+    migrant()
+        .current_dir(dir)
+        .args(["new", "--repeatable", tag])
+        .assert()
+        .success();
+    edit_migration_up(dir, tag, &format!("-- migrant:repeatable\n{}", up));
+}
+
+// CLIMIG-1/REPEAT-10: `new --repeatable` creates only a seeded up.sql.
+#[test]
+fn new_repeatable_creates_only_a_seeded_up_file() {
+    let dir = sqlite_project();
+    migrant()
+        .current_dir(dir.path())
+        .arg("setup")
+        .assert()
+        .success();
+
+    migrant()
+        .current_dir(dir.path())
+        .args(["new", "--repeatable", "seed-roles"])
+        .assert()
+        .success()
+        .stdout(
+            predicates::str::is_match(r"Created: .*_seed-roles[\\/]+up\.sql").expect("valid regex"),
+        )
+        .stdout(contains("down.sql").not());
+
+    let mig_dir = std::fs::read_dir(dir.path().join("migrations"))
+        .expect("read migrations dir")
+        .map(|e| e.expect("dir entry").path())
+        .find(|p| {
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.ends_with("_seed-roles"))
+        })
+        .expect("migration dir created");
+    assert!(!mig_dir.join("down.sql").exists(), "no down.sql is created");
+    let up = std::fs::read_to_string(mig_dir.join("up.sql")).expect("read up.sql");
+    assert_eq!("-- migrant:repeatable\n", up);
+}
+
+// REPEAT-1/REPEAT-8/CLIMIG-6: a repeatable migration re-runs when its up file
+// changes, and `status` reports it as repeatable and stale beforehand.
+#[test]
+fn repeatable_migration_reruns_through_the_cli() {
+    let dir = sqlite_project();
+    migrant()
+        .current_dir(dir.path())
+        .arg("setup")
+        .assert()
+        .success();
+    new_migration(
+        dir.path(),
+        "create-roles",
+        "create table roles (name text);",
+        "drop table roles;",
+    );
+    new_repeatable_migration(
+        dir.path(),
+        "seed-roles",
+        "insert into roles (name) values ('admin');",
+    );
+
+    // Before the first run the repeatable migration is pending and stale.
+    migrant()
+        .current_dir(dir.path())
+        .args(["status", "--format", "json"])
+        .assert()
+        .success()
+        .stdout(contains("\"repeatable\": true"))
+        .stdout(contains("\"stale\": true"));
+
+    migrant()
+        .current_dir(dir.path())
+        .arg("apply")
+        .assert()
+        .success();
+
+    // Applied and up to date: annotated but not marked for a re-run.
+    migrant()
+        .current_dir(dir.path())
+        .arg("status")
+        .assert()
+        .success()
+        .stdout(contains("(repeatable)"))
+        .stdout(contains("will re-run").not())
+        .stdout(contains("0 pending"));
+
+    // Re-running with nothing changed does not re-apply it.
+    migrant()
+        .current_dir(dir.path())
+        .arg("apply")
+        .assert()
+        .success()
+        .stdout(contains("Re-applying").not());
+
+    // Editing the up file changes its checksum, which is the re-run signal
+    // rather than the drift error a versioned migration would raise.
+    edit_migration_up(
+        dir.path(),
+        "seed-roles",
+        "-- migrant:repeatable\ninsert into roles (name) values ('editor');",
+    );
+    migrant()
+        .current_dir(dir.path())
+        .arg("status")
+        .assert()
+        .success()
+        .stdout(contains("(repeatable, will re-run)"))
+        .stdout(contains("1 stale"));
+
+    migrant()
+        .current_dir(dir.path())
+        .arg("apply")
+        .assert()
+        .success()
+        .stdout(contains("Re-applying[Up]"));
+
+    // Both seeds ran, and the tag still has exactly one bookkeeping row.
+    let db = rusqlite::Connection::open(dir.path().join("db.db")).expect("open db");
+    let names: Vec<String> = db
+        .prepare("select name from roles order by name")
+        .expect("prepare")
+        .query_map([], |r| r.get(0))
+        .expect("query")
+        .collect::<Result<_, _>>()
+        .expect("rows");
+    assert_eq!(names, ["admin", "editor"]);
+    let rows: i64 = db
+        .query_row(
+            "select count(*) from __migrant_migrations where tag like '%seed-roles'",
+            [],
+            |r| r.get(0),
+        )
+        .expect("count rows");
+    assert_eq!(1, rows, "a re-run updates the row in place");
+    let repeatable: bool = db
+        .query_row(
+            "select is_repeatable from __migrant_migrations where tag like '%seed-roles'",
+            [],
+            |r| r.get(0),
+        )
+        .expect("read is_repeatable");
+    assert!(repeatable, "the row records the migration's kind");
+}
+
+// REPEAT-12: `apply --rerun-repeatable` re-runs an unchanged repeatable
+// migration; without it nothing runs.
+#[test]
+fn apply_rerun_repeatable_runs_unchanged_migrations() {
+    let dir = sqlite_project();
+    migrant()
+        .current_dir(dir.path())
+        .arg("setup")
+        .assert()
+        .success();
+    new_migration(
+        dir.path(),
+        "create-roles",
+        "create table roles (name text);",
+        "drop table roles;",
+    );
+    new_repeatable_migration(
+        dir.path(),
+        "seed-roles",
+        "insert into roles (name) values ('admin');",
+    );
+    migrant()
+        .current_dir(dir.path())
+        .arg("apply")
+        .assert()
+        .success();
+
+    // Nothing changed, so a plain re-apply does nothing.
+    migrant()
+        .current_dir(dir.path())
+        .arg("apply")
+        .assert()
+        .success()
+        .stdout(contains("Re-applying").not());
+
+    // The flag runs it anyway.
+    migrant()
+        .current_dir(dir.path())
+        .args(["apply", "--rerun-repeatable"])
+        .assert()
+        .success()
+        .stdout(contains("Re-applying[Up]"));
+
+    let db = rusqlite::Connection::open(dir.path().join("db.db")).expect("open db");
+    let count: i64 = db
+        .query_row("select count(*) from roles", [], |r| r.get(0))
+        .expect("count roles");
+    assert_eq!(2, count, "the seed ran a second time");
+    // Still one bookkeeping row for the tag.
+    let rows: i64 = db
+        .query_row(
+            "select count(*) from __migrant_migrations where tag like '%seed-roles'",
+            [],
+            |r| r.get(0),
+        )
+        .expect("count rows");
+    assert_eq!(1, rows);
+}
+
+// REPEAT-13: `redo` warns that it does not revert repeatable migrations.
+#[test]
+fn redo_warns_that_it_skips_repeatable_migrations() {
+    let dir = sqlite_project();
+    migrant()
+        .current_dir(dir.path())
+        .arg("setup")
+        .assert()
+        .success();
+    new_migration(
+        dir.path(),
+        "create-roles",
+        "create table roles (name text);",
+        "drop table roles;",
+    );
+
+    // With no repeatable migrations there is nothing to warn about.
+    migrant()
+        .current_dir(dir.path())
+        .arg("apply")
+        .assert()
+        .success();
+    migrant()
+        .current_dir(dir.path())
+        .arg("redo")
+        .assert()
+        .success()
+        .stderr(contains("does not revert repeatable").not());
+
+    // Once one is applied, `redo` says so, naming it, and points at the flag.
+    new_repeatable_migration(
+        dir.path(),
+        "seed-roles",
+        "insert into roles (name) values ('admin');",
+    );
+    migrant()
+        .current_dir(dir.path())
+        .arg("apply")
+        .assert()
+        .success();
+    migrant()
+        .current_dir(dir.path())
+        .arg("redo")
+        .assert()
+        .success()
+        .stderr(contains("does not revert repeatable migrations"))
+        .stderr(contains("seed-roles"))
+        .stderr(contains("--rerun-repeatable"));
+
+    // `--rerun-repeatable` makes the note moot, so it is suppressed.
+    migrant()
+        .current_dir(dir.path())
+        .args(["redo", "--rerun-repeatable"])
+        .assert()
+        .success()
+        .stderr(contains("does not revert repeatable").not());
+}
+
+// REPEAT-4: `apply --down` never reverts a repeatable migration.
+#[test]
+fn apply_down_leaves_repeatable_migrations_recorded() {
+    let dir = sqlite_project();
+    migrant()
+        .current_dir(dir.path())
+        .arg("setup")
+        .assert()
+        .success();
+    new_migration(
+        dir.path(),
+        "create-roles",
+        "create table roles (name text);",
+        "drop table roles;",
+    );
+    new_repeatable_migration(
+        dir.path(),
+        "seed-roles",
+        "insert into roles (name) values ('admin');",
+    );
+    migrant()
+        .current_dir(dir.path())
+        .arg("apply")
+        .assert()
+        .success();
+
+    // The repeatable migration was applied last, but the down run targets the
+    // versioned one and leaves the repeatable row alone.
+    migrant()
+        .current_dir(dir.path())
+        .args(["apply", "-d", "--step", "100"])
+        .assert()
+        .success();
+
+    let db = rusqlite::Connection::open(dir.path().join("db.db")).expect("open db");
+    let remaining: Vec<String> = db
+        .prepare("select tag from __migrant_migrations order by id")
+        .expect("prepare")
+        .query_map([], |r| r.get(0))
+        .expect("query")
+        .collect::<Result<_, _>>()
+        .expect("rows");
+    assert_eq!(1, remaining.len(), "only the repeatable row remains");
+    assert!(remaining[0].ends_with("_seed-roles"));
+}
+
+// REPEAT-4/REPEAT-7: a repeatable migration that also defines a down direction
+// is rejected rather than silently ignored.
+#[test]
+fn repeatable_migration_with_a_down_file_is_rejected() {
+    let dir = sqlite_project();
+    migrant()
+        .current_dir(dir.path())
+        .arg("setup")
+        .assert()
+        .success();
+    // `new` (not `new --repeatable`) writes a down.sql; adding the directive to
+    // the up file then makes the pair invalid.
+    new_migration(
+        dir.path(),
+        "seed-roles",
+        "-- migrant:repeatable\ninsert into roles (name) values ('admin');",
+        "delete from roles;",
+    );
+
+    migrant()
+        .current_dir(dir.path())
+        .arg("apply")
+        .assert()
+        .failure()
+        .stderr(contains("seed-roles"))
+        .stderr(contains("down"));
 }
 
 // REGRESSION (migrant_lib same-second ordering fix): migrations that share the
@@ -873,10 +1321,10 @@ fn apply_down_default_reverts_one() {
         .stdout(predicates::str::is_match(r"\[ \] \d{14}_two").expect("valid regex"));
 }
 
-// CLIMIG-4: `--allow-unknown-tags` / `--allow-out-of-order` are accepted by
-// both `apply` and `redo`. The full unknown-tag/out-of-order scenarios are
-// covered in the library's own test suite; here we only prove the CLI wires
-// the flags through without rejecting them.
+// CLIMIG-4/DRIFT-6: `--allow-unknown-tags` / `--allow-out-of-order` /
+// `--allow-checksum-mismatch` are accepted by both `apply` and `redo`. The full
+// scenarios are covered in the library's own test suite; here we only prove the
+// CLI wires the flags through without rejecting them.
 #[test]
 fn allow_flags_are_accepted_by_apply_and_redo() {
     let dir = sqlite_project();
@@ -894,13 +1342,23 @@ fn allow_flags_are_accepted_by_apply_and_redo() {
 
     migrant()
         .current_dir(dir.path())
-        .args(["apply", "--allow-unknown-tags", "--allow-out-of-order"])
+        .args([
+            "apply",
+            "--allow-unknown-tags",
+            "--allow-out-of-order",
+            "--allow-checksum-mismatch",
+        ])
         .assert()
         .success();
 
     migrant()
         .current_dir(dir.path())
-        .args(["redo", "--allow-unknown-tags", "--allow-out-of-order"])
+        .args([
+            "redo",
+            "--allow-unknown-tags",
+            "--allow-out-of-order",
+            "--allow-checksum-mismatch",
+        ])
         .assert()
         .success();
 }

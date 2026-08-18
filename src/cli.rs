@@ -52,6 +52,28 @@ fn allow_out_of_order_arg() -> Arg {
         )
 }
 
+/// `--rerun-repeatable`: re-run repeatable migrations even if their SQL is unchanged.
+fn rerun_repeatable_arg() -> Arg {
+    Arg::new("rerun-repeatable")
+        .long("rerun-repeatable")
+        .action(ArgAction::SetTrue)
+        .help(
+            "Re-run every repeatable migration even if its SQL has not changed, instead of \
+             only the ones whose checksum differs",
+        )
+}
+
+/// `--allow-checksum-mismatch`: tolerate an already-applied migration whose SQL changed.
+fn allow_checksum_mismatch_arg() -> Arg {
+    Arg::new("allow-checksum-mismatch")
+        .long("allow-checksum-mismatch")
+        .action(ArgAction::SetTrue)
+        .help(
+            "Tolerate an already-applied migration whose current checksum no longer matches \
+             the recorded one, instead of aborting",
+        )
+}
+
 pub fn build_cli() -> Command {
     Command::new("migrant")
         .version(env!("CARGO_PKG_VERSION"))
@@ -175,8 +197,10 @@ pub fn build_cli() -> Command {
                         .help("Updates the migration table without running the migration"),
                 )
                 .arg(no_sync_arg())
+                .arg(rerun_repeatable_arg())
                 .arg(allow_unknown_tags_arg())
-                .arg(allow_out_of_order_arg()),
+                .arg(allow_out_of_order_arg())
+                .arg(allow_checksum_mismatch_arg()),
         )
         .subcommand(
             Command::new("redo")
@@ -190,8 +214,10 @@ pub fn build_cli() -> Command {
                 )
                 .arg(force_arg())
                 .arg(no_sync_arg())
+                .arg(rerun_repeatable_arg())
                 .arg(allow_unknown_tags_arg())
-                .arg(allow_out_of_order_arg()),
+                .arg(allow_out_of_order_arg())
+                .arg(allow_checksum_mismatch_arg()),
         )
         .subcommand(
             Command::new("new")
@@ -200,6 +226,16 @@ pub fn build_cli() -> Command {
                     Arg::new("tag")
                         .required(true)
                         .help("tag to use for new migration"),
+                )
+                .arg(
+                    Arg::new("repeatable")
+                        .long("repeatable")
+                        .action(ArgAction::SetTrue)
+                        .help(
+                            "Create a repeatable migration: an `up.sql` carrying the \
+                             `-- migrant:repeatable` directive and no `down.sql`. It re-runs \
+                             whenever the file's checksum changes",
+                        ),
                 ),
         )
         .subcommand(Command::new("shell").about("Open a repl connection"))

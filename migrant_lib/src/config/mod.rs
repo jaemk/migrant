@@ -1,7 +1,7 @@
 /*!
 Configuration
 */
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -10,10 +10,10 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use log::{debug, error};
 
-use crate::drivers::DbConnection;
+use crate::drivers::{AppliedRecord, DbConnection};
 use crate::errors::*;
 use crate::macros::{bail, err};
-use crate::migratable::Migratable;
+use crate::migratable::{validate_migrations, Migratable};
 use crate::{tags, DbKind, SQLITE_MEMORY_PATH};
 
 mod builders;
@@ -38,6 +38,15 @@ pub struct Config {
     pub(crate) settings: Settings,
     pub(crate) settings_path: Option<PathBuf>,
     pub(crate) applied: Vec<String>,
+    /// Checksum recorded per applied tag (`None` where the column is NULL),
+    /// loaded alongside `applied`. Used to detect drift of an already-applied
+    /// migration whose current checksum no longer matches what was recorded,
+    /// and to decide whether a repeatable migration needs to re-run.
+    pub(crate) recorded_checksums: HashMap<String, Option<String>>,
+    /// Applied tags whose row is marked `is_repeatable`, loaded alongside
+    /// `applied`. Lets the migrator recognize a recorded repeatable migration
+    /// even when its tag is no longer in the available set.
+    pub(crate) recorded_repeatable: HashSet<String>,
     pub(crate) migrations: Option<Vec<Box<dyn Migratable>>>,
     pub(crate) cli_compatible: bool,
     conn: Arc<Mutex<Option<DbConnection>>>,
@@ -56,6 +65,8 @@ impl Config {
             settings,
             settings_path,
             applied: vec![],
+            recorded_checksums: HashMap::new(),
+            recorded_repeatable: HashSet::new(),
             migrations: None,
             cli_compatible: false,
             conn: Arc::new(Mutex::new(None)),
@@ -297,6 +308,10 @@ impl Config {
                 bail!(TagError, "Tags must be unique. Found duplicate: {}", tag)
             }
         }
+        // A repeatable migration needs a checksum and must not define a down
+        // direction; reject an unusable declaration here rather than at apply
+        // time.
+        validate_migrations(migrations)?;
         self.migrations = Some(migrations.to_vec());
         Ok(self)
     }
@@ -394,7 +409,7 @@ impl Config {
         };
         config.cli_compatible = self.cli_compatible;
         config.migrations = self.migrations.clone();
-        config.applied = config.load_applied()?;
+        config.refresh_applied()?;
         Ok(config)
     }
 
@@ -403,16 +418,24 @@ impl Config {
     /// `Config::reload`). Used by the migrator so a run stays on the
     /// connection its advisory lock was acquired on.
     pub(crate) fn refresh_applied(&mut self) -> Result<()> {
-        self.applied = self.load_applied()?;
+        let records = self.load_applied_records()?;
+        self.applied = records.iter().map(|r| r.tag.clone()).collect();
+        self.recorded_repeatable = records
+            .iter()
+            .filter(|r| r.repeatable)
+            .map(|r| r.tag.clone())
+            .collect();
+        self.recorded_checksums = records.into_iter().map(|r| (r.tag, r.checksum)).collect();
         Ok(())
     }
 
     /// Load the applied migrations from the database migration table.
     ///
-    /// The tags are returned in recorded application order (`order by id`),
+    /// The records are returned in recorded application order (`order by id`),
     /// which is authoritative -- no re-sorting is done. Each tag is still
-    /// validated against the active naming rules.
-    pub(crate) fn load_applied(&self) -> Result<Vec<String>> {
+    /// validated against the active naming rules. The checksum is `None` where
+    /// the column is NULL (programmatic migrations, or legacy rows).
+    pub(crate) fn load_applied_records(&self) -> Result<Vec<AppliedRecord>> {
         if !self.migration_table_exists()? {
             bail!(
                 Migration,
@@ -420,11 +443,11 @@ impl Config {
             )
         }
 
-        let applied = self.with_conn(|conn| conn.applied_tags())?;
-        for tag in &applied {
-            self.check_saved_tag(tag)?;
+        let records = self.with_conn(|conn| conn.applied_records())?;
+        for record in &records {
+            self.check_saved_tag(&record.tag)?;
         }
-        Ok(applied)
+        Ok(records)
     }
 
     /// Check if a `__migrant_migrations` table exists
@@ -432,10 +455,22 @@ impl Config {
         self.with_conn(|conn| conn.migration_table_exists())
     }
 
-    /// Insert given tag (and its optional checksum) into the database migration
-    /// table. `applied_at` is populated by the column default.
-    pub(crate) fn insert_migration_tag(&self, tag: &str, checksum: Option<&str>) -> Result<()> {
-        self.with_conn(|conn| conn.insert_tag(tag, checksum))
+    /// Insert given tag (its optional checksum, and whether it is repeatable)
+    /// into the database migration table. `applied_at` is populated by the
+    /// column default.
+    pub(crate) fn insert_migration_tag(
+        &self,
+        tag: &str,
+        checksum: Option<&str>,
+        repeatable: bool,
+    ) -> Result<()> {
+        self.with_conn(|conn| conn.insert_tag(tag, checksum, repeatable))
+    }
+
+    /// Update an already-recorded tag's checksum and `applied_at` in place,
+    /// used when a repeatable migration re-runs.
+    pub(crate) fn update_migration_tag(&self, tag: &str, checksum: Option<&str>) -> Result<()> {
+        self.with_conn(|conn| conn.update_tag(tag, checksum))
     }
 
     /// Remove a given tag from the database migration table

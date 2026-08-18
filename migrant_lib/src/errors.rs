@@ -26,6 +26,11 @@ pub enum Error {
     #[error("MigrationOrdering: {0}")]
     MigrationOrdering(String),
 
+    /// An already-applied migration's current checksum no longer matches the
+    /// checksum recorded when it was applied
+    #[error("ChecksumMismatch: {0}")]
+    ChecksumMismatch(String),
+
     /// Failure while running an external command (editor, database shell)
     #[error("ShellCommandError: {0}")]
     ShellCommand(String),
@@ -99,6 +104,11 @@ impl Error {
         matches!(self, Error::MigrationOrdering(_))
     }
 
+    /// `true` for [`Error::ChecksumMismatch`]
+    pub fn is_checksum_mismatch(&self) -> bool {
+        matches!(self, Error::ChecksumMismatch(_))
+    }
+
     /// `true` for [`Error::ShellCommand`]
     pub fn is_shell_command(&self) -> bool {
         matches!(self, Error::ShellCommand(_))
@@ -129,6 +139,7 @@ mod tests {
         assert!(Error::TagError("dup".to_string()).is_tag_error());
         assert!(Error::MigrationNotFound("x".to_string()).is_migration_not_found());
         assert!(Error::MigrationOrdering("y".to_string()).is_migration_ordering());
+        assert!(Error::ChecksumMismatch("z".to_string()).is_checksum_mismatch());
         assert!(Error::FeatureRequired("sqlite").is_feature_required());
     }
 

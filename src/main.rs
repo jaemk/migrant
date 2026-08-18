@@ -110,9 +110,15 @@ fn run(dir: &Path, matches: &clap::ArgMatches) -> Result<()> {
             let config = config.reload()?;
 
             let tag = matches.get_one::<String>("tag").expect("required arg");
-            let new_migration = migrant_lib::create_migration(&config, tag)?;
+            let new_migration = if matches.get_flag("repeatable") {
+                migrant_lib::create_repeatable_migration(&config, tag)?
+            } else {
+                migrant_lib::create_migration(&config, tag)?
+            };
             println!("Created: {}", new_migration.up_path().display());
-            println!("Created: {}", new_migration.down_path().display());
+            if let Some(down) = new_migration.down_path() {
+                println!("Created: {}", down.display());
+            }
             migrant_lib::cli::list(&config)?;
         }
         Some(("apply", matches)) => {
@@ -124,6 +130,8 @@ fn run(dir: &Path, matches: &clap::ArgMatches) -> Result<()> {
             let no_sync = matches.get_flag("no-sync");
             let allow_unknown_tags = matches.get_flag("allow-unknown-tags");
             let allow_out_of_order = matches.get_flag("allow-out-of-order");
+            let allow_checksum_mismatch = matches.get_flag("allow-checksum-mismatch");
+            let rerun_repeatable = matches.get_flag("rerun-repeatable");
             let direction = if matches.get_flag("down") {
                 Direction::Down
             } else {
@@ -141,8 +149,10 @@ fn run(dir: &Path, matches: &clap::ArgMatches) -> Result<()> {
                             .fake(fake)
                             .all(false)
                             .synchronized(!no_sync)
+                            .rerun_repeatable(rerun_repeatable)
                             .allow_unknown_tags(allow_unknown_tags)
                             .allow_out_of_order(allow_out_of_order)
+                            .allow_checksum_mismatch(allow_checksum_mismatch)
                             .apply()?;
                         if report.is_empty() {
                             break;
@@ -159,8 +169,10 @@ fn run(dir: &Path, matches: &clap::ArgMatches) -> Result<()> {
                         .fake(fake)
                         .all(all)
                         .synchronized(!no_sync)
+                        .rerun_repeatable(rerun_repeatable)
                         .allow_unknown_tags(allow_unknown_tags)
                         .allow_out_of_order(allow_out_of_order)
+                        .allow_checksum_mismatch(allow_checksum_mismatch)
                         .apply()?;
                 }
             }
@@ -177,6 +189,10 @@ fn run(dir: &Path, matches: &clap::ArgMatches) -> Result<()> {
             let no_sync = matches.get_flag("no-sync");
             let allow_unknown_tags = matches.get_flag("allow-unknown-tags");
             let allow_out_of_order = matches.get_flag("allow-out-of-order");
+            let allow_checksum_mismatch = matches.get_flag("allow-checksum-mismatch");
+            let rerun_repeatable = matches.get_flag("rerun-repeatable");
+
+            warn_redo_skips_repeatable(&config, rerun_repeatable)?;
 
             Migrator::with_config(&config)
                 .direction(Direction::Down)
@@ -185,6 +201,7 @@ fn run(dir: &Path, matches: &clap::ArgMatches) -> Result<()> {
                 .synchronized(!no_sync)
                 .allow_unknown_tags(allow_unknown_tags)
                 .allow_out_of_order(allow_out_of_order)
+                .allow_checksum_mismatch(allow_checksum_mismatch)
                 .apply()?;
             let config = config.reload()?;
             migrant_lib::cli::list(&config)?;
@@ -194,8 +211,10 @@ fn run(dir: &Path, matches: &clap::ArgMatches) -> Result<()> {
                 .force(force)
                 .all(all)
                 .synchronized(!no_sync)
+                .rerun_repeatable(rerun_repeatable)
                 .allow_unknown_tags(allow_unknown_tags)
                 .allow_out_of_order(allow_out_of_order)
+                .allow_checksum_mismatch(allow_checksum_mismatch)
                 .apply()?;
             let config = config.reload()?;
             migrant_lib::cli::list(&config)?;
@@ -225,6 +244,37 @@ fn run(dir: &Path, matches: &clap::ArgMatches) -> Result<()> {
             println!("migrant: see `--help`");
         }
     };
+    Ok(())
+}
+
+/// Warn that `redo` will not revert the applied repeatable migrations.
+///
+/// `redo` is the command people reach for while iterating on a migration, but a
+/// repeatable migration is forward-only: the down phase walks past it to the
+/// most recent *versioned* migration, so `redo` can revert and re-apply
+/// something the user did not mean to touch. Say so before running rather than
+/// leaving them to infer it from the reverted tag.
+///
+/// Silent when nothing is affected, or when `--rerun-repeatable` already makes
+/// the up phase re-run them.
+fn warn_redo_skips_repeatable(config: &migrant_lib::Config, rerun_repeatable: bool) -> Result<()> {
+    if rerun_repeatable {
+        return Ok(());
+    }
+    let applied_repeatable = migrant_lib::migration_statuses(config)?
+        .into_iter()
+        .filter(|s| s.repeatable() && s.applied())
+        .map(|s| s.tag().to_string())
+        .collect::<Vec<_>>();
+    if applied_repeatable.is_empty() {
+        return Ok(());
+    }
+    eprintln!(
+        "Note: `redo` does not revert repeatable migrations ({}); it targets the most \
+         recent versioned migration instead. The up phase re-runs a repeatable migration \
+         only if its SQL changed -- pass `--rerun-repeatable` to run them regardless.",
+        applied_repeatable.join(", ")
+    );
     Ok(())
 }
 

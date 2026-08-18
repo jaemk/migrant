@@ -20,11 +20,17 @@ The `postgres` feature needs `libpq-dev` at build time on linux.
 
 ## Running Tests
 
-The CLI integration tests use the repo's `Migrant.toml` (sqlite) and `migrations/` directory:
-
 ```bash
 cargo test --features sqlite,integration_tests
 ```
+
+The CLI integration tests copy the repo's `Migrant.toml` (sqlite) and `migrations/` directory
+into a tempdir and run there, so each run starts from an empty database and nothing is written
+to your working tree. There is no dev database to set up or reset.
+
+`db/migrant.db` is only created if you run `migrant` against the repo yourself, and is
+gitignored. It is a scratch playground: delete it any time, and `migrant setup` recreates it.
+Nothing in the test suite reads it, so a stale one cannot break a run.
 
 Library tests live in `migrant_lib/` (see its CONTRIBUTING for postgres/mysql setup).
 

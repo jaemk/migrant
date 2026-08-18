@@ -60,6 +60,35 @@ FnMigration::with_tag("seed-users")
 # }
 ```
 
+## Repeatable migrations
+
+`Migratable::is_repeatable()` marks a migration that re-runs whenever its up-SQL
+checksum changes, instead of applying exactly once. The default is `false`.
+
+`FileMigration` and `EmbeddedMigration` declare it with the `repeatable()`
+builder method, or with a `-- migrant:repeatable` directive in the up-SQL (the
+form the CLI reads off disk). Either declares it.
+
+```rust
+use migrant_lib::EmbeddedMigration;
+
+# fn run() {
+EmbeddedMigration::with_tag("seed-roles")
+    .repeatable()
+    .up("insert into roles (name) values ('admin') on conflict do nothing;")
+    .boxed();
+# }
+```
+
+A repeatable migration must have up-SQL to hash and must not define a down
+direction; `use_migrations` rejects either with `Error::Migration`. `FnMigration`
+has no SQL to hash, so it cannot be repeatable.
+
+Within a run they apply after every pending versioned migration, at most once
+each. `Report::repeatable_tags()` lists the ones a run re-ran, and
+`MigrationStatus::repeatable()`/`stale()` report the state of each. See
+[Writing migrations](migrations.md) for the full rules.
+
 ## Transactions per migration
 
 `Migratable::use_transaction(direction)` decides whether migrant wraps a

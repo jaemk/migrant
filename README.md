@@ -69,17 +69,17 @@ When run interactively (without `--no-confirm`), `setup` will be run automatical
 
 `migrant setup` - Verify database info/credentials and setup a `__migrant_migrations` table if missing.
 
-`migrant new <tag>` - Generate new up & down files with the given `<tag>` under the specified `migration_location`.
+`migrant new <tag> [--repeatable]` - Generate new up & down files with the given `<tag>` under the specified `migration_location`. `--repeatable` generates only an `up.sql`, carrying the `-- migrant:repeatable` directive, for a migration that re-runs whenever its SQL changes.
 
 `migrant edit <tag> [--down]` - Edit the `up` [or `down`] migration file with the given `<tag>`.
 
 `migrant list` - Display all available .sql files and mark those applied.
 
-`migrant status [--format <text|json>]` - Report every managed migration's applied/pending state with summary counts, as pretty text (default) or JSON.
+`migrant status [--format <text|json>]` - Report every managed migration's applied/pending state with summary counts, as pretty text (default) or JSON. Repeatable migrations are annotated, and marked stale when due to re-run.
 
-`migrant apply [--down, --step N, --force, --fake, --no-sync]` - Apply all pending migrations. `--down` reverses direction and applies a single step by default; `--step N` applies exactly N steps in either direction.
+`migrant apply [--down, --step N, --force, --fake, --no-sync, --rerun-repeatable, --allow-unknown-tags, --allow-out-of-order, --allow-checksum-mismatch]` - Apply all pending migrations. `--down` reverses direction and applies a single step by default; `--step N` applies exactly N steps in either direction. `--rerun-repeatable` re-runs every repeatable migration even if its SQL is unchanged. The `--allow-*` flags each bypass one otherwise-fatal consistency check.
 
-`migrant redo [--all, --force, --no-sync]` - Re-apply the latest migration (down then up).
+`migrant redo [--all, --force, --no-sync, --rerun-repeatable]` - Re-apply the latest migration (down then up). Repeatable migrations are forward-only, so `redo` does not revert them and says so.
 
 `migrant tui` - Open an interactive terminal UI for viewing and applying migrations.
 

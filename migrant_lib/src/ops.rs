@@ -16,7 +16,7 @@ use walkdir::WalkDir;
 use crate::config::{Config, DbSettings};
 use crate::errors::*;
 use crate::macros::{bail, err};
-use crate::migratable::Migratable;
+use crate::migratable::{validate_migrations, Migratable};
 use crate::migration::FileMigration;
 use crate::migrator::Direction;
 use crate::util::{open_file_in_fg, prompt};
@@ -39,7 +39,9 @@ pub fn search_for_settings_file<T: AsRef<Path>>(base: T) -> Option<PathBuf> {
 /// Search for available migrations in the given migration directory
 ///
 /// Migration directories are expected to be named `<14-digit-timestamp>_<tag>`
-/// and contain `up.sql` / `down.sql` files.
+/// and contain an `up.sql` file. A `down.sql` is optional: a migration without
+/// one is a no-op in the down direction (reverting it removes its bookkeeping
+/// row without running SQL), which is the shape repeatable migrations require.
 ///
 /// Intended only for use with `FileMigration`s not managed directly in source
 /// with `Config::use_migrations`.
@@ -98,19 +100,15 @@ pub(crate) fn search_for_migrations(mig_root: &Path) -> Result<Vec<FileMigration
         if up.is_none() {
             bail!(MigrationNotFound, "Up migration not found for tag: {}", tag)
         }
-        if down.is_none() {
-            bail!(
-                MigrationNotFound,
-                "Down migration not found for tag: {}",
-                tag
-            )
-        }
+        // A missing `down.sql` is allowed: the migration simply has no down
+        // direction to run. Repeatable migrations must have none at all.
         migrations.push(FileMigration {
             up,
             down,
             tag: tag.to_owned(),
             stamp: Some(stamp),
             no_transaction: false,
+            repeatable: false,
         });
     }
 
@@ -131,6 +129,10 @@ pub struct MigrationStatus {
     tag: String,
     /// Whether the migration is currently applied
     applied: bool,
+    /// Whether the migration re-runs on every checksum change
+    repeatable: bool,
+    /// Whether the migration will run on the next `Up` run
+    stale: bool,
 }
 
 impl MigrationStatus {
@@ -139,9 +141,26 @@ impl MigrationStatus {
         &self.tag
     }
 
-    /// Whether the migration is currently applied
+    /// Whether the migration is currently applied, i.e. has a bookkeeping row.
+    ///
+    /// A repeatable migration that has run at least once is `applied` even when
+    /// it is [`stale`](MigrationStatus::stale) and due to re-run.
     pub fn applied(&self) -> bool {
         self.applied
+    }
+
+    /// Whether the migration is repeatable: it re-runs whenever its up-SQL
+    /// checksum changes, instead of applying exactly once. See
+    /// [`Migratable::is_repeatable`](crate::Migratable::is_repeatable).
+    pub fn repeatable(&self) -> bool {
+        self.repeatable
+    }
+
+    /// Whether the migration would run on the next `Up` run: a versioned
+    /// migration that is not yet applied, or a repeatable migration whose
+    /// current checksum differs from the recorded one (or that has never run).
+    pub fn stale(&self) -> bool {
+        self.stale
     }
 }
 
@@ -151,35 +170,63 @@ impl MigrationStatus {
 /// Make sure the `Config` has been `reload`ed so its set of applied
 /// migrations is current.
 pub fn migration_statuses(config: &Config) -> Result<Vec<MigrationStatus>> {
-    let available = match config.migrations {
-        Some(ref migs) => migs.iter().map(|m| m.tag()).collect::<Vec<_>>(),
+    let available: Vec<Box<dyn Migratable>> = match config.migrations {
+        Some(ref migs) => migs.clone(),
         None => {
             let location = config.migration_location()?;
             search_for_migrations(&location)?
                 .into_iter()
-                .map(|m| m.tag())
+                .map(|m| m.boxed())
                 .collect()
         }
     };
+    // Report the same errors a run would, so `status`/`list` never render an
+    // unusable migration set as healthy and leave `apply` to be the one that
+    // fails.
+    validate_migrations(&available)?;
     Ok(available
         .into_iter()
-        .map(|tag| {
+        .map(|m| {
+            let tag = m.tag();
             let applied = config.applied.contains(&tag);
-            MigrationStatus { tag, applied }
+            let repeatable = m.is_repeatable();
+            // A repeatable migration is due whenever its recorded checksum no
+            // longer matches its current one (or it has never run); a versioned
+            // one is due only until it is applied.
+            let stale = if repeatable {
+                match config.recorded_checksums.get(&tag) {
+                    None => true,
+                    Some(recorded) => recorded.as_deref() != m.checksum().as_deref(),
+                }
+            } else {
+                !applied
+            };
+            MigrationStatus {
+                tag,
+                applied,
+                repeatable,
+                stale,
+            }
         })
         .collect())
 }
 
-/// Preview the managed migrations that have not yet been applied, in the order
-/// they would be applied (definition order for explicit migrations, timestamp
-/// order for file migrations).
+/// Preview the managed migrations that would run on the next `Up` run, in the
+/// order they would be applied: pending versioned migrations first (definition
+/// order for explicit migrations, timestamp order for file migrations), then
+/// the stale repeatable migrations.
 ///
 /// This does not apply anything. Make sure the `Config` has been `reload`ed so
 /// its set of applied migrations is current.
 pub fn pending_migrations(config: &Config) -> Result<Vec<String>> {
-    Ok(migration_statuses(config)?
+    let statuses = migration_statuses(config)?;
+    let (repeatable, versioned): (Vec<_>, Vec<_>) = statuses
         .into_iter()
-        .filter(|status| !status.applied)
+        .filter(|status| status.stale)
+        .partition(|status| status.repeatable);
+    Ok(versioned
+        .into_iter()
+        .chain(repeatable)
         .map(|status| status.tag)
         .collect())
 }
@@ -201,20 +248,44 @@ pub fn list(config: &Config) -> Result<()> {
     println!("Current Migration Status:");
     for mig in &statuses {
         println!(
-            " -> [{x}] {name}",
-            x = if mig.applied { '✓' } else { ' ' },
-            name = mig.tag
+            " -> [{x}] {name}{note}",
+            x = mark(mig),
+            name = mig.tag,
+            note = note(mig)
         );
     }
     Ok(())
 }
 
-/// The migration directory and files created by [`create_migration`].
+/// The status mark for a migration row: applied, pending, or a repeatable
+/// migration that is due to re-run.
+fn mark(status: &MigrationStatus) -> char {
+    match (status.applied, status.stale) {
+        (true, true) => '~',
+        (true, false) => '✓',
+        (false, _) => ' ',
+    }
+}
+
+/// The trailing annotation for a migration row. Empty for versioned migrations.
+/// A repeatable migration that has never run "will run"; only one with a
+/// recorded row it no longer matches "will re-run".
+fn note(status: &MigrationStatus) -> &'static str {
+    match (status.repeatable, status.stale, status.applied) {
+        (false, _, _) => "",
+        (true, true, true) => "  (repeatable, will re-run)",
+        (true, true, false) => "  (repeatable, will run)",
+        (true, false, _) => "  (repeatable)",
+    }
+}
+
+/// The migration directory and files created by [`create_migration`] or
+/// [`create_repeatable_migration`].
 #[derive(Debug, Clone)]
 pub struct NewMigration {
     dir: PathBuf,
     up: PathBuf,
-    down: PathBuf,
+    down: Option<PathBuf>,
 }
 
 impl NewMigration {
@@ -228,9 +299,10 @@ impl NewMigration {
         &self.up
     }
 
-    /// The created `down.sql` file path
-    pub fn down_path(&self) -> &Path {
-        &self.down
+    /// The created `down.sql` file path, `None` for a repeatable migration
+    /// (which is forward-only and has no down direction)
+    pub fn down_path(&self) -> Option<&Path> {
+        self.down.as_deref()
     }
 }
 
@@ -243,6 +315,39 @@ impl NewMigration {
 /// where migrations (`FileMigration`s) are all files with names following
 /// the expected timestamp formatted name.
 pub fn create_migration(config: &Config, tag: &str) -> Result<NewMigration> {
+    let (mig_dir, up) = create_migration_dir(config, tag)?;
+    let down = mig_dir.join("down.sql");
+    fs::File::create(&down)?;
+    Ok(NewMigration {
+        dir: mig_dir,
+        up,
+        down: Some(down),
+    })
+}
+
+/// Create a new repeatable migration with the given tag, returning the paths
+/// that were created.
+///
+/// Only an `up.sql` is created, seeded with the `-- migrant:repeatable`
+/// directive: a repeatable migration re-runs whenever that file's checksum
+/// changes and is forward-only, so it must not have a down direction. See
+/// [`Migratable::is_repeatable`](crate::Migratable::is_repeatable).
+pub fn create_repeatable_migration(config: &Config, tag: &str) -> Result<NewMigration> {
+    let (mig_dir, up) = create_migration_dir(config, tag)?;
+    fs::write(
+        &up,
+        format!("-- {}\n", crate::migration::REPEATABLE_DIRECTIVE),
+    )?;
+    Ok(NewMigration {
+        dir: mig_dir,
+        up,
+        down: None,
+    })
+}
+
+/// Create the timestamped migration directory and its (empty) `up.sql`,
+/// returning both paths.
+fn create_migration_dir(config: &Config, tag: &str) -> Result<(PathBuf, PathBuf)> {
     if !tags::is_valid_simple_tag(tag) {
         bail!(
             Migration,
@@ -257,14 +362,8 @@ pub fn create_migration(config: &Config, tag: &str) -> Result<NewMigration> {
     fs::create_dir_all(&mig_dir)?;
 
     let up = mig_dir.join("up.sql");
-    let down = mig_dir.join("down.sql");
     fs::File::create(&up)?;
-    fs::File::create(&down)?;
-    Ok(NewMigration {
-        dir: mig_dir,
-        up,
-        down,
-    })
+    Ok((mig_dir, up))
 }
 
 /// Open a repl connection to the given `Config` settings
@@ -507,16 +606,35 @@ mod tests {
         let status = MigrationStatus {
             tag: "20200101000000_first".to_string(),
             applied: true,
+            repeatable: false,
+            stale: false,
         };
         assert_eq!(status.tag(), "20200101000000_first");
         assert!(status.applied());
+        assert!(!status.repeatable());
+        assert!(!status.stale());
 
         let unapplied = MigrationStatus {
             tag: "20200102000000_second".to_string(),
             applied: false,
+            repeatable: false,
+            stale: true,
         };
         assert_eq!(unapplied.tag(), "20200102000000_second");
         assert!(!unapplied.applied());
+        assert!(unapplied.stale());
+
+        // A repeatable migration that has run but whose SQL has since changed
+        // is both applied and stale.
+        let re_run = MigrationStatus {
+            tag: "20200103000000_seed".to_string(),
+            applied: true,
+            repeatable: true,
+            stale: true,
+        };
+        assert!(re_run.applied());
+        assert!(re_run.repeatable());
+        assert!(re_run.stale());
     }
 
     #[test]
@@ -533,13 +651,16 @@ mod tests {
         let created = create_migration(&config, "add-widgets").unwrap();
 
         // The returned paths are the ones that now exist on disk.
+        let down = created
+            .down_path()
+            .expect("a versioned migration has a down");
         assert!(created.dir().is_dir(), "the migration dir must be created");
         assert!(created.up_path().is_file(), "up.sql must be created");
-        assert!(created.down_path().is_file(), "down.sql must be created");
+        assert!(down.is_file(), "down.sql must be created");
         assert_eq!(created.up_path().file_name().unwrap(), "up.sql");
-        assert_eq!(created.down_path().file_name().unwrap(), "down.sql");
+        assert_eq!(down.file_name().unwrap(), "down.sql");
         assert_eq!(created.up_path().parent().unwrap(), created.dir());
-        assert_eq!(created.down_path().parent().unwrap(), created.dir());
+        assert_eq!(down.parent().unwrap(), created.dir());
         // The generated folder is `<14-digit-stamp>_<tag>`.
         let folder = created.dir().file_name().unwrap().to_str().unwrap();
         assert!(
@@ -627,14 +748,92 @@ mod tests {
         }
     }
 
+    // MIGTYPE-9
     #[test]
-    fn migration_search_requires_up_and_down() {
+    fn migration_search_requires_up_but_not_down() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
-        let d = root.join("20190101000000_first");
-        fs::create_dir_all(&d).unwrap();
-        fs::write(d.join("up.sql"), "select 1;").unwrap();
+
+        // A directory with only `up.sql` is a valid migration with no down
+        // direction, which is the shape a repeatable migration must have.
+        let up_only = root.join("20190101000000_first");
+        fs::create_dir_all(&up_only).unwrap();
+        fs::write(up_only.join("up.sql"), "select 1;").unwrap();
+        let migs = search_for_migrations(root).unwrap();
+        assert_eq!(1, migs.len());
+        assert_eq!("20190101000000_first", migs[0].tag());
+        assert!(
+            !migs[0].defines_down(),
+            "a migration with no down.sql defines no down direction"
+        );
+
+        // A missing `up.sql` is still an error.
+        let down_only = root.join("20190101000001_second");
+        fs::create_dir_all(&down_only).unwrap();
+        fs::write(down_only.join("down.sql"), "select 1;").unwrap();
         assert!(search_for_migrations(root).is_err());
+    }
+
+    // REPEAT-3, REPEAT-10
+    #[test]
+    fn discovered_migrations_declare_repeatable_through_the_directive() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+
+        let versioned = root.join("20190101000000_first");
+        fs::create_dir_all(&versioned).unwrap();
+        fs::write(versioned.join("up.sql"), "select 1;").unwrap();
+        fs::write(versioned.join("down.sql"), "select -1;").unwrap();
+
+        let repeatable = root.join("20190101000001_seed-roles");
+        fs::create_dir_all(&repeatable).unwrap();
+        fs::write(
+            repeatable.join("up.sql"),
+            "-- migrant:repeatable\nselect 2;",
+        )
+        .unwrap();
+
+        let migs = search_for_migrations(root).unwrap();
+        assert_eq!(2, migs.len());
+        assert!(!migs[0].is_repeatable(), "no directive, so not repeatable");
+        assert!(
+            migs[1].is_repeatable(),
+            "the up-file directive declares the migration repeatable"
+        );
+    }
+
+    // REPEAT-10
+    #[test]
+    fn create_repeatable_migration_writes_only_a_seeded_up_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let settings = crate::config::Settings::configure_sqlite()
+            .database_path("/abs/some.db")
+            .migration_location(dir.path())
+            .build()
+            .unwrap();
+        let config = Config::with_settings(settings);
+
+        let created = create_repeatable_migration(&config, "seed-roles").unwrap();
+
+        assert!(created.up_path().is_file(), "up.sql must be created");
+        assert_eq!(
+            None,
+            created.down_path(),
+            "a repeatable migration has no down direction"
+        );
+        assert!(
+            !created.dir().join("down.sql").exists(),
+            "no down.sql may be written"
+        );
+
+        // The seeded up file declares the migration repeatable, so a discovery
+        // of this directory reports it as such.
+        let up = fs::read_to_string(created.up_path()).unwrap();
+        assert_eq!("-- migrant:repeatable\n", up);
+        let migs = search_for_migrations(dir.path()).unwrap();
+        assert_eq!(1, migs.len());
+        assert!(migs[0].is_repeatable());
+        assert!(!migs[0].defines_down());
     }
 
     // A password with characters that must be percent-encoded in a URL: `@`
